@@ -6,6 +6,7 @@ import tomli as tomllib
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+import plotly.express as px
 
 
 class ConfigObject:
@@ -47,7 +48,7 @@ def delta_f(ref_frequency, ref_mq, delta_mq, gamma_t):
 
 # Compute frequencies of other ions based on the reference
 # Return a database with the frequencies appended as a new column
-def compute_frequencies(df, mq_col, ref_ion_name, ref_freq, delta_f_func, gamma_t):
+def compute_frequencies(df, mq_col, ref_ion_name, ref_freq, delta_f_func, gamma_t, harmonic):
     df = df.sort_values(mq_col).copy()
 
     if ref_ion_name not in df.index:
@@ -57,19 +58,31 @@ def compute_frequencies(df, mq_col, ref_ion_name, ref_freq, delta_f_func, gamma_
 
     def _direct(row_mq):
         if row_mq == ref_mq:
-            return ref_freq
+            return ref_freq * harmonic
         delta_mq = row_mq - ref_mq
 
-        return ref_freq + delta_f_func(ref_freq, ref_mq, delta_mq, gamma_t)
+        return (ref_freq + delta_f_func(ref_freq, ref_mq, delta_mq, gamma_t)) * harmonic
 
     df["frequency_direct"] = df[mq_col].apply(_direct)
 
     return df
 
 
-def plot_spectrum_with_ions(frequency, signal, df, freq_col="frequency_direct",
-                            label_col=None, title="Calculated Frequencies overlayed with data",
-                            n_points=20):
+def compute_frequencies_multi(df, mq_col, ref_ion_name, ref_freq, delta_f_func, gamma_t, harmonics):
+    result = df.sort_values(mq_col).copy()
+
+    for h in harmonics:
+        temp = compute_frequencies(
+            df, mq_col, ref_ion_name, ref_freq, delta_f_func, gamma_t, harmonic=h
+        )
+        result[f"frequency_direct_{h}"] = temp["frequency_direct"]
+
+    return result
+
+
+def plot_spectrum_with_ions(frequency, signal, df, freq_cols=("frequency_direct",),
+                             label_col=None, title="Calculated Frequencies overlayed with data",
+                             n_points=20, colors=None):
 
     fig = go.Figure()
 
@@ -108,7 +121,13 @@ def plot_spectrum_with_ions(frequency, signal, df, freq_col="frequency_direct",
             connectgaps=False
         ))
 
-    add_ion_lines(df[freq_col], "red", freq_col)
+    # Default color cycle if none provided
+    if colors is None:
+        colors = px.colors.qualitative.Plotly  # or any list of hex colors
+
+    for i, col in enumerate(freq_cols):
+        color = colors[i % len(colors)]
+        add_ion_lines(df[col], color, col)
 
     fig.update_layout(
         title=title,
@@ -139,14 +158,28 @@ def main():
     mq_lower = mq_ref - config.mq_width
     mq_restricted_database = sorted_database[(sorted_database["m/q"] >= mq_lower) & (sorted_database["m/q"] <= mq_upper)]
     # Calculate frequencies
-    frequencies_database = compute_frequencies(
+    ref_freq = config.ref_frequency / config.ref_harmonic
+    # frequencies_database = compute_frequencies(
+    #     mq_restricted_database,
+    #     mq_col="m/q",
+    #     ref_ion_name=config.ref_name,
+    #     ref_freq=ref_freq,
+    #     delta_f_func=delta_f,
+    #     gamma_t=config.gamma_t,
+    #     harmonic=213
+    # )
+
+    frequencies_database = compute_frequencies_multi(
         mq_restricted_database,
         mq_col="m/q",
         ref_ion_name=config.ref_name,
-        ref_freq=config.ref_frequency,
+        ref_freq=ref_freq,
         delta_f_func=delta_f,
-        gamma_t=config.gamma_t
+        gamma_t=config.gamma_t,
+        harmonics=config.harmonics
     )
+
+    print(frequencies_database)
 
     # Load the spectrum
     fullname = config.file_path + config.spectrum_name
@@ -154,7 +187,8 @@ def main():
     ff = data["arr_0"]
     pp = data["arr_1"]
 
-    fig = plot_spectrum_with_ions(ff, pp, frequencies_database, freq_col="frequency_direct")
+    freq_cols = [f"frequency_direct_{h}" for h in config.harmonics]
+    fig = plot_spectrum_with_ions(ff, pp, frequencies_database, freq_cols=freq_cols)
     fig.show(config={"scrollZoom": True})
 
 
