@@ -7,6 +7,8 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
+import tempfile
+import webbrowser
 
 
 class ConfigObject:
@@ -141,6 +143,59 @@ def plot_spectrum_with_ions(frequency, signal, df, freq_cols=("frequency_direct"
     return fig
 
 
+def show_with_coord_readout(fig, config=None):
+    """Render the figure in a browser with a live mouse-coordinate readout overlay."""
+    js = """
+(function() {
+    var gd = document.querySelector('.js-plotly-plot');
+    if (!gd) return;
+
+    var readout = document.createElement('div');
+    readout.style.cssText = [
+        'position:fixed',
+        'bottom:12px',
+        'right:16px',
+        'background:rgba(30,30,30,0.80)',
+        'color:#e8e8e8',
+        'padding:5px 12px',
+        'border-radius:5px',
+        'font-family:monospace',
+        'font-size:13px',
+        'pointer-events:none',
+        'z-index:9999',
+        'letter-spacing:0.03em'
+    ].join(';');
+    readout.innerText = 'x: ---   y: ---';
+    document.body.appendChild(readout);
+
+    gd.addEventListener('mousemove', function(evt) {
+        var layout = gd._fullLayout;
+        if (!layout) return;
+        var rect = gd.getBoundingClientRect();
+        var mx = evt.clientX - rect.left - layout.margin.l;
+        var my = evt.clientY - rect.top - layout.margin.t;
+        var x = layout.xaxis.p2d(mx);
+        var y = layout.yaxis.p2d(my);
+        if (isFinite(x) && isFinite(y)) {
+            readout.innerText = 'x: ' + x.toFixed(0) + ' Hz   y: ' + y.toExponential(3);
+        }
+    });
+
+    gd.addEventListener('mouseleave', function() {
+        readout.innerText = 'x: ---   y: ---';
+    });
+})();
+"""
+    config = config or {}
+    html = fig.to_html(full_html=True, include_plotlyjs="cdn", config=config, post_script=js)
+    # Write beside the script, not to /tmp — Firefox snap can't access /tmp
+    import os
+    out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_viewer_output.html")
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(html)
+    webbrowser.open("file://" + out_path)
+
+
 def main():
     config = load_config("viewer_config.toml")
     # Create dataframes for each chargestate
@@ -189,7 +244,7 @@ def main():
 
     freq_cols = [f"frequency_direct_{h}" for h in config.harmonics]
     fig = plot_spectrum_with_ions(ff, pp, frequencies_database, freq_cols=freq_cols)
-    fig.show(config={"scrollZoom": True})
+    show_with_coord_readout(fig, config={"scrollZoom": True})
 
 
 if __name__ == "__main__":
