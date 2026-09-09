@@ -137,7 +137,8 @@ def plot_spectrum_with_ions(frequency, signal, df, freq_cols=("frequency_direct"
         yaxis_title="Schottky Power (a.u.)",
         hovermode="x",
         dragmode="pan",
-        template="plotly_white"
+        template="plotly_white",
+        font=dict(size=24)
     )
 
     return fig
@@ -160,12 +161,13 @@ def show_with_coord_readout(fig, config=None):
         'padding:5px 12px',
         'border-radius:5px',
         'font-family:monospace',
-        'font-size:13px',
+        'font-size:26px',
         'pointer-events:none',
         'z-index:9999',
-        'letter-spacing:0.03em'
+        'letter-spacing:0.03em',
+        'white-space:pre'
     ].join(';');
-    readout.innerText = 'x: ---   y: ---';
+    readout.innerText = 'x: ---\\ny: ---';
     document.body.appendChild(readout);
 
     gd.addEventListener('mousemove', function(evt) {
@@ -177,17 +179,17 @@ def show_with_coord_readout(fig, config=None):
         var x = layout.xaxis.p2d(mx);
         var y = layout.yaxis.p2d(my);
         if (isFinite(x) && isFinite(y)) {
-            readout.innerText = 'x: ' + x.toFixed(0) + ' Hz   y: ' + y.toExponential(3);
+            readout.innerText = 'x: ' + x.toFixed(0) + ' Hz\\ny: ' + y.toExponential(3);
         }
     });
 
     gd.addEventListener('mouseleave', function() {
-        readout.innerText = 'x: ---   y: ---';
+        readout.innerText = 'x: ---\\ny: ---';
     });
 })();
 """
     config = config or {}
-    html = fig.to_html(full_html=True, include_plotlyjs="cdn", config=config, post_script=js)
+    html = fig.to_html(full_html=True, include_plotlyjs=True, config=config, post_script=js)
     # Write beside the script, not to /tmp — Firefox snap can't access /tmp
     import os
     out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_viewer_output.html")
