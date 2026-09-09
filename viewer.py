@@ -41,13 +41,13 @@ def get_chargestate(electrons, config):
 
 # Define the storage ring equation
 # Will need to make gamma_t a variable later
-def delta_f(ref_frequency, ref_mq, delta_mq):
-    return (-1 / (1.399**2)) * (delta_mq / ref_mq) * ref_frequency
+def delta_f(ref_frequency, ref_mq, delta_mq, gamma_t):
+    return (-1 / (gamma_t**2)) * (delta_mq / ref_mq) * ref_frequency
 
 
 # Compute frequencies of other ions based on the reference
 # Return a database with the frequencies appended as a new column
-def compute_frequencies(df, mq_col, ref_ion_name, ref_freq, delta_f_func):
+def compute_frequencies(df, mq_col, ref_ion_name, ref_freq, delta_f_func, gamma_t):
     df = df.sort_values(mq_col).copy()
 
     if ref_ion_name not in df.index:
@@ -60,7 +60,7 @@ def compute_frequencies(df, mq_col, ref_ion_name, ref_freq, delta_f_func):
             return ref_freq
         delta_mq = row_mq - ref_mq
 
-        return ref_freq + delta_f_func(ref_freq, ref_mq, delta_mq)
+        return ref_freq + delta_f_func(ref_freq, ref_mq, delta_mq, gamma_t)
 
     df["frequency_direct"] = df[mq_col].apply(_direct)
 
@@ -144,7 +144,8 @@ def main():
         mq_col="m/q",
         ref_ion_name=config.ref_name,
         ref_freq=config.ref_frequency,
-        delta_f_func=delta_f
+        delta_f_func=delta_f,
+        gamma_t=config.gamma_t
     )
 
     # Load the spectrum
