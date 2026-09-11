@@ -1,0 +1,20 @@
+{
+  "file_path": "/home/zn00092/Desktop/1dSpectra/SplitTDMS_Output_2^17_nobaseline/",
+  "spectrum_name": "1129.1.noBKG.npz",
+  "ref_name": "208Tl80+",
+  "ref_frequency": 410458519,
+  "ref_harmonic": "213",
+  "z_lims": "60, 83",
+  "n_lims": "100, 127",
+  "el1": "156, 66",
+  "el2": "200, 82",
+  "mq_width": 0.02,
+  "gamma_t": "1.399",
+  "harmonics": "212, 213, 214",
+  "correction_enabled": [
+    "on"
+  ],
+  "corr_a": 2.84947927e-07,
+  "corr_b": -1.09103438,
+  "corr_c": 1044317.66
+}
