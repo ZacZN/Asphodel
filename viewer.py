@@ -1,5 +1,4 @@
-from my_utils.nubase import *
-from my_utils.data_processing import *
+from nubase_reader import *
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -54,6 +53,85 @@ def apply_correction(freq, a, b, c):
     return freq + a * freq**2 + b * freq + c
 
 
+def build_hover_label(ion_name: str, row: "pd.Series") -> str:
+    """Build a rich hover label for an ion frequency line.
+
+    Always shows the ion name and its lifetime (T ± T_unc T_unit).
+    For isomers (name begins with a letter, e.g. ``m186Hf72+``) also shows
+    the excitation energy (E_x ± E_x_unc keV).
+    Values containing '#' are theoretical and the symbol is preserved as-is.
+    """
+    def _val(key: str) -> str:
+        """Return a stripped string for a cell, or '' if missing/NaN."""
+        v = row.get(key, None)
+        if v is None:
+            return ""
+        try:
+            if pd.isna(v):
+                return ""
+        except (TypeError, ValueError):
+            pass
+        return str(v).strip()
+
+    def _fmt_float(v) -> str:
+        """Format a float without a spurious trailing '.0'."""
+        try:
+            if v == int(v):
+                return str(int(v))
+            return f"{v:.3f}".rstrip("0").rstrip(".")
+        except (ValueError, OverflowError):
+            return str(v)
+
+    lines = [ion_name]
+
+    # --- Mass excess ---
+    # nubase.py strips '#' from m.e./m.e._unc and converts to float, but
+    # records whether the original value was theoretical in 'm.e. sys?'.
+    me_sys     = bool(row.get("m.e. sys?", False))
+    me_raw     = row.get("m.e.", None)
+    me_unc_raw = row.get("m.e._unc", None)
+    me_ok      = (me_raw is not None and not pd.isna(me_raw))
+    if me_ok:
+        prefix  = "#" if me_sys else ""
+        me_line = f"m.e. = {_fmt_float(me_raw)}{prefix}"
+        me_unc_ok = (me_unc_raw is not None and not pd.isna(me_unc_raw))
+        if me_unc_ok:
+            me_line += f" ± {_fmt_float(me_unc_raw)}{prefix}"
+        me_line += " keV"
+        lines.append(me_line)
+
+    # --- Lifetime ---
+    t_val  = _val("T")
+    t_unc  = _val("T_unc")
+    t_unit = _val("T_unit")
+    if t_val:
+        t_line = f"T = {t_val}"
+        if t_unc:
+            t_line += f" ± {t_unc}"
+        if t_unit:
+            t_line += f" {t_unit}"
+        lines.append(t_line)
+
+    # --- Excitation energy (isomers only) ---
+    # An isomer's index name begins with a letter before the mass number
+    if ion_name and ion_name[0].isalpha():
+        ex_val = _val("E_x")
+        ex_unc = _val("E_x_unc")
+        if ex_val:
+            ex_line = f"E_x = {ex_val}"
+            if ex_unc:
+                ex_line += f" ± {ex_unc}"
+            ex_line += " keV"
+            lines.append(ex_line)
+
+    # --- Decay modes / branching ratios ---
+    br = _val("BR")
+    if br:
+        lines.append(f"Decay: {br}")
+
+    return "<br>".join(lines)
+
+
 def build_figure(file_path, spectrum_name, ref_name, ref_frequency, ref_harmonic,
                  z_lims, n_lims, el1, el2, mq_width, gamma_t, harmonics,
                  correction_enabled=False, corr_a=0.0, corr_b=0.0, corr_c=0.0):
@@ -106,13 +184,14 @@ def build_figure(file_path, spectrum_name, ref_name, ref_frequency, ref_harmonic
         for i, col in enumerate(freq_cols):
             color = colors[i % len(colors)]
             xs, ys, hover = [], [], []
-            labels = db.index
-            for ion_name, f in zip(labels, db[col]):
+            for ion_name, row in db.iterrows():
+                f = row[col]
                 if pd.isna(f):
                     continue
+                label = build_hover_label(str(ion_name), row)
                 xs    += [f] * n_points + [None]
                 ys    += list(y_range)  + [None]
-                hover += [str(ion_name)] * n_points + [None]
+                hover += [label] * n_points + [None]
             fig.add_trace(go.Scattergl(
                 x=xs, y=ys,
                 mode="lines",
