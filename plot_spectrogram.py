@@ -12,8 +12,10 @@ Arguments
   freq_min      Lower frequency bound (same units as the freq array)
   freq_max      Upper frequency bound
   --linear      Plot raw power instead of 10·log10(power)
+                (3-D: sets initial GUI state; can be toggled in the browser)
   --plot3d      Interactive 3-D surface plot (uses plotly; opens in browser)
   --time-avg N  Average every N consecutive time frames (e.g. 5 → T/5 frames)
+                (3-D: sets initial GUI state; can be changed in the browser)
 
 Example
 -------
@@ -142,7 +144,7 @@ def rebin_time(time, power, n):
 # 3-D interactive plotly plot
 # ---------------------------------------------------------------------------
 
-def plot_3d(freq, time, power, title, log_scale=True):
+def plot_3d(freq, time, power, title, log_scale=True, n_avg=1):
     try:
         import plotly.graph_objects as go
     except ImportError:
@@ -150,9 +152,8 @@ def plot_3d(freq, time, power, title, log_scale=True):
             "plotly is required for --plot3d.  Install it with:\n"
             "  pip install plotly"
         )
-    import tempfile, webbrowser
+    import tempfile, webbrowser, json
 
-    z = to_db(power) if log_scale else power
     z_label = "Power (dB)" if log_scale else "Power (linear)"
 
     # Downsample if very large to keep the browser responsive
@@ -162,7 +163,9 @@ def plot_3d(freq, time, power, title, log_scale=True):
     f_step = max(1, len(freq) // MAX_PTS)
     t_ds   = time[::t_step]
     f_ds   = freq[::f_step]
-    z_ds   = z[::t_step, ::f_step]
+    # Raw linear power, downsampled, frequency-axis flipped (high→low for display)
+    z_ds   = power[::t_step, ::f_step][:, ::-1]   # shape (T_ds, F_ds)
+    f_plot = f_ds[::-1]
 
     if t_step > 1 or f_step > 1:
         print(
@@ -170,14 +173,26 @@ def plot_3d(freq, time, power, title, log_scale=True):
             f"(original: {len(time)} × {len(freq)})"
         )
 
-    # Reverse frequency axis so high freq is at the front (where axes meet)
-    f_plot = f_ds[::-1]
-    z_plot = z_ds[:, ::-1].T   # flip freq axis, then transpose to (F, T)
+    # Apply initial time averaging in Python for first render
+    def _py_rebin(t, z, n):
+        T, F = z.shape
+        T_trim = (T // n) * n
+        z_r = z[:T_trim].reshape(T // n, n, F).mean(axis=1)
+        t_r = t[:T_trim].reshape(T // n, n).mean(axis=1)
+        return t_r, z_r
+
+    if n_avg > 1:
+        t_init, z_init = _py_rebin(t_ds, z_ds, n_avg)
+    else:
+        t_init, z_init = t_ds.copy(), z_ds.copy()
+
+    eps = np.finfo(float).tiny
+    z_plot_init = (10.0 * np.log10(np.maximum(z_init, eps)) if log_scale else z_init).T
 
     fig = go.Figure(data=[go.Surface(
-        x=t_ds,          # time along X
-        y=f_plot,        # frequency along Y (high→low)
-        z=z_plot,        # (F, T) surface array
+        x=t_init,
+        y=f_plot,
+        z=z_plot_init,
         colorscale="Inferno",
         colorbar=dict(
             title=dict(text=z_label, side="right"),
@@ -205,11 +220,17 @@ def plot_3d(freq, time, power, title, log_scale=True):
 
     # Axis bounds and bin sizes for slider step sizes
     f_min, f_max = float(freq.min()), float(freq.max())
-    t_min, t_max = float(time.min()), float(time.max())
-    # One notch on the time slider = one time bin
-    dt = float(time[1] - time[0]) if len(time) > 1 else max(t_max - t_min, 1e-6)
-    # One notch on the freq slider = one frequency bin
     df = float(freq[1] - freq[0]) if len(freq) > 1 else max(f_max - f_min, 1.0)
+
+    # Initial time slider bounds (after initial averaging)
+    t_init_min = float(t_init[0])
+    t_init_max = float(t_init[-1])
+    dt_init = float(t_init[1] - t_init[0]) if len(t_init) > 1 else max(t_init_max - t_init_min, 1e-6)
+
+    # Embed raw (downsampled) data as JSON for JS re-rendering
+    z_raw_json = json.dumps(z_ds.tolist())
+    t_raw_json = json.dumps(t_ds.tolist())
+    db_checked = "checked" if log_scale else ""
 
     plot_div = fig.to_html(full_html=False, include_plotlyjs="cdn", div_id="specPlot")
     title_html = title.replace("&", "&amp;").replace('"', "&quot;")
@@ -242,6 +263,24 @@ def plot_3d(freq, time, power, title, log_scale=True):
   .row input[type=range] {{ flex: 1; accent-color: #f97316; cursor: pointer; }}
   .row span {{ width: 110px; text-align: right; color: #d1d5db; font-size: 11px;
                font-variant-numeric: tabular-nums; }}
+  .opts-row {{ grid-column: 1 / -1; display: flex; align-items: center;
+               gap: 24px; padding-top: 8px; border-top: 1px solid #374151;
+               flex-wrap: wrap; }}
+  .opt-grp {{ display: flex; align-items: center; gap: 6px; }}
+  .opt-grp span {{ font-size: 12px; font-weight: 600; text-transform: uppercase;
+                   letter-spacing: .06em; color: #f97316; margin-right: 2px; }}
+  .opt-grp label {{ color: #9ca3af; }}
+  .opt-grp input[type=checkbox] {{ accent-color: #f97316; width: 14px; height: 14px;
+                                    cursor: pointer; }}
+  .opt-grp input[type=number] {{ width: 60px; background: #374151;
+                                  border: 1px solid #4b5563; border-radius: 4px;
+                                  color: #e5e7eb; padding: 3px 6px; font-size: 13px; }}
+  .opt-grp input[type=number]:focus {{ outline: none; border-color: #f97316; }}
+  .opt-grp button {{ background: #f97316; border: none; border-radius: 4px;
+                     color: #111827; font-size: 12px; font-weight: 700;
+                     padding: 4px 12px; cursor: pointer; }}
+  .opt-grp button:hover {{ background: #fb923c; }}
+  #discardMsg {{ font-size: 11px; color: #fbbf24; margin-left: 4px; }}
 </style>
 </head>
 <body>
@@ -269,26 +308,108 @@ def plot_3d(freq, time, power, title, log_scale=True):
     <h4>Time (s)</h4>
     <div class="row">
       <label>Min</label>
-      <input type="range" id="tMin" min="{t_min}" max="{t_max}"
-             step="{dt}" value="{t_min}" oninput="update()">
-      <span id="tMinVal">{t_min:.3f}</span>
+      <input type="range" id="tMin" min="{t_init_min}" max="{t_init_max}"
+             step="{dt_init}" value="{t_init_min}" oninput="update()">
+      <span id="tMinVal">{t_init_min:.3f}</span>
     </div>
     <div class="row">
       <label>Max</label>
-      <input type="range" id="tMax" min="{t_min}" max="{t_max}"
-             step="{dt}" value="{t_max}" oninput="update()">
-      <span id="tMaxVal">{t_max:.3f}</span>
+      <input type="range" id="tMax" min="{t_init_min}" max="{t_init_max}"
+             step="{dt_init}" value="{t_init_max}" oninput="update()">
+      <span id="tMaxVal">{t_init_max:.3f}</span>
+    </div>
+  </div>
+  <div class="opts-row">
+    <div class="opt-grp">
+      <span>Scale</span>
+      <input type="checkbox" id="dbCheck" {db_checked} onchange="updateSurface()">
+      <label for="dbCheck">dB</label>
+    </div>
+    <div class="opt-grp">
+      <span>Time avg</span>
+      <input type="number" id="nAvg" min="1" step="1" value="{n_avg}">
+      <button onclick="updateSurface()">Apply</button>
+      <span id="discardMsg"></span>
     </div>
   </div>
 </div>
 {plot_div}
 <script>
+const Z_RAW = {z_raw_json};
+const T_RAW = {t_raw_json};
+
+function toDb(Z) {{
+  var eps = 5e-324;
+  return Z.map(function(row) {{ return row.map(function(v) {{ return 10 * Math.log10(Math.max(v, eps)); }}); }});
+}}
+
+function rebin(Z, t, n) {{
+  if (n <= 1) return {{Z: Z, t: t}};
+  var T = Z.length, F = Z[0].length;
+  var Ttrim = Math.floor(T / n) * n;
+  var Tout = Ttrim / n;
+  var Zout = [], tout = [];
+  for (var i = 0; i < Tout; i++) {{
+    var row = new Array(F).fill(0.0);
+    var tsum = 0.0;
+    for (var j = 0; j < n; j++) {{
+      var src = Z[i * n + j];
+      for (var f = 0; f < F; f++) row[f] += src[f];
+      tsum += t[i * n + j];
+    }}
+    Zout.push(row.map(function(v) {{ return v / n; }}));
+    tout.push(tsum / n);
+  }}
+  return {{Z: Zout, t: tout}};
+}}
+
+function transpose(Z) {{
+  if (!Z.length) return [];
+  return Z[0].map(function(_, f) {{ return Z.map(function(row) {{ return row[f]; }}); }});
+}}
+
+function resetTimeSliders(t) {{
+  var tMin = t[0], tMax = t[t.length - 1];
+  var dt = t.length > 1 ? t[1] - t[0] : Math.max(tMax - tMin, 1e-6);
+  var sMin = document.getElementById('tMin');
+  var sMax = document.getElementById('tMax');
+  sMin.min = tMin; sMin.max = tMax; sMin.step = dt; sMin.value = tMin;
+  sMax.min = tMin; sMax.max = tMax; sMax.step = dt; sMax.value = tMax;
+  document.getElementById('tMinVal').textContent = fmt(tMin, 3);
+  document.getElementById('tMaxVal').textContent = fmt(tMax, 3);
+}}
+
 function updateTitle() {{
   Plotly.relayout('specPlot', {{'title.text': document.getElementById('plotTitle').value}});
 }}
+
+function updateSurface() {{
+  var n = Math.max(1, Math.round(+document.getElementById('nAvg').value || 1));
+  document.getElementById('nAvg').value = n;
+  var useDb = document.getElementById('dbCheck').checked;
+  var rebinned = rebin(Z_RAW, T_RAW, n);
+  var Zdisp = useDb ? toDb(rebinned.Z) : rebinned.Z;
+  var Zt = transpose(Zdisp);
+  var zLabel = useDb ? 'Power (dB)' : 'Power (linear)';
+  var hoverTmpl = 'Time: %{{x:.2f}} s<br>Freq: %{{y:,.0f}} Hz<br>' + zLabel + ': %{{z:.2f}}<extra></extra>';
+  Plotly.restyle('specPlot', {{
+    x: [rebinned.t],
+    z: [Zt],
+    'colorbar.title.text': [zLabel],
+    hovertemplate: [hoverTmpl]
+  }}, [0]);
+  Plotly.relayout('specPlot', {{'scene.zaxis.title.text': zLabel}});
+  resetTimeSliders(rebinned.t);
+  var T = Z_RAW.length;
+  var discarded = T % n;
+  document.getElementById('discardMsg').textContent =
+    discarded > 0 ? '⚠︎ ' + discarded + ' of ' + T + ' frames discarded' : '';
+}}
+
 function fmt(v, dec) {{
   return dec === 0 ? Math.round(v).toLocaleString('en-GB') : v.toFixed(3);
 }}
+
 function update() {{
   var fMin = +document.getElementById('fMin').value;
   var fMax = +document.getElementById('fMax').value;
@@ -365,22 +486,28 @@ def main():
 
     n_avg = args.time_avg  # None or an integer
 
-    if n_avg is not None:
-        if n_avg < 2:
-            sys.exit("Error: --time-avg N requires N ≥ 2.")
-        T = power_s.shape[0]
-        time, power_s = rebin_time(time, power_s, n_avg)
-        print(
-            f"Time rebinned: {T} frames → {len(time)} frames "
-            f"(averaged every {n_avg}, {T % n_avg} trailing frame(s) discarded)"
-        )
-        title = title.rstrip(")") + f", time-avg {n_avg})"
-
-    print(f"Plotting {power_s.shape[1]} freq bins × {power_s.shape[0]} time bins")
-
     if args.plot3d:
-        plot_3d(freq_s, time, power_s, title, log_scale=not args.linear)
+        # For 3-D mode all options (scale, time-avg) are available as GUI controls;
+        # CLI flags set their initial values only.
+        init_n = n_avg if (n_avg is not None and n_avg >= 1) else 1
+        if n_avg is not None and n_avg < 1:
+            sys.exit("Error: --time-avg N requires N ≥ 1.")
+        print(f"Plotting {power_s.shape[1]} freq bins × {power_s.shape[0]} time bins")
+        plot_3d(freq_s, time, power_s, title,
+                log_scale=not args.linear, n_avg=init_n)
     else:
+        if n_avg is not None:
+            if n_avg < 2:
+                sys.exit("Error: --time-avg N requires N ≥ 2.")
+            T = power_s.shape[0]
+            time, power_s = rebin_time(time, power_s, n_avg)
+            print(
+                f"Time rebinned: {T} frames → {len(time)} frames "
+                f"(averaged every {n_avg}, {T % n_avg} trailing frame(s) discarded)"
+            )
+            title = title.rstrip(")") + f", time-avg {n_avg})"
+
+        print(f"Plotting {power_s.shape[1]} freq bins × {power_s.shape[0]} time bins")
         plot_2d(freq_s, time, power_s, title, log_scale=not args.linear)
 
 
