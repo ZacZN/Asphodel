@@ -17,12 +17,14 @@ Arguments
   --tmax T     Only use time frames at or before T seconds (default: end)
   --gamma G    Lorentz factor γ; if given, also shows the centre-of-mass
                half-life t½(c.o.m.) = t½(lab) / γ
+  --title TEXT Extra text appended to the auto-generated plot title
 
 Example
 -------
   python decay_fit.py 1081.5.npz 245000 246000
   python decay_fit.py 1081.5.npz 245000 246000 --gamma 1.43
   python decay_fit.py 1081.5.npz 245000 246000 --no-offset --tmax 60 --gamma 1.43
+  python decay_fit.py 1081.5.npz 245000 246000 --title "Cd-102, injection 3"
 """
 
 import sys
@@ -55,6 +57,8 @@ def parse_args():
                         help="End of time window to fit (s)")
     parser.add_argument("--gamma", type=float, default=None,
                         help="Lorentz factor γ; used to compute t½(c.o.m.) = t½(lab) / γ")
+    parser.add_argument("--title", type=str, default=None,
+                        help="Extra text appended to the auto-generated plot title")
     return parser.parse_args()
 
 
@@ -206,8 +210,11 @@ def make_equation_text(popt, perr, with_offset, half_life, half_life_err, gamma=
 
 
 def plot_decay(time, intensity, time_fit, popt, perr, model,
-               with_offset, freq_min, freq_max, filename, gamma=None):
+               with_offset, freq_min, freq_max, filename, gamma=None, title_suffix=None):
     """Draw the data, the fit, and the annotation box."""
+
+    # Double the default matplotlib font size (default is 10 → 20)
+    plt.rcParams.update({"font.size": 20})
 
     A, tau = popt[0], popt[1]
     dA, dtau = perr[0], perr[1]
@@ -221,7 +228,7 @@ def plot_decay(time, intensity, time_fit, popt, perr, model,
     t_dense = np.linspace(time_fit[0], time_fit[-1], 2000)
     I_fit   = model(t_dense, *popt)
 
-    fig, ax = plt.subplots(figsize=(10, 5))
+    fig, ax = plt.subplots(figsize=(16, 6))
 
     # Data
     ax.plot(time, intensity, "o", ms=3, alpha=0.6,
@@ -237,7 +244,7 @@ def plot_decay(time, intensity, time_fit, popt, perr, model,
         0.97, 0.97, eq_text,
         transform=ax.transAxes,
         va="top", ha="right",
-        fontsize=9,
+        fontsize=18,
         family="monospace",
         bbox=dict(boxstyle="round,pad=0.5", facecolor="white",
                   edgecolor="0.7", alpha=0.9),
@@ -249,17 +256,22 @@ def plot_decay(time, intensity, time_fit, popt, perr, model,
         ax.axvline(t_half, ls="--", lw=1, color="0.5",
                    label=f"$t_{{1/2}}$ (lab) = {format_value(half_life, None, 's')}")
 
-    ax.set_xlabel("Time (s)", fontsize=11)
-    ax.set_ylabel("Integrated power (arb. units)", fontsize=11)
-    ax.set_title(
+    title = (
         f"{os.path.basename(filename)}   "
         f"[{freq_min:,.0f} – {freq_max:,.0f} Hz]   "
-        f"exponential decay",
-        fontsize=11, pad=8,
+        f"exponential decay"
     )
-    ax.legend(fontsize=9)
+    if title_suffix:
+        title += f"   {title_suffix}"
+
+    ax.set_xlabel("Time (s)", fontsize=22)
+    ax.set_ylabel("Integrated power (arb. units)", fontsize=22)
+    ax.set_title(title, fontsize=22, pad=8)
+    ax.tick_params(labelsize=20)
+    ax.legend(fontsize=18)
     ax.set_xlim(left=0)
-    fig.tight_layout()
+    fig.tight_layout(pad=0)
+    fig.subplots_adjust(right=0.98)   # small right margin so legend/box aren't clipped
     plt.show()
 
     # Console summary
@@ -327,6 +339,7 @@ def main():
         args.freq_min, args.freq_max,
         args.file,
         gamma=args.gamma,
+        title_suffix=args.title,
     )
 
 
