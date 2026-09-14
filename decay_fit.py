@@ -5,7 +5,7 @@ then fit and plot an exponential decay.
 
 Usage
 -----
-  python decay_fit.py <file> <freq_min> <freq_max> [--no-offset] [--tmin T] [--tmax T]
+  python decay_fit.py <file> <freq_min> <freq_max> [--no-offset] [--tmin T] [--tmax T] [--gamma G]
 
 Arguments
 ---------
@@ -15,11 +15,14 @@ Arguments
   --no-offset  Force the decay to zero (fit A·exp(-t/τ) with no floor)
   --tmin T     Only use time frames at or after T seconds (default: 0)
   --tmax T     Only use time frames at or before T seconds (default: end)
+  --gamma G    Lorentz factor γ; if given, also shows the centre-of-mass
+               half-life t½(c.o.m.) = t½(lab) / γ
 
 Example
 -------
   python decay_fit.py 1081.5.npz 245000 246000
-  python decay_fit.py 1081.5.npz 245000 246000 --no-offset --tmax 60
+  python decay_fit.py 1081.5.npz 245000 246000 --gamma 1.43
+  python decay_fit.py 1081.5.npz 245000 246000 --no-offset --tmax 60 --gamma 1.43
 """
 
 import sys
@@ -50,6 +53,8 @@ def parse_args():
                         help="Start of time window to fit (s)")
     parser.add_argument("--tmax", type=float, default=None,
                         help="End of time window to fit (s)")
+    parser.add_argument("--gamma", type=float, default=None,
+                        help="Lorentz factor γ; used to compute t½(c.o.m.) = t½(lab) / γ")
     return parser.parse_args()
 
 
@@ -173,7 +178,7 @@ def format_value(v, err=None, unit=""):
     return f"{v:.4g}{(' ± ' + f'{err:.2g}') if err else ''} {unit}".strip()
 
 
-def make_equation_text(popt, perr, with_offset, half_life, half_life_err):
+def make_equation_text(popt, perr, with_offset, half_life, half_life_err, gamma=None):
     """Build the annotation string shown on the plot."""
     A, tau = popt[0], popt[1]
     dA, dtau = perr[0], perr[1]
@@ -189,13 +194,19 @@ def make_equation_text(popt, perr, with_offset, half_life, half_life_err):
 
     lines.append("")   # blank separator
     lines.append(
-        f"$t_{{1/2}}$ = {format_value(half_life, half_life_err, 's')}"
+        f"$t_{{1/2}}$ (lab)   = {format_value(half_life, half_life_err, 's')}"
     )
+    if gamma is not None:
+        com_half_life     = half_life     / gamma
+        com_half_life_err = half_life_err / gamma
+        lines.append(
+            f"$t_{{1/2}}$ (c.o.m.) = {format_value(com_half_life, com_half_life_err, 's')}"
+        )
     return "\n".join(lines)
 
 
 def plot_decay(time, intensity, time_fit, popt, perr, model,
-               with_offset, freq_min, freq_max, filename):
+               with_offset, freq_min, freq_max, filename, gamma=None):
     """Draw the data, the fit, and the annotation box."""
 
     A, tau = popt[0], popt[1]
@@ -203,6 +214,9 @@ def plot_decay(time, intensity, time_fit, popt, perr, model,
 
     half_life     = tau  * np.log(2)
     half_life_err = dtau * np.log(2)
+
+    com_half_life     = half_life     / gamma if gamma is not None else None
+    com_half_life_err = half_life_err / gamma if gamma is not None else None
 
     t_dense = np.linspace(time_fit[0], time_fit[-1], 2000)
     I_fit   = model(t_dense, *popt)
@@ -218,7 +232,7 @@ def plot_decay(time, intensity, time_fit, popt, perr, model,
             color="#dd4444", label="Exponential fit")
 
     # --- Annotation box ---
-    eq_text = make_equation_text(popt, perr, with_offset, half_life, half_life_err)
+    eq_text = make_equation_text(popt, perr, with_offset, half_life, half_life_err, gamma)
     ax.text(
         0.97, 0.97, eq_text,
         transform=ax.transAxes,
@@ -229,11 +243,11 @@ def plot_decay(time, intensity, time_fit, popt, perr, model,
                   edgecolor="0.7", alpha=0.9),
     )
 
-    # Half-life marker (vertical dashed line at t½ from start of fit window)
+    # Half-life marker (vertical dashed line at t½(lab) from start of fit window)
     t_half = time_fit[0] + half_life
     if time_fit[0] <= t_half <= time_fit[-1]:
         ax.axvline(t_half, ls="--", lw=1, color="0.5",
-                   label=f"$t_{{1/2}}$ = {format_value(half_life, None, 's')}")
+                   label=f"$t_{{1/2}}$ (lab) = {format_value(half_life, None, 's')}")
 
     ax.set_xlabel("Time (s)", fontsize=11)
     ax.set_ylabel("Integrated power (arb. units)", fontsize=11)
@@ -256,7 +270,10 @@ def plot_decay(time, intensity, time_fit, popt, perr, model,
     if with_offset:
         C, dC = popt[2], perr[2]
         print(f"  C    = {format_value(C, dC)}")
-    print(f"  t½   = {format_value(half_life, half_life_err, 's')}")
+    print(f"  t½ (lab)   = {format_value(half_life, half_life_err, 's')}")
+    if gamma is not None:
+        print(f"  γ          = {gamma}")
+        print(f"  t½ (c.o.m.)= {format_value(com_half_life, com_half_life_err, 's')}")
     print(f"{'─'*50}\n")
 
 
@@ -309,6 +326,7 @@ def main():
         with_offset,
         args.freq_min, args.freq_max,
         args.file,
+        gamma=args.gamma,
     )
 
 
