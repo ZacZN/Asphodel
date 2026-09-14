@@ -232,6 +232,7 @@ def plot_3d(freq, time, power, title, log_scale=True, n_avg=1):
     t_raw_json = json.dumps(t_ds.tolist())
     f_raw_json = json.dumps(f_ds.tolist())   # freq array, low-to-high (for 2-D heatmap)
     db_checked = "checked" if log_scale else ""
+    n_avg_init = n_avg
 
     plot_div = fig.to_html(full_html=False, include_plotlyjs="cdn", div_id="specPlot",
                            config={"responsive": True})
@@ -284,7 +285,7 @@ def plot_3d(freq, time, power, title, log_scale=True, n_avg=1):
   .opt-grp button:hover {{ background: #fb923c; }}
   #discardMsg {{ font-size: 11px; color: #fbbf24; margin-left: 4px; }}
   #plots {{ display: flex; gap: 8px; align-items: flex-start; }}
-  #heatDiv {{ display: none; flex: 1; min-width: 0; }}
+  #heatDiv {{ flex: 1; min-width: 0; }}
   #surfDiv {{ flex: 1; min-width: 0; }}
 </style>
 </head>
@@ -332,14 +333,9 @@ def plot_3d(freq, time, power, title, log_scale=True, n_avg=1):
     </div>
     <div class="opt-grp">
       <span>Time avg</span>
-      <input type="number" id="nAvg" min="1" step="1" value="{n_avg}">
+      <input type="number" id="nAvg" min="1" step="1" value="{n_avg_init}">
       <button onclick="updateSurface()">Apply</button>
       <span id="discardMsg"></span>
-    </div>
-    <div class="opt-grp">
-      <span>View</span>
-      <input type="checkbox" id="show2D" onchange="toggle2D()">
-      <label for="show2D">Show 2D</label>
     </div>
   </div>
 </div>
@@ -352,7 +348,7 @@ const Z_RAW = {z_raw_json};
 const T_RAW = {t_raw_json};
 const F_PLOT = {f_raw_json};  // freq array, low-to-high (2-D heatmap y-axis)
 
-var _heatReady = false;
+var _heatReady = true;
 
 // Inferno colorscale defined explicitly so it works regardless of plotly.js version
 const INFERNO = [
@@ -412,17 +408,6 @@ function resetTimeSliders(t) {{
 function _heat2dZ(rebinnedZ, useDb) {{
   var Zunflip = rebinnedZ.map(function(row) {{ return row.slice().reverse(); }});
   return transpose(useDb ? toDb(Zunflip) : Zunflip);
-}}
-
-function toggle2D() {{
-  var show = document.getElementById('show2D').checked;
-  document.getElementById('heatDiv').style.display = show ? 'block' : 'none';
-  if (show) {{
-    if (!_heatReady) {{ _initHeatmap(); _heatReady = true; }}
-    else {{ _updateHeatmap(); }}
-  }}
-  // Resize the 3-D plot to fit its new (narrower or wider) container
-  setTimeout(function() {{ Plotly.Plots.resize(document.getElementById('specPlot')); }}, 0);
 }}
 
 function _initHeatmap() {{
@@ -531,6 +516,9 @@ function update() {{
     }});
   }}
 }}
+
+// Initialise the 2-D heatmap immediately on load
+_initHeatmap();
 </script>
 </body>
 </html>"""
