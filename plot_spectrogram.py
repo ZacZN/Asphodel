@@ -194,7 +194,8 @@ def plot_3d(freq, time, power, title, log_scale=True):
         title=dict(text=title, x=0.5, xanchor="center", font_size=14),
         scene=dict(
             xaxis=dict(title="Time (s)"),
-            yaxis=dict(title="Frequency (Hz)", tickformat=",d"),
+            yaxis=dict(title="Frequency (Hz)", tickformat=",d",
+                       range=[float(freq.max()), float(freq.min())]),
             zaxis=dict(title=z_label),
             camera=dict(eye=dict(x=1.6, y=-1.6, z=0.8)),
         ),
