@@ -7,3 +7,6 @@ old/
 __pycache__/
 *.pyc
 *.pyo
+
+# Local config (contains machine-specific paths)
+viewer_config.json
