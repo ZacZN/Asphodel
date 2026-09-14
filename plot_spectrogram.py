@@ -107,8 +107,6 @@ def plot_2d(freq, time, power, title, log_scale=True):
     cbar.set_label("Power (dB)" if log_scale else "Power (linear)", fontsize=11)
     cbar.ax.tick_params(labelsize=9)
 
-    ax.invert_yaxis()
-
     ax.set_xlabel("Time (s)", fontsize=11)
     ax.set_ylabel("Frequency (Hz)", fontsize=11)
     ax.set_title(title, fontsize=12, pad=8)
@@ -152,6 +150,7 @@ def plot_3d(freq, time, power, title, log_scale=True):
             "plotly is required for --plot3d.  Install it with:\n"
             "  pip install plotly"
         )
+    import tempfile, webbrowser
 
     z = to_db(power) if log_scale else power
     z_label = "Power (dB)" if log_scale else "Power (linear)"
@@ -171,10 +170,14 @@ def plot_3d(freq, time, power, title, log_scale=True):
             f"(original: {len(time)} × {len(freq)})"
         )
 
+    # Reverse frequency axis so high freq is at the front (where axes meet)
+    f_plot = f_ds[::-1]
+    z_plot = z_ds[:, ::-1].T   # flip freq axis, then transpose to (F, T)
+
     fig = go.Figure(data=[go.Surface(
-        x=t_ds,                  # time along X
-        y=f_ds[::-1],            # frequency along Y (high→low)
-        z=z_ds[:, ::-1].T,       # flip freq axis, transpose to (F, T)
+        x=t_ds,          # time along X
+        y=f_plot,        # frequency along Y (high→low)
+        z=z_plot,        # (F, T) surface array
         colorscale="Inferno",
         colorbar=dict(
             title=dict(text=z_label, side="right"),
@@ -191,15 +194,135 @@ def plot_3d(freq, time, power, title, log_scale=True):
         title=dict(text=title, x=0.5, xanchor="center", font_size=14),
         scene=dict(
             xaxis=dict(title="Time (s)"),
-            yaxis=dict(title="Frequency (Hz)", tickformat=",d", autorange="reversed"),
+            yaxis=dict(title="Frequency (Hz)", tickformat=",d"),
             zaxis=dict(title=z_label),
             camera=dict(eye=dict(x=1.6, y=-1.6, z=0.8)),
         ),
         margin=dict(l=0, r=0, t=60, b=0),
-        height=700,
+        height=680,
     )
 
-    fig.show()   # opens in the default browser
+    # Axis bounds and bin sizes for slider step sizes
+    f_min, f_max = float(freq.min()), float(freq.max())
+    t_min, t_max = float(time.min()), float(time.max())
+    # One notch on the time slider = one time bin
+    dt = float(time[1] - time[0]) if len(time) > 1 else max(t_max - t_min, 1e-6)
+    # One notch on the freq slider = one frequency bin
+    df = float(freq[1] - freq[0]) if len(freq) > 1 else max(f_max - f_min, 1.0)
+
+    plot_div = fig.to_html(full_html=False, include_plotlyjs="cdn", div_id="specPlot")
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>{title}</title>
+<style>
+  * {{ box-sizing: border-box; }}
+  body {{ margin: 0; padding: 8px; background: #111827; color: #e5e7eb;
+         font-family: system-ui, sans-serif; font-size: 13px; }}
+  #controls {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+               background: #1f2937; border-radius: 8px; padding: 12px 16px;
+               margin-bottom: 6px; }}
+  .grp h4 {{ margin: 0 0 8px; font-size: 12px; font-weight: 600;
+              text-transform: uppercase; letter-spacing: .06em; color: #f97316; }}
+  .row {{ display: flex; align-items: center; gap: 8px; margin: 4px 0; }}
+  .row label {{ width: 28px; color: #9ca3af; }}
+  .row input[type=range] {{ flex: 1; accent-color: #f97316; cursor: pointer; }}
+  .row span {{ width: 110px; text-align: right; color: #d1d5db; font-size: 11px;
+               font-variant-numeric: tabular-nums; }}
+</style>
+</head>
+<body>
+<div id="controls">
+  <div class="grp">
+    <h4>Frequency (Hz)</h4>
+    <div class="row">
+      <label>Min</label>
+      <input type="range" id="fMin" min="{f_min}" max="{f_max}"
+             step="{df}" value="{f_min}" oninput="update()">
+      <span id="fMinVal">{f_min:,.0f}</span>
+    </div>
+    <div class="row">
+      <label>Max</label>
+      <input type="range" id="fMax" min="{f_min}" max="{f_max}"
+             step="{df}" value="{f_max}" oninput="update()">
+      <span id="fMaxVal">{f_max:,.0f}</span>
+    </div>
+  </div>
+  <div class="grp">
+    <h4>Time (s)</h4>
+    <div class="row">
+      <label>Min</label>
+      <input type="range" id="tMin" min="{t_min}" max="{t_max}"
+             step="{dt}" value="{t_min}" oninput="update()">
+      <span id="tMinVal">{t_min:.3f}</span>
+    </div>
+    <div class="row">
+      <label>Max</label>
+      <input type="range" id="tMax" min="{t_min}" max="{t_max}"
+             step="{dt}" value="{t_max}" oninput="update()">
+      <span id="tMaxVal">{t_max:.3f}</span>
+    </div>
+  </div>
+</div>
+{plot_div}
+<script>
+function fmt(v, dec) {{
+  return dec === 0 ? Math.round(v).toLocaleString('en-GB') : v.toFixed(3);
+}}
+function update() {{
+  var fMin = +document.getElementById('fMin').value;
+  var fMax = +document.getElementById('fMax').value;
+  var tMin = +document.getElementById('tMin').value;
+  var tMax = +document.getElementById('tMax').value;
+  if (fMin >= fMax || tMin >= tMax) return;
+  document.getElementById('fMinVal').textContent = fmt(fMin, 0);
+  document.getElementById('fMaxVal').textContent = fmt(fMax, 0);
+  document.getElementById('tMinVal').textContent = fmt(tMin, 3);
+  document.getElementById('tMaxVal').textContent = fmt(tMax, 3);
+  // Freq axis is reversed (high→low), so swap range order for plotly
+  Plotly.relayout('specPlot', {{
+    'scene.yaxis.range': [fMax, fMin],
+    'scene.xaxis.range': [tMin, tMax]
+  }});
+}}
+</script>
+</body>
+</html>"""
+
+    import http.server, socket, threading, time
+
+    # Write HTML to a temp directory
+    tmp_dir = tempfile.mkdtemp()
+    html_path = os.path.join(tmp_dir, "spectrogram.html")
+    with open(html_path, "w", encoding="utf-8") as _f:
+        _f.write(html)
+
+    # Find a free port
+    with socket.socket() as _s:
+        _s.bind(("127.0.0.1", 0))
+        port = _s.getsockname()[1]
+
+    # Serve over localhost — bypasses snap AppArmor restrictions on file:// URLs
+    class _Handler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=tmp_dir, **kwargs)
+        def log_message(self, *args):
+            pass  # silence request logs
+
+    _srv = http.server.HTTPServer(("127.0.0.1", port), _Handler)
+    threading.Thread(target=_srv.serve_forever, daemon=True).start()
+
+    url = f"http://127.0.0.1:{port}/spectrogram.html"
+    print(f"Serving 3-D plot at {url}  (Ctrl-C to quit)")
+    webbrowser.open(url)
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        _srv.shutdown()
 
 
 # ---------------------------------------------------------------------------
