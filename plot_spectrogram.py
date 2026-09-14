@@ -2,26 +2,26 @@
 """
 Plot a spectrogram from a single ESR injection .npz file.
 
+Opens an interactive browser page with a 2-D heatmap and 3-D surface
+side by side.  Scale, time-averaging, and axis ranges can all be
+adjusted in the browser without re-running the script.
+
 Usage
 -----
-  python plot_spectrogram.py <file> <freq_min> <freq_max> [--linear] [--plot3d] [--time-avg N]
+  python plot_spectrogram.py <file> <freq_min> <freq_max> [--linear] [--time-avg N]
 
 Arguments
 ---------
   file          Path to a .npz file (freq, time, power arrays)
   freq_min      Lower frequency bound (same units as the freq array)
   freq_max      Upper frequency bound
-  --linear      Plot raw power instead of 10·log10(power)
-                (3-D: sets initial GUI state; can be toggled in the browser)
-  --plot3d      Interactive 3-D surface plot (uses plotly; opens in browser)
-  --time-avg N  Average every N consecutive time frames (e.g. 5 → T/5 frames)
-                (3-D: sets initial GUI state; can be changed in the browser)
+  --linear      Start in linear-power mode instead of dB (can be toggled in the browser)
+  --time-avg N  Initial time-frame averaging (can be changed in the browser)
 
 Example
 -------
   python plot_spectrogram.py 1081.5.npz 245000 246000
-  python plot_spectrogram.py 1081.5+1082.0.npz 245000 246000 --plot3d
-  python plot_spectrogram.py 1081.5.npz 245000 246000 --linear --plot3d
+  python plot_spectrogram.py 1081.5.npz 245000 246000 --linear
   python plot_spectrogram.py 1081.5.npz 245000 246000 --time-avg 5
 """
 
@@ -30,8 +30,6 @@ import os
 import argparse
 
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
 
 
 def parse_args():
@@ -40,9 +38,7 @@ def parse_args():
     parser.add_argument("freq_min", type=float, help="Lower frequency bound")
     parser.add_argument("freq_max", type=float, help="Upper frequency bound")
     parser.add_argument("--linear", action="store_true",
-                        help="Plot linear power instead of dB (log scale)")
-    parser.add_argument("--plot3d", action="store_true",
-                        help="Interactive 3-D surface plot via plotly (opens in browser)")
+                        help="Start in linear-power mode instead of dB (toggleable in browser)")
     parser.add_argument("--time-avg", type=int, metavar="N", default=None,
                         help="Average every N consecutive time frames (reduces time axis by factor N)")
     return parser.parse_args()
@@ -73,75 +69,8 @@ def slice_freq(freq, power, freq_min, freq_max):
     return freq[mask], power[:, mask]
 
 
-def to_db(power):
-    """Convert power to dB, guarding against zeros/negatives."""
-    eps = np.finfo(float).tiny
-    return 10.0 * np.log10(np.maximum(power, eps))
-
-
 # ---------------------------------------------------------------------------
-# 2-D matplotlib plot (original)
-# ---------------------------------------------------------------------------
-
-def plot_2d(freq, time, power, title, log_scale=True):
-    fig, ax = plt.subplots(figsize=(12, 5))
-
-    z = to_db(power) if log_scale else power
-
-    # pcolormesh expects edges; build them from centres
-    def edges(arr):
-        d = np.diff(arr)
-        return np.concatenate([[arr[0] - d[0] / 2],
-                                arr[:-1] + d / 2,
-                                [arr[-1] + d[-1] / 2]])
-
-    t_edges = edges(time)
-    f_edges = edges(freq)
-
-    mesh = ax.pcolormesh(
-        t_edges, f_edges, z.T,          # z.T → (F, T) for (y, x) orientation
-        cmap="viridis",
-        shading="flat",
-        rasterized=True,
-    )
-
-    cbar = fig.colorbar(mesh, ax=ax, pad=0.02)
-    cbar.set_label("Power (dB)" if log_scale else "Power (linear)", fontsize=11)
-    cbar.ax.tick_params(labelsize=9)
-
-    ax.set_xlabel("Time (s)", fontsize=11)
-    ax.set_ylabel("Frequency (Hz)", fontsize=11)
-    ax.set_title(title, fontsize=12, pad=8)
-
-    # Frequency axis: show full integers, no scientific notation
-    ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda v, _: f"{v:,.0f}"))
-    ax.tick_params(labelsize=9)
-
-    fig.tight_layout()
-    plt.show()
-
-
-# ---------------------------------------------------------------------------
-# Time rebinning
-# ---------------------------------------------------------------------------
-
-def rebin_time(time, power, n):
-    """Average every N consecutive time frames.
-
-    Trailing frames that don't fill a complete group are discarded.
-    Averaging is done in linear power space.
-
-    Returns (time_rebinned, power_rebinned) with shape (T//N, F).
-    """
-    T, F = power.shape
-    T_trim = (T // n) * n
-    power_r = power[:T_trim].reshape(T // n, n, F).mean(axis=1)
-    time_r  = time[:T_trim].reshape(T // n, n).mean(axis=1)
-    return time_r, power_r
-
-
-# ---------------------------------------------------------------------------
-# 3-D interactive plotly plot
+# Interactive browser plot (2-D heatmap + 3-D surface, side by side)
 # ---------------------------------------------------------------------------
 
 def plot_3d(freq, time, power, title, log_scale=True, n_avg=1):
@@ -578,30 +507,14 @@ def main():
     )
 
     n_avg = args.time_avg  # None or an integer
-
-    if args.plot3d:
-        # For 3-D mode all options (scale, time-avg) are available as GUI controls;
-        # CLI flags set their initial values only.
-        init_n = n_avg if (n_avg is not None and n_avg >= 1) else 1
-        if n_avg is not None and n_avg < 1:
-            sys.exit("Error: --time-avg N requires N ≥ 1.")
-        print(f"Plotting {power_s.shape[1]} freq bins × {power_s.shape[0]} time bins")
-        plot_3d(freq_s, time, power_s, title,
-                log_scale=not args.linear, n_avg=init_n)
-    else:
-        if n_avg is not None:
-            if n_avg < 2:
-                sys.exit("Error: --time-avg N requires N ≥ 2.")
-            T = power_s.shape[0]
-            time, power_s = rebin_time(time, power_s, n_avg)
-            print(
-                f"Time rebinned: {T} frames → {len(time)} frames "
-                f"(averaged every {n_avg}, {T % n_avg} trailing frame(s) discarded)"
-            )
-            title = title.rstrip(")") + f", time-avg {n_avg})"
-
-        print(f"Plotting {power_s.shape[1]} freq bins × {power_s.shape[0]} time bins")
-        plot_2d(freq_s, time, power_s, title, log_scale=not args.linear)
+    # All options (scale, time-avg) are available as GUI controls;
+    # CLI flags set their initial values only.
+    init_n = n_avg if (n_avg is not None and n_avg >= 1) else 1
+    if n_avg is not None and n_avg < 1:
+        sys.exit("Error: --time-avg N requires N ≥ 1.")
+    print(f"Plotting {power_s.shape[1]} freq bins × {power_s.shape[0]} time bins")
+    plot_3d(freq_s, time, power_s, title,
+            log_scale=not args.linear, n_avg=init_n)
 
 
 if __name__ == "__main__":
