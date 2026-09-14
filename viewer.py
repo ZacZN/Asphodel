@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 import json
 import os
+import re
 
 import dash
 from dash import dcc, html, Input, Output, State, callback_context
@@ -132,10 +133,50 @@ def build_hover_label(ion_name: str, row: "pd.Series") -> str:
     return "<br>".join(lines)
 
 
+def parse_highlight_ions(s: str) -> list:
+    """Parse a comma-separated string of ion names to highlight.
+    Returns a list of stripped, non-empty strings."""
+    if not s or not s.strip():
+        return []
+    return [tok.strip() for tok in s.split(",") if tok.strip()]
+
+
+def ion_base_name(ion_name: str) -> str:
+    """Strip the numeric charge state from a full ion name.
+
+    '204Hg79+'  -> '204Hg'
+    'm186Hf72+' -> 'm186Hf'
+    """
+    return re.sub(r"\d+\+$", "", ion_name)
+
+
+def ion_matches_highlight(ion_name: str, highlight_list: list) -> bool:
+    """Return True if *ion_name* matches any entry in *highlight_list*.
+
+    Rules
+    -----
+    * If an entry contains '+' it must match the full ion name exactly.
+    * Otherwise the entry is treated as a base name (no charge state) and
+      matches any charge state of that isotope, e.g. '204Hg' matches
+      '204Hg79+', '204Hg78+', etc.
+    """
+    base = ion_base_name(ion_name)
+    for h in highlight_list:
+        if "+" in h:
+            if ion_name == h:
+                return True
+        else:
+            if base == h:
+                return True
+    return False
+
+
 def build_figure(file_path, spectrum_name, ref_name, ref_frequency, ref_harmonic,
                  z_lims, n_lims, el1, el2, mq_width, gamma_t, harmonics,
-                 correction_enabled=False, corr_a=0.0, corr_b=0.0, corr_c=0.0):
+                 correction_enabled=False, corr_a=0.0, corr_b=0.0, corr_c=0.0,
+                 highlight_ions=None):
     """Run the full computation and return a Plotly figure, or an error figure."""
+    highlight_ions = highlight_ions or []
     try:
         # Ion database
         fully_stripped = get_chargestate(0, z_lims, n_lims, el1, el2)
@@ -181,26 +222,55 @@ def build_figure(file_path, spectrum_name, ref_name, ref_frequency, ref_harmonic
 
         colors = px.colors.qualitative.Plotly
         freq_cols = [f"frequency_direct_{h}" for h in harmonics]
+        HIGHLIGHT_COLOR = "#FF8C00"   # vivid orange — stands out against all Plotly qualitative colours
+        HIGHLIGHT_WIDTH = 3
+        # When any highlights are active, fade non-highlighted ions so the
+        # highlighted ones dominate visually.
+        fading_active  = bool(highlight_ions)
+        normal_opacity = 0.12 if fading_active else 1.0
+
         for i, col in enumerate(freq_cols):
             color = colors[i % len(colors)]
-            xs, ys, hover = [], [], []
+            xs_norm, ys_norm, hover_norm = [], [], []
+            xs_hi,   ys_hi,   hover_hi   = [], [], []
             for ion_name, row in db.iterrows():
                 f = row[col]
                 if pd.isna(f):
                     continue
                 label = build_hover_label(str(ion_name), row)
-                xs    += [f] * n_points + [None]
-                ys    += list(y_range)  + [None]
-                hover += [label] * n_points + [None]
-            fig.add_trace(go.Scattergl(
-                x=xs, y=ys,
-                mode="lines",
-                line=dict(dash="dash", color=color, width=1),
-                name=col,
-                hoverinfo="text",
-                hovertext=hover,
-                connectgaps=False
-            ))
+                seg_x = [f] * n_points + [None]
+                seg_y = list(y_range)  + [None]
+                seg_h = [label] * n_points + [None]
+                if ion_matches_highlight(str(ion_name), highlight_ions):
+                    xs_hi   += seg_x;  ys_hi   += seg_y;  hover_hi   += seg_h
+                else:
+                    xs_norm += seg_x;  ys_norm += seg_y;  hover_norm += seg_h
+
+            # Normal ions (faded when highlights are active)
+            if xs_norm:
+                fig.add_trace(go.Scattergl(
+                    x=xs_norm, y=ys_norm,
+                    mode="lines",
+                    line=dict(dash="dash", color=color, width=1),
+                    opacity=normal_opacity,
+                    name=col,
+                    hoverinfo="text",
+                    hovertext=hover_norm,
+                    connectgaps=False
+                ))
+
+            # Highlighted ions — solid, wider, vivid orange, full opacity
+            if xs_hi:
+                fig.add_trace(go.Scattergl(
+                    x=xs_hi, y=ys_hi,
+                    mode="lines",
+                    line=dict(dash="solid", color=HIGHLIGHT_COLOR, width=HIGHLIGHT_WIDTH),
+                    opacity=1.0,
+                    name=f"{col} ★",
+                    hoverinfo="text",
+                    hovertext=hover_hi,
+                    connectgaps=False
+                ))
 
         fig.update_layout(
             title="Calculated Frequencies overlayed with data",
@@ -245,6 +315,7 @@ DEFAULTS = dict(
     corr_a             = 0,
     corr_b             = 0,
     corr_c             = 0,
+    highlight_ions     = "",
 )
 
 # JSON file written next to viewer.py so it survives restarts
@@ -337,6 +408,24 @@ sidebar = html.Div([
         make_input("b  (f coefficient)",  "corr-b", CFG["corr_b"], "number", "any"),
         make_input("c  (constant)",       "corr-c", CFG["corr_c"], "number", "any"),
     ], style={"display": "block" if CFG["correction_enabled"] else "none"}),
+
+    html.Hr(style={"marginBottom": "12px"}),
+    html.P("Highlight ions", style={"fontWeight": "600", "color": "#555", "marginBottom": "6px", "fontSize": "12px"}),
+    html.Div([
+        html.Label("Ion names (comma-separated)", style=LABEL_STYLE),
+        dcc.Input(
+            id="highlight-ions",
+            value=CFG.get("highlight_ions", ""),
+            debounce=True,
+            placeholder="e.g. 204Hg, 208Tl79+",
+            style={"width": "100%", "fontSize": "13px"},
+            className="form-control form-control-sm",
+        ),
+        html.Small(
+            "Omit charge state to highlight all charge states",
+            style={"color": "#888", "fontSize": "11px", "display": "block", "marginTop": "3px"},
+        ),
+    ], style=INPUT_STYLE),
 
     html.Hr(style={"marginBottom": "12px"}),
     html.Div(id="error-box", style={"color": "red", "fontSize": "12px", "whiteSpace": "pre-wrap"}),
@@ -472,11 +561,12 @@ def toggle_correction_inputs(enabled):
     Input("corr-a",             "value"),
     Input("corr-b",             "value"),
     Input("corr-c",             "value"),
+    Input("highlight-ions",     "value"),
     prevent_initial_call=True,
 )
 def persist_config(file_path, spectrum_name, ref_name, ref_frequency, ref_harmonic,
                    z_lims, n_lims, el1, el2, mq_width, gamma_t, harmonics,
-                   correction_enabled, corr_a, corr_b, corr_c):
+                   correction_enabled, corr_a, corr_b, corr_c, highlight_ions):
     save_config(dict(
         file_path          = file_path,
         spectrum_name      = spectrum_name,
@@ -494,6 +584,7 @@ def persist_config(file_path, spectrum_name, ref_name, ref_frequency, ref_harmon
         corr_a             = corr_a,
         corr_b             = corr_b,
         corr_c             = corr_c,
+        highlight_ions     = highlight_ions,
     ))
     return dash.no_update
 
@@ -517,17 +608,20 @@ def persist_config(file_path, spectrum_name, ref_name, ref_frequency, ref_harmon
     Input("corr-a",             "value"),
     Input("corr-b",             "value"),
     Input("corr-c",             "value"),
+    Input("highlight-ions",     "value"),
 )
 def update_figure(file_path, spectrum_name, ref_name, ref_frequency, ref_harmonic,
                   z_lims_str, n_lims_str, el1_str, el2_str,
                   mq_width, gamma_t, harmonics_str,
-                  correction_enabled, corr_a, corr_b, corr_c):
+                  correction_enabled, corr_a, corr_b, corr_c,
+                  highlight_ions_str):
     try:
-        z_lims   = parse_int_pair(z_lims_str)
-        n_lims   = parse_int_pair(n_lims_str)
-        el1      = parse_int_pair(el1_str)
-        el2      = parse_int_pair(el2_str)
+        z_lims    = parse_int_pair(z_lims_str)
+        n_lims    = parse_int_pair(n_lims_str)
+        el1       = parse_int_pair(el1_str)
+        el2       = parse_int_pair(el2_str)
         harmonics = parse_int_list(harmonics_str)
+        hi_list   = parse_highlight_ions(highlight_ions_str or "")
         fig, err = build_figure(
             file_path           = file_path or "",
             spectrum_name       = spectrum_name or "",
@@ -545,6 +639,7 @@ def update_figure(file_path, spectrum_name, ref_name, ref_frequency, ref_harmoni
             corr_a              = float(corr_a or 0),
             corr_b              = float(corr_b or 0),
             corr_c              = float(corr_c or 0),
+            highlight_ions      = hi_list,
         )
         return fig, err
     except Exception as exc:
