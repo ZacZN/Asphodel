@@ -211,6 +211,7 @@ def plot_3d(freq, time, power, title, log_scale=True):
     df = float(freq[1] - freq[0]) if len(freq) > 1 else max(f_max - f_min, 1.0)
 
     plot_div = fig.to_html(full_html=False, include_plotlyjs="cdn", div_id="specPlot")
+    title_html = title.replace("&", "&amp;").replace('"', "&quot;")
 
     html = f"""<!DOCTYPE html>
 <html>
@@ -224,6 +225,15 @@ def plot_3d(freq, time, power, title, log_scale=True):
   #controls {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
                background: #1f2937; border-radius: 8px; padding: 12px 16px;
                margin-bottom: 6px; }}
+  .title-row {{ grid-column: 1 / -1; display: flex; align-items: center;
+                gap: 10px; margin-bottom: 4px; }}
+  .title-row label {{ color: #9ca3af; white-space: nowrap; font-size: 12px;
+                      font-weight: 600; text-transform: uppercase;
+                      letter-spacing: .06em; color: #f97316; }}
+  .title-row input[type=text] {{ flex: 1; background: #374151;
+                                  border: 1px solid #4b5563; border-radius: 4px;
+                                  color: #e5e7eb; padding: 4px 8px; font-size: 13px; }}
+  .title-row input[type=text]:focus {{ outline: none; border-color: #f97316; }}
   .grp h4 {{ margin: 0 0 8px; font-size: 12px; font-weight: 600;
               text-transform: uppercase; letter-spacing: .06em; color: #f97316; }}
   .row {{ display: flex; align-items: center; gap: 8px; margin: 4px 0; }}
@@ -235,6 +245,10 @@ def plot_3d(freq, time, power, title, log_scale=True):
 </head>
 <body>
 <div id="controls">
+  <div class="title-row">
+    <label>Title</label>
+    <input type="text" id="plotTitle" value="{title_html}" oninput="updateTitle()">
+  </div>
   <div class="grp">
     <h4>Frequency (Hz)</h4>
     <div class="row">
@@ -268,6 +282,9 @@ def plot_3d(freq, time, power, title, log_scale=True):
 </div>
 {plot_div}
 <script>
+function updateTitle() {{
+  Plotly.relayout('specPlot', {{'title.text': document.getElementById('plotTitle').value}});
+}}
 function fmt(v, dec) {{
   return dec === 0 ? Math.round(v).toLocaleString('en-GB') : v.toFixed(3);
 }}
