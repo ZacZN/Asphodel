@@ -230,9 +230,11 @@ def plot_3d(freq, time, power, title, log_scale=True, n_avg=1):
     # Embed raw (downsampled) data as JSON for JS re-rendering
     z_raw_json = json.dumps(z_ds.tolist())
     t_raw_json = json.dumps(t_ds.tolist())
+    f_raw_json = json.dumps(f_ds.tolist())   # freq array, low-to-high (for 2-D heatmap)
     db_checked = "checked" if log_scale else ""
 
-    plot_div = fig.to_html(full_html=False, include_plotlyjs="cdn", div_id="specPlot")
+    plot_div = fig.to_html(full_html=False, include_plotlyjs="cdn", div_id="specPlot",
+                           config={"responsive": True})
     title_html = title.replace("&", "&amp;").replace('"', "&quot;")
 
     html = f"""<!DOCTYPE html>
@@ -281,6 +283,9 @@ def plot_3d(freq, time, power, title, log_scale=True, n_avg=1):
                      padding: 4px 12px; cursor: pointer; }}
   .opt-grp button:hover {{ background: #fb923c; }}
   #discardMsg {{ font-size: 11px; color: #fbbf24; margin-left: 4px; }}
+  #plots {{ display: flex; gap: 8px; align-items: flex-start; }}
+  #heatDiv {{ display: none; flex: 1; min-width: 0; }}
+  #surfDiv {{ flex: 1; min-width: 0; }}
 </style>
 </head>
 <body>
@@ -331,12 +336,33 @@ def plot_3d(freq, time, power, title, log_scale=True, n_avg=1):
       <button onclick="updateSurface()">Apply</button>
       <span id="discardMsg"></span>
     </div>
+    <div class="opt-grp">
+      <span>View</span>
+      <input type="checkbox" id="show2D" onchange="toggle2D()">
+      <label for="show2D">Show 2D</label>
+    </div>
   </div>
 </div>
-{plot_div}
+<div id="plots">
+  <div id="heatDiv"><div id="heatPlot"></div></div>
+  <div id="surfDiv">{plot_div}</div>
+</div>
 <script>
 const Z_RAW = {z_raw_json};
 const T_RAW = {t_raw_json};
+const F_PLOT = {f_raw_json};  // freq array, low-to-high (2-D heatmap y-axis)
+
+var _heatReady = false;
+
+// Inferno colorscale defined explicitly so it works regardless of plotly.js version
+const INFERNO = [
+  [0.0,  'rgb(0,0,4)'],    [0.1,  'rgb(27,11,65)'],
+  [0.2,  'rgb(74,12,107)'], [0.3,  'rgb(119,28,109)'],
+  [0.4,  'rgb(163,47,92)'], [0.5,  'rgb(200,70,67)'],
+  [0.6,  'rgb(229,103,37)'],[0.7,  'rgb(246,142,9)'],
+  [0.8,  'rgb(252,185,22)'],[0.9,  'rgb(252,226,83)'],
+  [1.0,  'rgb(252,255,164)']
+];
 
 function toDb(Z) {{
   var eps = 5e-324;
@@ -379,8 +405,80 @@ function resetTimeSliders(t) {{
   document.getElementById('tMaxVal').textContent = fmt(tMax, 3);
 }}
 
+// ── 2-D heatmap ─────────────────────────────────────────────────────────────
+// Z_RAW has freq reversed (high→low) for the 3-D surface display.
+// For the heatmap we un-flip freq, then transpose to (F, T) as Plotly expects.
+
+function _heat2dZ(rebinnedZ, useDb) {{
+  var Zunflip = rebinnedZ.map(function(row) {{ return row.slice().reverse(); }});
+  return transpose(useDb ? toDb(Zunflip) : Zunflip);
+}}
+
+function toggle2D() {{
+  var show = document.getElementById('show2D').checked;
+  document.getElementById('heatDiv').style.display = show ? 'block' : 'none';
+  if (show) {{
+    if (!_heatReady) {{ _initHeatmap(); _heatReady = true; }}
+    else {{ _updateHeatmap(); }}
+  }}
+  // Resize the 3-D plot to fit its new (narrower or wider) container
+  setTimeout(function() {{ Plotly.Plots.resize(document.getElementById('specPlot')); }}, 0);
+}}
+
+function _initHeatmap() {{
+  var n = Math.max(1, Math.round(+document.getElementById('nAvg').value || 1));
+  var useDb = document.getElementById('dbCheck').checked;
+  var rebinned = rebin(Z_RAW, T_RAW, n);
+  var zLabel = useDb ? 'Power (dB)' : 'Power (linear)';
+  Plotly.newPlot('heatPlot', [{{
+    type: 'heatmap',
+    x: rebinned.t,
+    y: F_PLOT,
+    z: _heat2dZ(rebinned.Z, useDb),
+    colorscale: INFERNO,
+    colorbar: {{ title: {{ text: zLabel, side: 'right' }} }},
+    hovertemplate: 'Time: %{{x:.2f}} s<br>Freq: %{{y:,.0f}} Hz<br>' + zLabel + ': %{{z:.2f}}<extra></extra>'
+  }}], {{
+    template: {{}},
+    title: {{ text: document.getElementById('plotTitle').value,
+              x: 0.5, xanchor: 'center', font: {{ size: 14, color: '#e5e7eb' }} }},
+    xaxis: {{ title: 'Time (s)',
+              range: [+document.getElementById('tMin').value, +document.getElementById('tMax').value],
+              color: '#9ca3af', gridcolor: '#374151', zerolinecolor: '#374151' }},
+    yaxis: {{ title: 'Frequency (Hz)', tickformat: ',d', autorange: 'reversed',
+              range: [+document.getElementById('fMax').value, +document.getElementById('fMin').value],
+              color: '#9ca3af', gridcolor: '#374151', zerolinecolor: '#374151' }},
+    paper_bgcolor: '#111827', plot_bgcolor: '#1f2937',
+    font: {{ color: '#e5e7eb' }},
+    margin: {{ l: 90, r: 20, t: 60, b: 60 }},
+    height: 680,
+  }}, {{ responsive: true }});
+}}
+
+function _updateHeatmap() {{
+  if (!_heatReady) return;
+  var n = Math.max(1, Math.round(+document.getElementById('nAvg').value || 1));
+  var useDb = document.getElementById('dbCheck').checked;
+  var rebinned = rebin(Z_RAW, T_RAW, n);
+  var zLabel = useDb ? 'Power (dB)' : 'Power (linear)';
+  Plotly.restyle('heatPlot', {{
+    x: [rebinned.t],
+    z: [_heat2dZ(rebinned.Z, useDb)],
+    'colorbar.title.text': [zLabel],
+    hovertemplate: ['Time: %{{x:.2f}} s<br>Freq: %{{y:,.0f}} Hz<br>' + zLabel + ': %{{z:.2f}}<extra></extra>']
+  }}, [0]);
+  Plotly.relayout('heatPlot', {{
+    'xaxis.range': [+document.getElementById('tMin').value, +document.getElementById('tMax').value],
+    'yaxis.range': [+document.getElementById('fMax').value, +document.getElementById('fMin').value]
+  }});
+}}
+
+// ── Main update functions ────────────────────────────────────────────────────
+
 function updateTitle() {{
-  Plotly.relayout('specPlot', {{'title.text': document.getElementById('plotTitle').value}});
+  var t = document.getElementById('plotTitle').value;
+  Plotly.relayout('specPlot', {{'title.text': t}});
+  if (_heatReady) Plotly.relayout('heatPlot', {{'title.text': t}});
 }}
 
 function updateSurface() {{
@@ -404,6 +502,7 @@ function updateSurface() {{
   var discarded = T % n;
   document.getElementById('discardMsg').textContent =
     discarded > 0 ? '⚠︎ ' + discarded + ' of ' + T + ' frames discarded' : '';
+  if (_heatReady) _updateHeatmap();
 }}
 
 function fmt(v, dec) {{
@@ -420,11 +519,17 @@ function update() {{
   document.getElementById('fMaxVal').textContent = fmt(fMax, 0);
   document.getElementById('tMinVal').textContent = fmt(tMin, 3);
   document.getElementById('tMaxVal').textContent = fmt(tMax, 3);
-  // Freq axis is reversed (high→low), so swap range order for plotly
+  // Freq axis is reversed (high→low), so swap range order for 3-D plotly
   Plotly.relayout('specPlot', {{
     'scene.yaxis.range': [fMax, fMin],
     'scene.xaxis.range': [tMin, tMax]
   }});
+  if (_heatReady) {{
+    Plotly.relayout('heatPlot', {{
+      'xaxis.range': [tMin, tMax],
+      'yaxis.range': [fMax, fMin]
+    }});
+  }}
 }}
 </script>
 </body>
