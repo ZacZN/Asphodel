@@ -220,6 +220,8 @@ def build_figure(file_path, spectrum_name, ref_name, ref_frequency, ref_harmonic
         pad = (ymax - ymin) * 0.05
         y_range = np.linspace(ymin - pad, ymax + pad, n_points)
 
+        freq_min, freq_max = np.nanmin(ff), np.nanmax(ff)
+
         colors = px.colors.qualitative.Plotly
         freq_cols = [f"frequency_direct_{h}" for h in harmonics]
         HIGHLIGHT_COLOR = "#FF8C00"   # vivid orange — stands out against all Plotly qualitative colours
@@ -236,6 +238,8 @@ def build_figure(file_path, spectrum_name, ref_name, ref_frequency, ref_harmonic
             for ion_name, row in db.iterrows():
                 f = row[col]
                 if pd.isna(f):
+                    continue
+                if f < freq_min or f > freq_max:
                     continue
                 label = build_hover_label(str(ion_name), row)
                 seg_x = [f] * n_points + [None]
