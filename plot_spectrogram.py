@@ -417,10 +417,49 @@ function updateSurface() {{
   document.getElementById('discardMsg').textContent =
     discarded > 0 ? '⚠︎ ' + discarded + ' of ' + T + ' frames discarded' : '';
   if (_heatReady) _updateHeatmap();
+  // Rescale colorscale to the highest power in the (now full-range) window
+  _rescaleToWindow(rebinned.Z, rebinned.t);
 }}
 
 function fmt(v, dec) {{
   return dec === 0 ? Math.round(v).toLocaleString('en-GB') : v.toFixed(3);
+}}
+
+// Return {{min, max}} of displayed values within the current time/freq window.
+// Z is Z_RAW shape (T_ds, F_ds) with freq flipped (index 0 = highest freq).
+// F_PLOT is low-to-high, so freq for Z[i][j] = F_PLOT[F_ds - 1 - j].
+function windowMinMax(Z, t, tMin, tMax, fMin, fMax, useDb) {{
+  var eps = 5e-324;
+  var F = Z.length > 0 ? Z[0].length : 0;
+  var minVal = Infinity, maxVal = -Infinity;
+  for (var i = 0; i < Z.length; i++) {{
+    if (t[i] < tMin || t[i] > tMax) continue;
+    for (var j = 0; j < F; j++) {{
+      var freqJ = F_PLOT[F - 1 - j];
+      if (freqJ < fMin || freqJ > fMax) continue;
+      var v = Z[i][j];
+      if (useDb) v = 10 * Math.log10(Math.max(v, eps));
+      if (v < minVal) minVal = v;
+      if (v > maxVal) maxVal = v;
+    }}
+  }}
+  if (!isFinite(minVal)) {{ minVal = 0; maxVal = 0; }}
+  return {{ min: minVal, max: maxVal }};
+}}
+
+// Read slider values, compute visible-window min/max, and push to both plots.
+function _rescaleToWindow(Z, t) {{
+  var fMin = +document.getElementById('fMin').value;
+  var fMax = +document.getElementById('fMax').value;
+  var tMin = +document.getElementById('tMin').value;
+  var tMax = +document.getElementById('tMax').value;
+  var useDb = document.getElementById('dbCheck').checked;
+  var mm = windowMinMax(Z, t, tMin, tMax, fMin, fMax, useDb);
+  // Colorscale bounds (both plots)
+  Plotly.restyle('specPlot', {{ cmin: [mm.min], cmax: [mm.max], cauto: [false] }}, [0]);
+  if (_heatReady) Plotly.restyle('heatPlot', {{ zmin: [mm.min], zmax: [mm.max], zauto: [false] }}, [0]);
+  // 3-D z-axis height range
+  Plotly.relayout('specPlot', {{ 'scene.zaxis.range': [mm.min, mm.max] }});
 }}
 
 function update() {{
@@ -444,10 +483,20 @@ function update() {{
       'yaxis.range': [fMax, fMin]
     }});
   }}
+  // Rescale colorscale to the highest power in the new visible window
+  var n = Math.max(1, Math.round(+document.getElementById('nAvg').value || 1));
+  var rebinned = rebin(Z_RAW, T_RAW, n);
+  _rescaleToWindow(rebinned.Z, rebinned.t);
 }}
 
 // Initialise the 2-D heatmap immediately on load
 _initHeatmap();
+// Align colorscale max across both plots using full data range
+(function() {{
+  var n = Math.max(1, Math.round(+document.getElementById('nAvg').value || 1));
+  var rebinned = rebin(Z_RAW, T_RAW, n);
+  _rescaleToWindow(rebinned.Z, rebinned.t);
+}})();
 </script>
 </body>
 </html>"""
