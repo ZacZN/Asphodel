@@ -18,6 +18,7 @@ Arguments
   --gamma G    Lorentz factor γ; if given, also shows the centre-of-mass
                half-life t½(c.o.m.) = t½(lab) / γ
   --title TEXT Extra text appended to the auto-generated plot title
+  --skip X Y   Skip the first X and last Y time bins
 
 Example
 -------
@@ -59,6 +60,8 @@ def parse_args():
                         help="Lorentz factor γ; used to compute t½(c.o.m.) = t½(lab) / γ")
     parser.add_argument("--title", type=str, default=None,
                         help="Extra text appended to the auto-generated plot title")
+    parser.add_argument("--skip", type=int, nargs=2, default=[0, 0], metavar=("X", "Y"),
+                        help="Skip the first X and last Y time bins (applied before --tmin/--tmax)")
     return parser.parse_args()
 
 
@@ -182,6 +185,18 @@ def format_value(v, err=None, unit=""):
     return f"{v:.4g}{(' ± ' + f'{err:.2g}') if err else ''} {unit}".strip()
 
 
+def format_time(v, err=None):
+    """Format a time value in seconds, switching to minutes if >= 60 s."""
+    if abs(v) >= 60:
+        scale, unit = 60.0, "min"
+    else:
+        scale, unit = 1.0, "s"
+    val_str = f"{v / scale:.4g}"
+    if err is not None:
+        val_str += f" ± {err / scale:.2g}"
+    return f"{val_str} {unit}"
+
+
 def make_equation_text(popt, perr, with_offset, half_life, half_life_err, gamma=None):
     """Build the annotation string shown on the plot."""
     A, tau = popt[0], popt[1]
@@ -190,7 +205,7 @@ def make_equation_text(popt, perr, with_offset, half_life, half_life_err, gamma=
     lines = [
         r"$I(t) = A \cdot e^{-t/\tau}$" + ("$ + C$" if with_offset else ""),
         f"$A$   = {format_value(A, dA)}",
-        f"$\\tau$ = {format_value(tau, dtau, 's')}",
+        f"$\\tau$ = {format_time(tau, dtau)}",
     ]
     if with_offset:
         C, dC = popt[2], perr[2]
@@ -198,13 +213,13 @@ def make_equation_text(popt, perr, with_offset, half_life, half_life_err, gamma=
 
     lines.append("")   # blank separator
     lines.append(
-        f"$t_{{1/2}}$ (lab)   = {format_value(half_life, half_life_err, 's')}"
+        f"$t_{{1/2}}$ (lab)   = {format_time(half_life, half_life_err)}"
     )
     if gamma is not None:
         com_half_life     = half_life     / gamma
         com_half_life_err = half_life_err / gamma
         lines.append(
-            f"$t_{{1/2}}$ (c.o.m.) = {format_value(com_half_life, com_half_life_err, 's')}"
+            f"$t_{{1/2}}$ (c.o.m.) = {format_time(com_half_life, com_half_life_err)}"
         )
     return "\n".join(lines)
 
@@ -254,7 +269,7 @@ def plot_decay(time, intensity, time_fit, popt, perr, model,
     t_half = time_fit[0] + half_life
     if time_fit[0] <= t_half <= time_fit[-1]:
         ax.axvline(t_half, ls="--", lw=1, color="0.5",
-                   label=f"$t_{{1/2}}$ (lab) = {format_value(half_life, None, 's')}")
+                   label=f"$t_{{1/2}}$ (lab) = {format_time(half_life)}")
 
     title = (
         f"{os.path.basename(filename)}   "
@@ -278,14 +293,14 @@ def plot_decay(time, intensity, time_fit, popt, perr, model,
     print(f"\n{'─'*50}")
     print(f"  Fit:  I(t) = A·exp(-t/τ)" + (" + C" if with_offset else ""))
     print(f"  A    = {format_value(A, dA)}")
-    print(f"  τ    = {format_value(tau, dtau, 's')}")
+    print(f"  τ    = {format_time(tau, dtau)}")
     if with_offset:
         C, dC = popt[2], perr[2]
         print(f"  C    = {format_value(C, dC)}")
-    print(f"  t½ (lab)   = {format_value(half_life, half_life_err, 's')}")
+    print(f"  t½ (lab)   = {format_time(half_life, half_life_err)}")
     if gamma is not None:
         print(f"  γ          = {gamma}")
-        print(f"  t½ (c.o.m.)= {format_value(com_half_life, com_half_life_err, 's')}")
+        print(f"  t½ (c.o.m.)= {format_time(com_half_life, com_half_life_err)}")
     print(f"{'─'*50}\n")
 
 
@@ -309,6 +324,20 @@ def main():
 
     # Integrate power over the frequency band for each time frame
     intensity = integrate_band(freq_s, power_s)
+
+    # Skip bins from start and/or end before anything else
+    skip_start, skip_end = args.skip
+    if skip_start + skip_end >= len(time):
+        sys.exit(
+            f"--skip {skip_start} {skip_end} would remove all {len(time)} time bins."
+        )
+    if skip_start > 0:
+        print(f"Skipping first {skip_start} time bins (up to t={time[skip_start - 1]:.3f} s)")
+    if skip_end > 0:
+        print(f"Skipping last {skip_end} time bins (from t={time[len(time) - skip_end]:.3f} s)")
+    end_idx   = len(time) - skip_end if skip_end > 0 else len(time)
+    time      = time[skip_start:end_idx]
+    intensity = intensity[skip_start:end_idx]
 
     # Optional time window for the fit
     t_mask = np.ones(len(time), dtype=bool)
