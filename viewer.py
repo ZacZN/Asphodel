@@ -224,13 +224,13 @@ def build_figure(file_path, spectrum_name, ref_name, ref_frequency, ref_harmonic
         freq_cols = [f"frequency_direct_{h}" for h in harmonics]
         HIGHLIGHT_COLOR = "#FF8C00"   # vivid orange — stands out against all Plotly qualitative colours
         HIGHLIGHT_WIDTH = 3
-        # When any highlights are active, fade non-highlighted ions so the
-        # highlighted ones dominate visually.
-        fading_active  = bool(highlight_ions)
-        normal_opacity = 0.12 if fading_active else 1.0
+        multi_harmonic  = len(harmonics) > 1
+        # Collect (ion_name, freq, harmonic) for every highlighted ion so we
+        # can add labelled arrows after all traces are drawn.
+        highlighted_annotations = []
 
-        for i, col in enumerate(freq_cols):
-            color = colors[i % len(colors)]
+        for h, col in zip(harmonics, freq_cols):
+            color = colors[freq_cols.index(col) % len(colors)]
             xs_norm, ys_norm, hover_norm = [], [], []
             xs_hi,   ys_hi,   hover_hi   = [], [], []
             for ion_name, row in db.iterrows():
@@ -243,34 +243,60 @@ def build_figure(file_path, spectrum_name, ref_name, ref_frequency, ref_harmonic
                 seg_h = [label] * n_points + [None]
                 if ion_matches_highlight(str(ion_name), highlight_ions):
                     xs_hi   += seg_x;  ys_hi   += seg_y;  hover_hi   += seg_h
+                    highlighted_annotations.append((str(ion_name), f, h))
                 else:
                     xs_norm += seg_x;  ys_norm += seg_y;  hover_norm += seg_h
 
-            # Normal ions (faded when highlights are active)
+            # Normal ions
             if xs_norm:
                 fig.add_trace(go.Scattergl(
                     x=xs_norm, y=ys_norm,
                     mode="lines",
                     line=dict(dash="dash", color=color, width=1),
-                    opacity=normal_opacity,
                     name=col,
                     hoverinfo="text",
                     hovertext=hover_norm,
                     connectgaps=False
                 ))
 
-            # Highlighted ions — solid, wider, vivid orange, full opacity
+            # Highlighted ions — solid, wider, vivid orange
             if xs_hi:
                 fig.add_trace(go.Scattergl(
                     x=xs_hi, y=ys_hi,
                     mode="lines",
                     line=dict(dash="solid", color=HIGHLIGHT_COLOR, width=HIGHLIGHT_WIDTH),
-                    opacity=1.0,
                     name=f"{col} ★",
                     hoverinfo="text",
                     hovertext=hover_hi,
                     connectgaps=False
                 ))
+
+        # Labelled arrows for highlighted ions
+        # Arrow tip sits at the top of the drawn frequency line; the label box
+        # floats above it.  Cycle through three offsets so labels at similar
+        # frequencies don't stack perfectly on top of one another.
+        y_tip = ymax + pad
+        AY_OFFSETS = [-38, -58, -78]
+        for idx, (ion_name, freq, h) in enumerate(highlighted_annotations):
+            annot_text = ion_name if not multi_harmonic else f"{ion_name}<br><span style='font-size:10px'>h={h}</span>"
+            fig.add_annotation(
+                x=freq,
+                y=y_tip,
+                text=annot_text,
+                showarrow=True,
+                arrowhead=2,
+                arrowsize=1,
+                arrowwidth=1.5,
+                arrowcolor=HIGHLIGHT_COLOR,
+                ax=0,
+                ay=AY_OFFSETS[idx % len(AY_OFFSETS)],
+                font=dict(size=11, color=HIGHLIGHT_COLOR),
+                bgcolor="rgba(255,255,255,0.88)",
+                bordercolor=HIGHLIGHT_COLOR,
+                borderwidth=1,
+                borderpad=3,
+                align="center",
+            )
 
         fig.update_layout(
             title="Calculated Frequencies overlayed with data",
