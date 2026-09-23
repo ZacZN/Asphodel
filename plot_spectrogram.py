@@ -275,6 +275,8 @@ def plot_3d(freq, time, power, title, log_scale=True, n_avg=1, file_path=None):
       <input type="number" id="gammaVal" min="0" step="0.01"
              placeholder="γ" title="Lorentz factor γ (optional)"
              style="width:64px;">
+      <input type="checkbox" id="noOffset" style="accent-color:#f97316;width:14px;height:14px;cursor:pointer;">
+      <label for="noOffset" style="color:#9ca3af;">no offset</label>
       <button onclick="runDecayFit()">Run</button>
       <span id="decayStatus"></span>
     </div>
@@ -413,7 +415,8 @@ async function runDecayFit() {{
       tMin:  +document.getElementById('tMin').value,
       tMax:  +document.getElementById('tMax').value,
       nAvg:  Math.max(1, Math.round(+document.getElementById('nAvg').value || 1)),
-      gamma: gammaRaw !== '' ? +gammaRaw : null
+      gamma:    gammaRaw !== '' ? +gammaRaw : null,
+      noOffset: document.getElementById('noOffset').checked
     }};
     var r = await fetch('/run-decay-fit', {{
       method: 'POST',
@@ -581,6 +584,8 @@ _initHeatmap();
                     ]
                     if body.get("gamma") is not None:
                         cmd += ["--gamma", str(body["gamma"])]
+                    if body.get("noOffset"):
+                        cmd += ["--no-offset"]
                     _subprocess.Popen(cmd)
                     resp = json.dumps({"status": "launched"}).encode()
                     code = 200
