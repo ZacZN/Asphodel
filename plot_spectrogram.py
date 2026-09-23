@@ -73,7 +73,7 @@ def slice_freq(freq, power, freq_min, freq_max):
 # Interactive browser plot (2-D heatmap + 3-D surface, side by side)
 # ---------------------------------------------------------------------------
 
-def plot_3d(freq, time, power, title, log_scale=True, n_avg=1):
+def plot_3d(freq, time, power, title, log_scale=True, n_avg=1, file_path=None):
     try:
         import plotly.graph_objects as go
     except ImportError:
@@ -81,7 +81,10 @@ def plot_3d(freq, time, power, title, log_scale=True, n_avg=1):
             "plotly is required for --plot3d.  Install it with:\n"
             "  pip install plotly"
         )
-    import tempfile, webbrowser, json
+    import tempfile, webbrowser, json, subprocess as _subprocess
+
+    _npz_path   = os.path.abspath(file_path) if file_path else ""
+    _decay_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "decay_fit.py")
 
     z_label = "Power (dB)" if log_scale else "Power (linear)"
 
@@ -213,6 +216,7 @@ def plot_3d(freq, time, power, title, log_scale=True, n_avg=1):
                      padding: 4px 12px; cursor: pointer; }}
   .opt-grp button:hover {{ background: #fb923c; }}
   #discardMsg {{ font-size: 11px; color: #fbbf24; margin-left: 4px; }}
+  #decayStatus {{ font-size: 11px; margin-left: 4px; }}
   #plots {{ display: flex; gap: 8px; align-items: flex-start; }}
   #heatDiv {{ flex: 1; min-width: 0; }}
   #surfDiv {{ flex: 1; min-width: 0; }}
@@ -265,6 +269,14 @@ def plot_3d(freq, time, power, title, log_scale=True, n_avg=1):
       <input type="number" id="nAvg" min="1" step="1" value="{n_avg_init}">
       <button onclick="updateSurface()">Apply</button>
       <span id="discardMsg"></span>
+    </div>
+    <div class="opt-grp">
+      <span>Decay fit</span>
+      <input type="number" id="gammaVal" min="0" step="0.01"
+             placeholder="γ" title="Lorentz factor γ (optional)"
+             style="width:64px;">
+      <button onclick="runDecayFit()">Run</button>
+      <span id="decayStatus"></span>
     </div>
   </div>
 </div>
@@ -388,6 +400,39 @@ function _updateHeatmap() {{
 }}
 
 // ── Main update functions ────────────────────────────────────────────────────
+
+async function runDecayFit() {{
+  var status = document.getElementById('decayStatus');
+  status.textContent = 'Launching…';
+  status.style.color = '#fbbf24';
+  try {{
+    var gammaRaw = document.getElementById('gammaVal').value.trim();
+    var payload = {{
+      fMin:  +document.getElementById('fMin').value,
+      fMax:  +document.getElementById('fMax').value,
+      tMin:  +document.getElementById('tMin').value,
+      tMax:  +document.getElementById('tMax').value,
+      nAvg:  Math.max(1, Math.round(+document.getElementById('nAvg').value || 1)),
+      gamma: gammaRaw !== '' ? +gammaRaw : null
+    }};
+    var r = await fetch('/run-decay-fit', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify(payload)
+    }});
+    var data = await r.json();
+    if (r.ok) {{
+      status.textContent = '✓ Launched';
+      status.style.color = '#4ade80';
+    }} else {{
+      status.textContent = '✗ ' + (data.error || 'Error');
+      status.style.color = '#f87171';
+    }}
+  }} catch(e) {{
+    status.textContent = '✗ ' + e.message;
+    status.style.color = '#f87171';
+  }}
+}}
 
 function updateTitle() {{
   var t = document.getElementById('plotTitle').value;
@@ -518,6 +563,39 @@ _initHeatmap();
     class _Handler(http.server.SimpleHTTPRequestHandler):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=tmp_dir, **kwargs)
+
+        def do_POST(self):
+            if self.path == "/run-decay-fit":
+                try:
+                    length = int(self.headers.get("Content-Length", 0))
+                    body   = json.loads(self.rfile.read(length))
+                    if not os.path.isfile(_decay_path):
+                        raise FileNotFoundError(f"decay_fit.py not found at {_decay_path}")
+                    cmd = [
+                        sys.executable, _decay_path,
+                        _npz_path,
+                        str(body["fMin"]), str(body["fMax"]),
+                        "--tmin",     str(body["tMin"]),
+                        "--tmax",     str(body["tMax"]),
+                        "--time-avg", str(int(body.get("nAvg", 1))),
+                    ]
+                    if body.get("gamma") is not None:
+                        cmd += ["--gamma", str(body["gamma"])]
+                    _subprocess.Popen(cmd)
+                    resp = json.dumps({"status": "launched"}).encode()
+                    code = 200
+                except Exception as exc:
+                    resp = json.dumps({"error": str(exc)}).encode()
+                    code = 500
+            else:
+                resp = json.dumps({"error": "not found"}).encode()
+                code = 404
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(resp)))
+            self.end_headers()
+            self.wfile.write(resp)
+
         def log_message(self, *args):
             pass  # silence request logs
 
@@ -563,7 +641,7 @@ def main():
         sys.exit("Error: --time-avg N requires N ≥ 1.")
     print(f"Plotting {power_s.shape[1]} freq bins × {power_s.shape[0]} time bins")
     plot_3d(freq_s, time, power_s, title,
-            log_scale=not args.linear, n_avg=init_n)
+            log_scale=not args.linear, n_avg=init_n, file_path=args.file)
 
 
 if __name__ == "__main__":

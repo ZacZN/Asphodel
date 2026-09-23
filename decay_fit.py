@@ -98,6 +98,8 @@ def parse_args():
                         help="Extra text appended to the auto-generated plot title")
     parser.add_argument("--skip", type=int, nargs=2, default=[0, 0], metavar=("X", "Y"),
                         help="Skip the first X and last Y time bins (applied before --tmin/--tmax)")
+    parser.add_argument("--time-avg", type=int, metavar="N", default=None,
+                        help="Average every N consecutive time frames before fitting")
     return parser.parse_args()
 
 
@@ -133,7 +135,8 @@ def slice_freq(freq, power, freq_min, freq_max):
 
 def integrate_band(freq, power):
     """Trapezoid-rule integral of linear power across the frequency band."""
-    return np.trapz(power, x=freq, axis=1)
+    _trapz = getattr(np, "trapezoid", np.trapz)   # np.trapezoid added in NumPy 2.0
+    return _trapz(power, x=freq, axis=1)
 
 
 # ---------------------------------------------------------------------------
@@ -184,9 +187,10 @@ def fit_decay(time, intensity, with_offset=True, bateman=False,
     """
     if not bateman:
         # ---- Simple exponential decay ----
-        A0   = intensity[0] - (intensity[-1] if with_offset else 0)
+        # Use data range for A0 so the guess is always positive (avoids bound violation)
+        C0   = np.min(intensity)
+        A0   = max(np.max(intensity) - (C0 if with_offset else 0), 1e-30)
         tau0 = (time[-1] - time[0]) / 3.0
-        C0   = intensity[-1]
         try:
             if with_offset:
                 popt, pcov = curve_fit(
@@ -545,6 +549,18 @@ def main():
         f"Loaded {power_s.shape[1]} freq bins × {power_s.shape[0]} time frames  "
         f"(Δf ≈ {np.diff(freq_s).mean():.1f} Hz per bin)"
     )
+
+    if args.time_avg is not None and args.time_avg > 1:
+        n = args.time_avg
+        T = power_s.shape[0]
+        T_trim = (T // n) * n
+        if T_trim == 0:
+            sys.exit(f"--time-avg {n}: not enough time frames ({T}) to form a single group.")
+        discarded = T - T_trim
+        power_s = power_s[:T_trim].reshape(T // n, n, power_s.shape[1]).mean(axis=1)
+        time    = time[:T_trim].reshape(T // n, n).mean(axis=1)
+        print(f"Time rebinned: {T} frames → {len(time)} "
+              f"(averaged {n}" + (f", {discarded} discarded" if discarded else "") + ")")
 
     intensity = integrate_band(freq_s, power_s)
 
