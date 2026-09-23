@@ -85,6 +85,15 @@ def plot_3d(freq, time, power, title, log_scale=True, n_avg=1, file_path=None):
 
     _npz_path   = os.path.abspath(file_path) if file_path else ""
     _decay_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "decay_fit.py")
+    _prefs_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".asphodel_prefs.json")
+
+    # Load persisted preferences (gamma value, etc.)
+    try:
+        with open(_prefs_path, "r", encoding="utf-8") as _pf:
+            _prefs = json.loads(_pf.read())
+    except Exception:
+        _prefs = {}
+    _saved_gamma = str(_prefs.get("gamma", ""))
 
     z_label = "Power (dB)" if log_scale else "Power (linear)"
 
@@ -274,8 +283,8 @@ def plot_3d(freq, time, power, title, log_scale=True, n_avg=1, file_path=None):
       <span>Decay fit</span>
       <input type="number" id="gammaVal" min="0" step="0.01"
              placeholder="γ" title="Lorentz factor γ (optional)"
-             style="width:64px;"
-             oninput="try{{localStorage.setItem('asphodel.gammaVal',this.value)}}catch(e){{}}">
+             style="width:64px;" value="{_saved_gamma}"
+             oninput="fetch('/save-gamma',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{gamma:this.value}})}})">
       <input type="checkbox" id="noOffset" style="accent-color:#f97316;width:14px;height:14px;cursor:pointer;">
       <label for="noOffset" style="color:#9ca3af;">no offset</label>
       <button onclick="runDecayFit()">Run</button>
@@ -545,15 +554,6 @@ _initHeatmap();
   var n = Math.max(1, Math.round(+document.getElementById('nAvg').value || 1));
   var rebinned = rebin(Z_RAW, T_RAW, n);
   _rescaleToWindow(rebinned.Z, rebinned.t);
-}})();
-// Restore last-used gamma value
-(function() {{
-  try {{
-    var saved = localStorage.getItem('asphodel.gammaVal');
-    if (saved !== null && saved !== '') {{
-      document.getElementById('gammaVal').value = saved;
-    }}
-  }} catch(e) {{}}
 }})();
 </script>
 </body>
