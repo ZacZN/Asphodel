@@ -274,7 +274,8 @@ def plot_3d(freq, time, power, title, log_scale=True, n_avg=1, file_path=None):
       <span>Decay fit</span>
       <input type="number" id="gammaVal" min="0" step="0.01"
              placeholder="γ" title="Lorentz factor γ (optional)"
-             style="width:64px;">
+             style="width:64px;"
+             oninput="try{{localStorage.setItem('asphodel.gammaVal',this.value)}}catch(e){{}}">
       <input type="checkbox" id="noOffset" style="accent-color:#f97316;width:14px;height:14px;cursor:pointer;">
       <label for="noOffset" style="color:#9ca3af;">no offset</label>
       <button onclick="runDecayFit()">Run</button>
@@ -544,6 +545,15 @@ _initHeatmap();
   var n = Math.max(1, Math.round(+document.getElementById('nAvg').value || 1));
   var rebinned = rebin(Z_RAW, T_RAW, n);
   _rescaleToWindow(rebinned.Z, rebinned.t);
+}})();
+// Restore last-used gamma value
+(function() {{
+  try {{
+    var saved = localStorage.getItem('asphodel.gammaVal');
+    if (saved !== null && saved !== '') {{
+      document.getElementById('gammaVal').value = saved;
+    }}
+  }} catch(e) {{}}
 }})();
 </script>
 </body>
