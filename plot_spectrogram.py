@@ -602,6 +602,27 @@ _initHeatmap();
                 except Exception as exc:
                     resp = json.dumps({"error": str(exc)}).encode()
                     code = 500
+            elif self.path == "/save-gamma":
+                try:
+                    length = int(self.headers.get("Content-Length", 0))
+                    body   = json.loads(self.rfile.read(length))
+                    gamma_val = body.get("gamma", "")
+                    try:
+                        with open(_prefs_path, "r", encoding="utf-8") as _pf:
+                            prefs = json.loads(_pf.read())
+                    except Exception:
+                        prefs = {}
+                    if gamma_val == "" or gamma_val is None:
+                        prefs.pop("gamma", None)
+                    else:
+                        prefs["gamma"] = gamma_val
+                    with open(_prefs_path, "w", encoding="utf-8") as _pf:
+                        _pf.write(json.dumps(prefs))
+                    resp = json.dumps({"status": "saved"}).encode()
+                    code = 200
+                except Exception as exc:
+                    resp = json.dumps({"error": str(exc)}).encode()
+                    code = 500
             else:
                 resp = json.dumps({"error": "not found"}).encode()
                 code = 404
