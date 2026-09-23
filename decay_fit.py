@@ -414,9 +414,10 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
     t_dense = np.linspace(time_fit[0], time_fit[-1], 2000)
     I_fit   = model(t_dense, *popt)
 
-    # Residuals and std dev over the fitted window
-    residuals  = intensity_fit - model(time_fit, *popt)
-    std_resid  = np.std(residuals)
+    # Mean intensity and residual std dev over the fitted window
+    residuals      = intensity_fit - model(time_fit, *popt)
+    std_resid      = np.std(residuals)
+    mean_intensity = np.mean(intensity_fit)
 
     fig, ax = plt.subplots(figsize=(16, 6))
     ax.plot(time, intensity, "o", ms=3, alpha=0.6,
@@ -433,7 +434,7 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
         eq_text = make_equation_text_decay(popt, perr, with_offset,
                                            half_life, half_life_err, gamma)
 
-    eq_text += f"\n\n$\\sigma_{{\\rm resid}}$ = {format_value(std_resid)}"
+    eq_text += f"\n\n$\\langle I \\rangle$ = {format_value(mean_intensity)} ± {format_value(std_resid)}"
 
     ax.text(
         0.97, 0.97, eq_text,
@@ -500,7 +501,7 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
         print(f"  t½_B (lab)   = {format_time(hl_B, dhl_B if ltB == 'fitted' else None)}")
         if gamma is not None:
             print(f"  t½_B (c.o.m.)= {format_time(hl_B / gamma, (dhl_B / gamma) if ltB == 'fitted' else None)}")
-        print(f"  σ_resid      = {format_value(std_resid)}")
+        print(f"  ⟨I⟩          = {format_value(mean_intensity)} ± {format_value(std_resid)}")
     else:
         A, tau   = popt[0], popt[1]
         dA, dtau = perr[0], perr[1]
@@ -515,7 +516,7 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
         if gamma is not None:
             print(f"  γ          = {gamma}")
             print(f"  t½ (c.o.m.)= {format_time(hl / gamma, dhl / gamma)}")
-    print(f"  σ_resid    = {format_value(std_resid)}")
+    print(f"  ⟨I⟩        = {format_value(mean_intensity)} ± {format_value(std_resid)}")
     print(f"{'─'*55}\n")
 
 
