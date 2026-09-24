@@ -420,7 +420,7 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
     mean_intensity = np.mean(intensity_fit)
 
     fig, ax = plt.subplots(figsize=(16, 6))
-    ax.plot(time, intensity, "o", ms=3, alpha=0.6,
+    ax.plot(time_fit, intensity_fit, "o", ms=3, alpha=0.6,
             color="#4c72b0", label="Data (integrated power)")
     ax.plot(t_dense, I_fit, "-", lw=2, color="#dd4444",
             label="Bateman fit" if bateman else "Exponential fit")
