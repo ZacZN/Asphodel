@@ -37,6 +37,9 @@ Common options
                     and shows t½(c.o.m.) = t½(lab) / γ in the plot annotation.
   --title TEXT      Extra text appended to the auto-generated plot title
   --skip X Y        Skip the first X and last Y time bins
+  --err-coeffs A B  Per-point error bars σ = A·I + B (single-frame calibration).
+                    With --time-avg N, σ is divided by √N. The fit is weighted
+                    by these (absolute_sigma=True) and χ²/ndf is reported.
 
 Example
 -------
@@ -98,6 +101,9 @@ def parse_args():
                         help="Extra text appended to the auto-generated plot title")
     parser.add_argument("--skip", type=int, nargs=2, default=[0, 0], metavar=("X", "Y"),
                         help="Skip the first X and last Y time bins (applied before --tmin/--tmax)")
+    parser.add_argument("--err-coeffs", type=float, nargs=2, default=None, metavar=("A", "B"),
+                        help="Error bars σ = A·I + B on each intensity point; used as "
+                             "absolute 1σ weights in the fit")
     parser.add_argument("--time-avg", type=int, metavar="N", default=None,
                         help="Average every N consecutive time frames before fitting")
     return parser.parse_args()
@@ -135,7 +141,7 @@ def slice_freq(freq, power, freq_min, freq_max):
 
 def integrate_band(freq, power):
     """Trapezoid-rule integral of linear power across the frequency band."""
-    _trapz = getattr(np, "trapezoid", np.trapz)   # np.trapezoid added in NumPy 2.0
+    _trapz = getattr(np, "trapezoid", None) or np.trapz   # np.trapezoid added in NumPy 2.0; trapz removed later
     return _trapz(power, x=freq, axis=1)
 
 
@@ -166,7 +172,8 @@ def _bateman_guesses(time, intensity, B_fixed):
 
 
 def fit_decay(time, intensity, with_offset=True, bateman=False,
-              halflife_isomer_lab=None, halflife_groundstate_lab=None):
+              halflife_isomer_lab=None, halflife_groundstate_lab=None,
+              sigma=None):
     """
     Fit exponential decay or Bateman chain.
 
@@ -177,6 +184,10 @@ def fit_decay(time, intensity, with_offset=True, bateman=False,
       - halflife_groundstate_lab → fixes τ_B = T_lab/ln(2)
       - Remaining free parameters: P, C, and any τ not fixed.
 
+    sigma : optional per-point 1-σ errors on intensity. When given, the fit is
+            weighted by 1/σ² and absolute_sigma=True, so parameter errors
+            (and hence half-life errors) come directly from these error bars.
+
     Returns
     -------
     popt     : fitted parameter array (P first, C last; τ values in between)
@@ -185,6 +196,8 @@ def fit_decay(time, intensity, with_offset=True, bateman=False,
     resolved : dict  {'P','tau_A','tau_B','B','C'} → (value, err, label)
                label is 'fitted' or 'fixed'. None for simple decay.
     """
+    _w = dict(sigma=sigma, absolute_sigma=True) if sigma is not None else {}
+
     if not bateman:
         # ---- Simple exponential decay ----
         # Use data range for A0 so the guess is always positive (avoids bound violation)
@@ -197,7 +210,7 @@ def fit_decay(time, intensity, with_offset=True, bateman=False,
                     model_with_offset, time, intensity,
                     p0=[A0, tau0, C0],
                     bounds=([0, 0, -np.inf], [np.inf, np.inf, np.inf]),
-                    maxfev=10_000,
+                    maxfev=10_000, **_w,
                 )
                 model = model_with_offset
             else:
@@ -205,7 +218,7 @@ def fit_decay(time, intensity, with_offset=True, bateman=False,
                     model_no_offset, time, intensity,
                     p0=[A0, tau0],
                     bounds=([0, 0], [np.inf, np.inf]),
-                    maxfev=10_000,
+                    maxfev=10_000, **_w,
                 )
                 model = model_no_offset
         except RuntimeError as exc:
@@ -247,7 +260,7 @@ def fit_decay(time, intensity, with_offset=True, bateman=False,
                 fn, time, intensity,
                 p0=[P_0, tau_A_0, tau_B_0, C_0],
                 bounds=([-np.inf, 0, 0, -np.inf], [np.inf, np.inf, np.inf, np.inf]),
-                maxfev=20_000,
+                maxfev=20_000, **_w,
             )
             perr = np.sqrt(np.diag(pcov))
             P, tau_A, tau_B, C      = popt
@@ -260,7 +273,7 @@ def fit_decay(time, intensity, with_offset=True, bateman=False,
                 fn, time, intensity,
                 p0=[P_0, tau_B_0, C_0],
                 bounds=([-np.inf, 0, -np.inf], [np.inf, np.inf, np.inf]),
-                maxfev=20_000,
+                maxfev=20_000, **_w,
             )
             perr = np.sqrt(np.diag(pcov))
             P, tau_B, C        = popt
@@ -274,7 +287,7 @@ def fit_decay(time, intensity, with_offset=True, bateman=False,
                 fn, time, intensity,
                 p0=[P_0, tau_A_0, C_0],
                 bounds=([-np.inf, 0, -np.inf], [np.inf, np.inf, np.inf]),
-                maxfev=20_000,
+                maxfev=20_000, **_w,
             )
             perr = np.sqrt(np.diag(pcov))
             P, tau_A, C        = popt
@@ -288,7 +301,7 @@ def fit_decay(time, intensity, with_offset=True, bateman=False,
                 fn, time, intensity,
                 p0=[P_0, C_0],
                 bounds=([-np.inf, -np.inf], [np.inf, np.inf]),
-                maxfev=20_000,
+                maxfev=20_000, **_w,
             )
             perr = np.sqrt(np.diag(pcov))
             P, C               = popt
@@ -407,7 +420,7 @@ def make_equation_text_bateman(resolved, gamma=None):
 
 def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, resolved,
                with_offset, bateman, freq_min, freq_max, filename,
-               gamma=None, title_suffix=None):
+               gamma=None, title_suffix=None, sigma_fit=None):
 
     plt.rcParams.update({"font.size": 20})
 
@@ -419,9 +432,20 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
     std_resid      = np.std(residuals)
     mean_intensity = np.mean(intensity_fit)
 
+    # χ²/ndf when error bars are supplied
+    chi2 = ndf = None
+    if sigma_fit is not None:
+        chi2 = float(np.sum((residuals / sigma_fit) ** 2))
+        ndf  = len(time_fit) - len(popt)
+
     fig, ax = plt.subplots(figsize=(16, 6))
-    ax.plot(time_fit, intensity_fit, "o", ms=3, alpha=0.6,
-            color="#4c72b0", label="Data (integrated power)")
+    if sigma_fit is not None:
+        ax.errorbar(time_fit, intensity_fit, yerr=sigma_fit, fmt="o", ms=3,
+                    color="black", ecolor="black", elinewidth=0.8,
+                    capsize=2.5, capthick=0.8, label="Data (integrated power)")
+    else:
+        ax.plot(time_fit, intensity_fit, "o", ms=3,
+                color="black", label="Data (integrated power)")
     ax.plot(t_dense, I_fit, "-", lw=2, color="#dd4444",
             label="Bateman fit" if bateman else "Exponential fit")
 
@@ -435,6 +459,9 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
                                            half_life, half_life_err, gamma)
 
     eq_text += f"\n\n$\\langle I \\rangle$ = {format_value(mean_intensity)} ± {format_value(std_resid)}"
+    if chi2 is not None:
+        chi2_red = chi2 / ndf if ndf > 0 else float("nan")
+        eq_text += f"\n$\\chi^2/ndf$ = {chi2:.4g}/{ndf} = {chi2_red:.3g}"
 
     ax.text(
         0.97, 0.97, eq_text,
@@ -517,6 +544,9 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
             print(f"  γ          = {gamma}")
             print(f"  t½ (c.o.m.)= {format_time(hl / gamma, dhl / gamma)}")
     print(f"  ⟨I⟩        = {format_value(mean_intensity)} ± {format_value(std_resid)}")
+    if chi2 is not None:
+        chi2_red = chi2 / ndf if ndf > 0 else float("nan")
+        print(f"  χ²/ndf     = {chi2:.4g}/{ndf} = {chi2_red:.3g}  (errors: absolute σ)")
     print(f"{'─'*55}\n")
 
 
@@ -620,6 +650,25 @@ def main():
             print(f"  τ_B fixed: t½ = {args.halflife_groundstate:.4g} s (c.o.m.) "
                   f"→ {halflife_groundstate_lab:.4g} s (lab)")
 
+    sigma_fit = None
+    if args.err_coeffs is not None:
+        err_a, err_b = args.err_coeffs
+        sigma_fit = err_a * intensity_fit + err_b
+        # a, b describe a single frame; averaging N independent frames
+        # reduces the error on the mean by √N
+        n_avg = args.time_avg if (args.time_avg is not None and args.time_avg > 1) else 1
+        sigma_fit = sigma_fit / np.sqrt(n_avg)
+        if np.any(sigma_fit <= 0):
+            n_bad = int(np.sum(sigma_fit <= 0))
+            sys.exit(
+                f"Error bars σ = {err_a:g}·I + {err_b:g} are ≤ 0 for {n_bad} point(s) "
+                f"(min σ = {sigma_fit.min():.4g}). Adjust the coefficients."
+            )
+        avg_note = f", ÷√{n_avg} for time averaging" if n_avg > 1 else ""
+        sig_str = f"({err_a:g}·I + {err_b:g})/√{n_avg}" if n_avg > 1 else f"{err_a:g}·I + {err_b:g}"
+        print(f"Error bars: σ = {sig_str}  "
+              f"(range {format_value(sigma_fit.min())} – {format_value(sigma_fit.max())}{avg_note})")
+
     with_offset = not args.no_offset
     popt, perr, model, resolved = fit_decay(
         time_fit, intensity_fit,
@@ -627,6 +676,7 @@ def main():
         bateman                  = args.bateman,
         halflife_isomer_lab      = halflife_isomer_lab,
         halflife_groundstate_lab = halflife_groundstate_lab,
+        sigma                    = sigma_fit,
     )
 
     plot_decay(
@@ -637,6 +687,7 @@ def main():
         args.file,
         gamma=args.gamma,
         title_suffix=args.title,
+        sigma_fit=sigma_fit,
     )
 
 

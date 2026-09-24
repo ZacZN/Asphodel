@@ -94,6 +94,8 @@ def plot_3d(freq, time, power, title, log_scale=True, n_avg=1, file_path=None):
     except Exception:
         _prefs = {}
     _saved_gamma = str(_prefs.get("gamma", ""))
+    _saved_err_a = str(_prefs.get("errA", ""))
+    _saved_err_b = str(_prefs.get("errB", ""))
 
     z_label = "Power (dB)" if log_scale else "Power (linear)"
 
@@ -284,7 +286,17 @@ def plot_3d(freq, time, power, title, log_scale=True, n_avg=1, file_path=None):
       <input type="number" id="gammaVal" min="0" step="0.01"
              placeholder="γ" title="Lorentz factor γ (optional)"
              style="width:64px;" value="{_saved_gamma}"
-             oninput="fetch('/save-gamma',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{gamma:this.value}})}})">
+             oninput="savePref('gamma', this.value)">
+      <span title="Error bar on each point: σ = a·I + b">σ =</span>
+      <input type="number" id="errA" step="any"
+             placeholder="a" title="Error-bar slope a in σ = a·I + b"
+             style="width:64px;" value="{_saved_err_a}"
+             oninput="savePref('errA', this.value)">
+      <span>·I +</span>
+      <input type="number" id="errB" step="any"
+             placeholder="b" title="Error-bar intercept b in σ = a·I + b"
+             style="width:64px;" value="{_saved_err_b}"
+             oninput="savePref('errB', this.value)">
       <input type="checkbox" id="noOffset" style="accent-color:#f97316;width:14px;height:14px;cursor:pointer;">
       <label for="noOffset" style="color:#9ca3af;">no offset</label>
       <button onclick="runDecayFit()">Run</button>
@@ -411,6 +423,15 @@ function _updateHeatmap() {{
   }});
 }}
 
+// ── Persisted preferences ────────────────────────────────────────────────────
+function savePref(key, value) {{
+  fetch('/save-pref', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{key: key, value: value}})
+  }});
+}}
+
 // ── Main update functions ────────────────────────────────────────────────────
 
 async function runDecayFit() {{
@@ -419,6 +440,11 @@ async function runDecayFit() {{
   status.style.color = '#fbbf24';
   try {{
     var gammaRaw = document.getElementById('gammaVal').value.trim();
+    var errARaw  = document.getElementById('errA').value.trim();
+    var errBRaw  = document.getElementById('errB').value.trim();
+    // Blank box counts as 0; both blank → unweighted fit
+    var errCoeffs = (errARaw === '' && errBRaw === '') ? null
+                  : [errARaw === '' ? 0 : +errARaw, errBRaw === '' ? 0 : +errBRaw];
     var payload = {{
       fMin:  +document.getElementById('fMin').value,
       fMax:  +document.getElementById('fMax').value,
@@ -426,7 +452,8 @@ async function runDecayFit() {{
       tMax:  +document.getElementById('tMax').value,
       nAvg:  Math.max(1, Math.round(+document.getElementById('nAvg').value || 1)),
       gamma:    gammaRaw !== '' ? +gammaRaw : null,
-      noOffset: document.getElementById('noOffset').checked
+      noOffset: document.getElementById('noOffset').checked,
+      errCoeffs: errCoeffs
     }};
     var r = await fetch('/run-decay-fit', {{
       method: 'POST',
@@ -596,26 +623,32 @@ _initHeatmap();
                         cmd += ["--gamma", str(body["gamma"])]
                     if body.get("noOffset"):
                         cmd += ["--no-offset"]
+                    if body.get("errCoeffs") is not None:
+                        ea, eb = body["errCoeffs"]
+                        cmd += ["--err-coeffs", str(float(ea)), str(float(eb))]
                     _subprocess.Popen(cmd)
                     resp = json.dumps({"status": "launched"}).encode()
                     code = 200
                 except Exception as exc:
                     resp = json.dumps({"error": str(exc)}).encode()
                     code = 500
-            elif self.path == "/save-gamma":
+            elif self.path == "/save-pref":
                 try:
                     length = int(self.headers.get("Content-Length", 0))
                     body   = json.loads(self.rfile.read(length))
-                    gamma_val = body.get("gamma", "")
+                    pref_key  = body.get("key")
+                    pref_val  = body.get("value", "")
+                    if pref_key not in ("gamma", "errA", "errB"):
+                        raise ValueError(f"unknown pref key: {pref_key!r}")
                     try:
                         with open(_prefs_path, "r", encoding="utf-8") as _pf:
                             prefs = json.loads(_pf.read())
                     except Exception:
                         prefs = {}
-                    if gamma_val == "" or gamma_val is None:
-                        prefs.pop("gamma", None)
+                    if pref_val == "" or pref_val is None:
+                        prefs.pop(pref_key, None)
                     else:
-                        prefs["gamma"] = gamma_val
+                        prefs[pref_key] = pref_val
                     with open(_prefs_path, "w", encoding="utf-8") as _pf:
                         _pf.write(json.dumps(prefs))
                     resp = json.dumps({"status": "saved"}).encode()
