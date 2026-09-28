@@ -8,12 +8,13 @@ adjusted in the browser without re-running the script.
 
 Usage
 -----
-  python plot_spectrogram.py <file> <freq_min> <freq_max> [--linear] [--time-avg N]
+  python plot_spectrogram.py                                   # choose the file in the GUI
+  python plot_spectrogram.py <file> [<freq_min> <freq_max>] [--linear] [--time-avg N]
 
-Arguments
+Arguments (all optional — the file and frequency range can be chosen in the GUI)
 ---------
   file          Path to a .npz file (freq, time, power arrays)
-  freq_min      Lower frequency bound (same units as the freq array)
+  freq_min      Lower frequency bound (same units as the freq array); default: full range
   freq_max      Upper frequency bound
   --linear      Start in linear-power mode instead of dB (can be toggled in the browser)
   --time-avg N  Initial time-frame averaging (can be changed in the browser)
@@ -34,9 +35,12 @@ import numpy as np
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Plot ESR injection spectrogram")
-    parser.add_argument("file",     help="Path to .npz file")
-    parser.add_argument("freq_min", type=float, help="Lower frequency bound")
-    parser.add_argument("freq_max", type=float, help="Upper frequency bound")
+    parser.add_argument("file",     nargs="?", default=None,
+                        help="Path to .npz file (optional; choose in the GUI otherwise)")
+    parser.add_argument("freq_min", nargs="?", type=float, default=None,
+                        help="Lower frequency bound (default: full range)")
+    parser.add_argument("freq_max", nargs="?", type=float, default=None,
+                        help="Upper frequency bound (default: full range)")
     parser.add_argument("--linear", action="store_true",
                         help="Start in linear-power mode instead of dB (toggleable in browser)")
     parser.add_argument("--time-avg", type=int, metavar="N", default=None,
@@ -70,10 +74,240 @@ def slice_freq(freq, power, freq_min, freq_max):
 
 
 # ---------------------------------------------------------------------------
+# File loader (shared by the landing page and the spectrogram page)
+# ---------------------------------------------------------------------------
+
+_HERE       = os.path.dirname(os.path.abspath(__file__))
+PREFS_PATH  = os.path.join(_HERE, ".asphodel_prefs.json")
+DECAY_PATH  = os.path.join(_HERE, "decay_fit.py")
+
+
+def read_prefs():
+    import json
+    try:
+        with open(PREFS_PATH, "r", encoding="utf-8") as fh:
+            return json.loads(fh.read())
+    except Exception:
+        return {}
+
+
+def write_prefs(prefs):
+    import json
+    with open(PREFS_PATH, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(prefs))
+
+
+def make_title(path, fmin, fmax, linear=False):
+    return (f"{os.path.basename(path)}   "
+            f"[{fmin:,.0f} – {fmax:,.0f} Hz]   "
+            f"({'linear' if linear else 'dB'})")
+
+
+# Plain strings (not f-strings) so CSS/JS braces need no escaping.
+LOADER_CSS = """
+  .loader-row { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px;
+                flex-wrap: wrap; padding-bottom: 8px; border-bottom: 1px solid #374151; }
+  .loader-row .lbl { font-size: 12px; font-weight: 600; text-transform: uppercase;
+                     letter-spacing: .06em; color: #f97316; }
+  .loader-row input[type=text] { flex: 1; min-width: 260px; background: #374151;
+                     border: 1px solid #4b5563; border-radius: 4px; color: #e5e7eb;
+                     padding: 4px 8px; font-size: 13px; }
+  .loader-row input[type=number] { width: 96px; background: #374151; border: 1px solid #4b5563;
+                     border-radius: 4px; color: #e5e7eb; padding: 3px 6px; font-size: 13px; }
+  .loader-row input:focus { outline: none; border-color: #f97316; }
+  .loader-row button { background: #f97316; border: none; border-radius: 4px; color: #111827;
+                     font-size: 12px; font-weight: 700; padding: 4px 12px; cursor: pointer; }
+  .loader-row button.sec { background: #374151; color: #e5e7eb; border: 1px solid #4b5563; }
+  .loader-row button:hover { filter: brightness(1.1); }
+  #ldStatus { font-size: 11px; }
+  #ldPanel { grid-column: 1 / -1; background: #111827; border: 1px solid #374151;
+             border-radius: 6px; max-height: 320px; overflow-y: auto; margin-bottom: 6px; }
+  #ldPanel .hdr { position: sticky; top: 0; background: #1f2937; padding: 6px 10px;
+                  display: flex; gap: 8px; align-items: center; border-bottom: 1px solid #374151; }
+  #ldPanel .hdr input { flex: 1; background: #374151; border: 1px solid #4b5563; border-radius: 4px;
+                        color: #e5e7eb; padding: 3px 6px; font-size: 12px; }
+  #ldPanel .item { display: flex; gap: 12px; padding: 4px 12px; cursor: pointer;
+                   font-variant-numeric: tabular-nums; }
+  #ldPanel .item:hover { background: #1f2937; }
+  #ldPanel .item.sel { background: #7c2d12; }
+  #ldPanel .item .nm { flex: 1; }
+  #ldPanel .item.dir .nm { color: #fbbf24; }
+  #ldPanel .item .meta { color: #9ca3af; font-size: 11px; width: 150px; text-align: right; }
+  #ldPanel .empty { padding: 8px 12px; color: #9ca3af; }
+"""
+
+LOADER_HTML = """
+  <div class="loader-row">
+    <span class="lbl">File</span>
+    <input type="text" id="ldPath" placeholder="/path/to/file.npz" value="__PATH__"
+           onkeydown="if(event.key==='Enter') ldLoad()">
+    <button class="sec" onclick="ldToggle()" title="Browse for .npz files">Browse ▾</button>
+    <span class="lbl" title="Leave blank to load the full frequency range">Freq (Hz)</span>
+    <input type="number" id="ldFmin" step="any" placeholder="min (full)" value="__FMIN__">
+    <input type="number" id="ldFmax" step="any" placeholder="max (full)" value="__FMAX__">
+    <button onclick="ldLoad()" title="Load this file (or re-crop the current one)">Load</button>
+    <span id="ldStatus"></span>
+  </div>
+  <div id="ldPanel" style="display:none;"></div>
+"""
+
+LOADER_JS = """
+var LD_INIT = __INIT__;
+var ldCurDir = null;
+
+function ldStatus(msg, kind) {
+  var s = document.getElementById('ldStatus');
+  s.textContent = msg;
+  s.style.color = kind === 'err' ? '#f87171' : kind === 'ok' ? '#4ade80' : '#fbbf24';
+}
+
+function ldToggle(open) {
+  var p = document.getElementById('ldPanel');
+  var show = (open === undefined) ? (p.style.display === 'none') : open;
+  p.style.display = show ? 'block' : 'none';
+  if (show) ldList(ldCurDir || LD_INIT.dir);
+}
+
+function _fmtSize(b) {
+  if (b >= 1e9) return (b / 1e9).toFixed(2) + ' GB';
+  if (b >= 1e6) return (b / 1e6).toFixed(1) + ' MB';
+  if (b >= 1e3) return (b / 1e3).toFixed(0) + ' kB';
+  return b + ' B';
+}
+
+async function ldList(dir) {
+  try {
+    var r = await fetch('/list-dir?path=' + encodeURIComponent(dir || ''));
+    var d = await r.json();
+    if (!r.ok) { ldStatus('✗ ' + (d.error || 'cannot list folder'), 'err'); return; }
+    ldCurDir = d.path;
+    var p = document.getElementById('ldPanel');
+    p.innerHTML = '';
+    var hdr = document.createElement('div'); hdr.className = 'hdr';
+    var up = document.createElement('button'); up.textContent = '↑ Up'; up.className = 'sec';
+    up.style.cssText = 'background:#374151;color:#e5e7eb;border:1px solid #4b5563;border-radius:4px;padding:2px 8px;cursor:pointer;';
+    up.onclick = function() { ldList(d.parent); };
+    var inp = document.createElement('input'); inp.value = d.path; inp.title = 'Type a folder and press Enter';
+    inp.onkeydown = function(e) { if (e.key === 'Enter') ldList(inp.value); };
+    hdr.appendChild(up); hdr.appendChild(inp); p.appendChild(hdr);
+    var cur = document.getElementById('ldPath').value;
+    d.dirs.forEach(function(name) {
+      var it = document.createElement('div'); it.className = 'item dir';
+      var nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = '▸ ' + name + '/';
+      it.appendChild(nm);
+      it.onclick = function() { ldList(d.path.replace(/\\/$/, '') + '/' + name); };
+      p.appendChild(it);
+    });
+    d.files.forEach(function(f) {
+      var full = d.path.replace(/\\/$/, '') + '/' + f.name;
+      var it = document.createElement('div'); it.className = 'item' + (full === cur ? ' sel' : '');
+      var nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = f.name;
+      var mt = document.createElement('span'); mt.className = 'meta';
+      mt.textContent = _fmtSize(f.size) + '   ' + f.mtime;
+      it.appendChild(nm); it.appendChild(mt);
+      it.title = 'Click to select, double-click to load';
+      it.onclick = function() {
+        document.getElementById('ldPath').value = full;
+        Array.prototype.forEach.call(p.querySelectorAll('.item.sel'), function(x) { x.classList.remove('sel'); });
+        it.classList.add('sel');
+      };
+      it.ondblclick = function() { document.getElementById('ldPath').value = full; ldLoad(); };
+      p.appendChild(it);
+    });
+    if (!d.dirs.length && !d.files.length) {
+      var e = document.createElement('div'); e.className = 'empty'; e.textContent = 'No folders or .npz files here';
+      p.appendChild(e);
+    }
+  } catch (e) { ldStatus('✗ ' + e.message, 'err'); }
+}
+
+async function ldLoad() {
+  var path = document.getElementById('ldPath').value.trim();
+  if (!path) { ldStatus('✗ choose a file first', 'err'); return; }
+  var fMinRaw = document.getElementById('ldFmin').value.trim();
+  var fMaxRaw = document.getElementById('ldFmax').value.trim();
+  if (fMinRaw !== '' && fMaxRaw !== '' && +fMinRaw >= +fMaxRaw) {
+    ldStatus('✗ freq min must be < max', 'err'); return;
+  }
+  var db  = document.getElementById('dbCheck');
+  var nav = document.getElementById('nAvg');
+  var payload = {
+    file:   path,
+    fMin:   fMinRaw === '' ? null : +fMinRaw,
+    fMax:   fMaxRaw === '' ? null : +fMaxRaw,
+    linear: db ? !db.checked : false,
+    nAvg:   nav ? Math.max(1, Math.round(+nav.value || 1)) : 1
+  };
+  ldStatus('Loading…');
+  try {
+    var r = await fetch('/load', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    var d = await r.json();
+    if (!r.ok) { ldStatus('✗ ' + (d.error || 'load failed'), 'err'); return; }
+    ldStatus('✓ Loaded', 'ok');
+    window.location.href = '/spectrogram.html?t=' + Date.now();
+  } catch (e) { ldStatus('✗ ' + e.message, 'err'); }
+}
+"""
+
+
+def loader_parts(file_path=None, fmin=None, fmax=None):
+    """Return (html, js) for the loader row, pre-filled."""
+    import json
+    prefs = read_prefs()
+    if file_path:
+        start_dir = os.path.dirname(os.path.abspath(file_path))
+    else:
+        start_dir = prefs.get("lastDir") or os.getcwd()
+    esc = lambda v: str(v).replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
+    html = (LOADER_HTML
+            .replace("__PATH__", esc(os.path.abspath(file_path)) if file_path else "")
+            .replace("__FMIN__", "" if fmin is None else esc(repr(float(fmin))))
+            .replace("__FMAX__", "" if fmax is None else esc(repr(float(fmax)))))
+    js = LOADER_JS.replace("__INIT__", json.dumps({"dir": start_dir}).replace("</", "<\\/"))
+    return html, js
+
+
+def build_landing_page():
+    html, js = loader_parts()
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Asphodel — open spectrogram</title>
+<style>
+  * {{ box-sizing: border-box; }}
+  body {{ margin: 0; padding: 8px; background: #111827; color: #e5e7eb;
+         font-family: system-ui, sans-serif; font-size: 13px; }}
+  #controls {{ display: grid; grid-template-columns: 1fr; gap: 12px;
+               background: #1f2937; border-radius: 8px; padding: 12px 16px; }}
+  .hint {{ color: #9ca3af; }}
+{LOADER_CSS}
+</style>
+</head>
+<body>
+<div id="controls">
+{html}
+  <div class="hint">Choose an .npz spectrogram (browse, or type a path), optionally set a
+  frequency range, and click <b>Load</b>. Leave the range blank to load the full file.</div>
+</div>
+<script>
+{js}
+ldToggle(true);
+</script>
+</body>
+</html>"""
+
+
+# ---------------------------------------------------------------------------
 # Interactive browser plot (2-D heatmap + 3-D surface, side by side)
 # ---------------------------------------------------------------------------
 
-def plot_3d(freq, time, power, title, log_scale=True, n_avg=1, file_path=None):
+def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None,
+               fmin_req=None, fmax_req=None):
+    """Build the spectrogram page. Returns (html, state) for the server."""
     try:
         import plotly.graph_objects as go
     except ImportError:
@@ -84,18 +318,20 @@ def plot_3d(freq, time, power, title, log_scale=True, n_avg=1, file_path=None):
     import tempfile, webbrowser, json, subprocess as _subprocess
 
     _npz_path   = os.path.abspath(file_path) if file_path else ""
-    _decay_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "decay_fit.py")
-    _prefs_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".asphodel_prefs.json")
-
     # Load persisted preferences (gamma value, etc.)
-    try:
-        with open(_prefs_path, "r", encoding="utf-8") as _pf:
-            _prefs = json.loads(_pf.read())
-    except Exception:
-        _prefs = {}
+    _prefs = read_prefs()
+    loader_html, loader_js = loader_parts(file_path, fmin_req, fmax_req)
     _saved_gamma = str(_prefs.get("gamma", ""))
     _saved_err_a = str(_prefs.get("errA", ""))
     _saved_err_b = str(_prefs.get("errB", ""))
+    _saved_hl_iso = str(_prefs.get("hlIso", ""))
+    _saved_hl_gs  = str(_prefs.get("hlGs", ""))
+    _saved_skip0  = str(_prefs.get("skipStart", ""))
+    _saved_skip1  = str(_prefs.get("skipEnd", ""))
+    _saved_pmin   = str(_prefs.get("parentMin", ""))
+    _saved_pmax   = str(_prefs.get("parentMax", ""))
+    _chk_bateman    = "checked" if _prefs.get("bateman")    else ""
+    _chk_unweighted = "checked" if _prefs.get("unweighted") else ""
 
     z_label = "Power (dB)" if log_scale else "Power (linear)"
 
@@ -232,15 +468,20 @@ def plot_3d(freq, time, power, title, log_scale=True, n_avg=1, file_path=None):
                      color: #111827; font-size: 12px; font-weight: 700;
                      padding: 4px 12px; cursor: pointer; }}
   .opt-grp button:hover {{ background: #fb923c; }}
+  .opt-grp input:disabled {{ opacity: .35; cursor: not-allowed; }}
+  .opt-grp input:disabled + label {{ opacity: .35; }}
+  .opt-grp button:disabled {{ opacity: .35; cursor: not-allowed; }}
   #discardMsg {{ font-size: 11px; color: #fbbf24; margin-left: 4px; }}
   #decayStatus {{ font-size: 11px; margin-left: 4px; }}
   #plots {{ display: flex; gap: 8px; align-items: flex-start; }}
   #heatDiv {{ flex: 1; min-width: 0; }}
   #surfDiv {{ flex: 1; min-width: 0; }}
+{LOADER_CSS}
 </style>
 </head>
 <body>
 <div id="controls">
+{loader_html}
   <div class="title-row">
     <label>Title</label>
     <input type="text" id="plotTitle" value="{title_html}" oninput="updateTitle()">
@@ -292,24 +533,63 @@ def plot_3d(freq, time, power, title, log_scale=True, n_avg=1, file_path=None):
       <button onclick="updateSurface()">Apply</button>
       <span id="discardMsg"></span>
     </div>
+  </div>
+  <div class="opts-row decay-row">
+    <div class="opt-grp"><span style="color:#e5e7eb;">Decay fit</span></div>
     <div class="opt-grp">
-      <span>Decay fit</span>
+      <span>Model</span>
+      <input type="checkbox" id="batemanChk" {_chk_bateman}
+             onchange="savePref('bateman', this.checked ? '1' : ''); _syncDecayControls()">
+      <label for="batemanChk" title="Bateman two-member chain A→B→C instead of a single exponential">Bateman</label>
+      <input type="checkbox" id="noOffset">
+      <label for="noOffset" title="Simple decay only: fit A·exp(-t/τ) with no constant background">no offset</label>
+    </div>
+    <div class="opt-grp" title="Bateman only. Frequency window of the PARENT peak (Hz). When set, parent and daughter are fitted together with a shared τ_A: parent = A·e^(-t/τ_A) + C_A (with offset), daughter = the frequency-slider window, Bateman growth with no offset. Leave blank for a single-window Bateman fit.">
+      <span>Parent window</span>
+      <input type="number" id="parentMin" step="any" placeholder="f min"
+             style="width:84px;" value="{_saved_pmin}" oninput="savePref('parentMin', this.value)">
+      <input type="number" id="parentMax" step="any" placeholder="f max"
+             style="width:84px;" value="{_saved_pmax}" oninput="savePref('parentMax', this.value)">
+      <button id="parentFromSliders" onclick="_parentFromSliders()"
+              title="Copy the current frequency-slider range into the parent window">← sliders</button>
+    </div>
+    <div class="opt-grp" title="Known c.o.m.-frame half-lives (s), converted to lab frame with γ. Fixes the corresponding τ in the Bateman fit. Requires γ.">
+      <span>Fixed t½ (s)</span>
+      <input type="number" id="hlIso" min="0" step="any" placeholder="isomer"
+             style="width:72px;" value="{_saved_hl_iso}" oninput="savePref('hlIso', this.value)">
+      <input type="number" id="hlGs" min="0" step="any" placeholder="g.s."
+             style="width:72px;" value="{_saved_hl_gs}" oninput="savePref('hlGs', this.value)">
+    </div>
+    <div class="opt-grp">
+      <span>γ</span>
       <input type="number" id="gammaVal" min="0" step="0.01"
-             placeholder="γ" title="Lorentz factor γ (optional)"
+             placeholder="γ" title="Lorentz factor γ (optional; required for fixed half-lives)"
              style="width:64px;" value="{_saved_gamma}"
              oninput="savePref('gamma', this.value)">
+    </div>
+    <div class="opt-grp">
       <span title="Error bar on each point: σ = a·I + b. Leave both blank to estimate a, b automatically from the fit residuals.">σ =</span>
       <input type="number" id="errA" step="any"
              placeholder="auto" title="Error-bar slope a in σ = a·I + b (single-frame). Blank = estimate from residuals"
              style="width:64px;" value="{_saved_err_a}"
              oninput="savePref('errA', this.value)">
-      <span>·I +</span>
+      <label>·I +</label>
       <input type="number" id="errB" step="any"
              placeholder="auto" title="Error-bar intercept b in σ = a·I + b (single-frame). Blank = estimate from residuals"
              style="width:64px;" value="{_saved_err_b}"
              oninput="savePref('errB', this.value)">
-      <input type="checkbox" id="noOffset" style="accent-color:#f97316;width:14px;height:14px;cursor:pointer;">
-      <label for="noOffset" style="color:#9ca3af;">no offset</label>
+      <input type="checkbox" id="unweightedChk" {_chk_unweighted}
+             onchange="savePref('unweighted', this.checked ? '1' : ''); _syncDecayControls()">
+      <label for="unweightedChk" title="Single unweighted fit, no error bars">unweighted</label>
+    </div>
+    <div class="opt-grp" title="Skip the first X and last Y time bins (applied before the time-slider window)">
+      <span>Skip bins</span>
+      <input type="number" id="skipStart" min="0" step="1" placeholder="first"
+             style="width:56px;" value="{_saved_skip0}" oninput="savePref('skipStart', this.value)">
+      <input type="number" id="skipEnd" min="0" step="1" placeholder="last"
+             style="width:56px;" value="{_saved_skip1}" oninput="savePref('skipEnd', this.value)">
+    </div>
+    <div class="opt-grp">
       <button onclick="runDecayFit()">Run</button>
       <span id="decayStatus"></span>
     </div>
@@ -320,10 +600,12 @@ def plot_3d(freq, time, power, title, log_scale=True, n_avg=1, file_path=None):
   <div id="surfDiv">{plot_div}</div>
 </div>
 <script>
+{loader_js}
 const Z_RAW = {z_raw_json};
 const T_RAW = {t_raw_json};
 const F_PLOT = {f_raw_json};  // freq array, low-to-high (2-D heatmap y-axis)
 const F_1D   = {f_1d_json};   // full-resolution freq array for the 1-D spectrum
+const DEFAULT_TITLE = {json.dumps(title)};
 
 var _heatReady = true;
 
@@ -517,6 +799,29 @@ function _renderSpec1d() {{
   Plotly.relayout('heatPlot', lay);
 }}
 
+// ── Decay-fit controls: enable only what applies to the chosen mode ──────────
+function _syncDecayControls() {{
+  var bateman    = document.getElementById('batemanChk').checked;
+  var unweighted = document.getElementById('unweightedChk').checked;
+  document.getElementById('noOffset').disabled = bateman;   // Bateman always fits C
+  document.getElementById('hlIso').disabled    = !bateman;
+  document.getElementById('hlGs').disabled     = !bateman;
+  document.getElementById('parentMin').disabled = !bateman;
+  document.getElementById('parentMax').disabled = !bateman;
+  document.getElementById('parentFromSliders').disabled = !bateman;
+  document.getElementById('errA').disabled     = unweighted;
+  document.getElementById('errB').disabled     = unweighted;
+}}
+
+function _parentFromSliders() {{
+  var fMin = document.getElementById('fMin').value;
+  var fMax = document.getElementById('fMax').value;
+  document.getElementById('parentMin').value = fMin;
+  document.getElementById('parentMax').value = fMax;
+  savePref('parentMin', fMin);
+  savePref('parentMax', fMax);
+}}
+
 // ── Persisted preferences ────────────────────────────────────────────────────
 function savePref(key, value) {{
   fetch('/save-pref', {{
@@ -534,6 +839,27 @@ async function runDecayFit() {{
   status.style.color = '#fbbf24';
   try {{
     var gammaRaw = document.getElementById('gammaVal').value.trim();
+    var bateman  = document.getElementById('batemanChk').checked;
+    var unweighted = document.getElementById('unweightedChk').checked;
+    var hlIsoRaw = document.getElementById('hlIso').value.trim();
+    var hlGsRaw  = document.getElementById('hlGs').value.trim();
+    var skip0    = Math.max(0, Math.round(+document.getElementById('skipStart').value || 0));
+    var skip1    = Math.max(0, Math.round(+document.getElementById('skipEnd').value || 0));
+    if (bateman && (hlIsoRaw !== '' || hlGsRaw !== '') && gammaRaw === '') {{
+      throw new Error('fixed half-lives need γ (they are c.o.m. values)');
+    }}
+    // Only pass the GUI title if the user edited it (the decay plot builds its own default)
+    var guiTitle = document.getElementById('plotTitle').value.trim();
+    var titleArg = (guiTitle !== '' && guiTitle !== DEFAULT_TITLE) ? guiTitle : null;
+    var pMinRaw = document.getElementById('parentMin').value.trim();
+    var pMaxRaw = document.getElementById('parentMax').value.trim();
+    var parentWindow = null;
+    if (bateman && (pMinRaw !== '' || pMaxRaw !== '')) {{
+      if (pMinRaw === '' || pMaxRaw === '' || +pMinRaw >= +pMaxRaw) {{
+        throw new Error('parent window needs f min < f max');
+      }}
+      parentWindow = [+pMinRaw, +pMaxRaw];
+    }}
     var errARaw  = document.getElementById('errA').value.trim();
     var errBRaw  = document.getElementById('errB').value.trim();
     // Blank box counts as 0; both blank → unweighted fit
@@ -546,8 +872,15 @@ async function runDecayFit() {{
       tMax:  +document.getElementById('tMax').value,
       nAvg:  Math.max(1, Math.round(+document.getElementById('nAvg').value || 1)),
       gamma:    gammaRaw !== '' ? +gammaRaw : null,
-      noOffset: document.getElementById('noOffset').checked,
-      errCoeffs: errCoeffs
+      noOffset: !bateman && document.getElementById('noOffset').checked,
+      errCoeffs: unweighted ? null : errCoeffs,
+      unweighted: unweighted,
+      bateman:  bateman,
+      hlIso:    (bateman && hlIsoRaw !== '') ? +hlIsoRaw : null,
+      hlGs:     (bateman && hlGsRaw  !== '') ? +hlGsRaw  : null,
+      skip:     [skip0, skip1],
+      title:    titleArg,
+      parentWindow: parentWindow
     }};
     var r = await fetch('/run-decay-fit', {{
       method: 'POST',
@@ -679,6 +1012,7 @@ function update() {{
 var _lastT1d = [null, null];
 
 // Initialise the 2-D heatmap and 1-D spectrum immediately on load
+_syncDecayControls();
 _initHeatmap();
 _fetchSpec1d();
 // Align colorscale max across both plots using full data range
@@ -691,64 +1025,141 @@ _fetchSpec1d();
 </body>
 </html>"""
 
-    import http.server, socket, threading, time
+    state = dict(npz_path=_npz_path, t_full=_t_full, p_full=_p_full)
+    return html, state
 
-    # Write HTML to a temp directory
-    tmp_dir = tempfile.mkdtemp()
-    html_path = os.path.join(tmp_dir, "spectrogram.html")
-    with open(html_path, "w", encoding="utf-8") as _f:
-        _f.write(html)
 
-    # Find a free port
+# ---------------------------------------------------------------------------
+# Local server: serves the current page, loads files, runs decay fits
+# ---------------------------------------------------------------------------
+
+def load_dataset(path, fmin=None, fmax=None, linear=False, n_avg=1):
+    """Load + crop a file and build its page. Returns (html, state)."""
+    path = os.path.abspath(os.path.expanduser(path))
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"file not found — {path}")
+    freq, time, power = load(path)
+    lo = float(freq.min()) if fmin is None else float(fmin)
+    hi = float(freq.max()) if fmax is None else float(fmax)
+    freq_s, power_s = slice_freq(freq, power, lo, hi)
+    print(f"Loaded {os.path.basename(path)}: {power_s.shape[1]} freq bins × "
+          f"{power_s.shape[0]} time bins  [{lo:,.0f} – {hi:,.0f} Hz]")
+    html, state = build_page(freq_s, time, power_s, make_title(path, lo, hi, linear),
+                             log_scale=not linear, n_avg=max(1, int(n_avg)),
+                             file_path=path, fmin_req=fmin, fmax_req=fmax)
+    prefs = read_prefs()
+    prefs["lastDir"] = os.path.dirname(path)
+    try:
+        write_prefs(prefs)
+    except Exception:
+        pass
+    return html, state
+
+
+def serve(html, state):
+    import http.server, socket, threading, time, json, webbrowser, datetime
+    import subprocess as _subprocess
+    from urllib.parse import urlparse, parse_qs
+
+    STATE = dict(state or {})
+    STATE["html"] = html
+
     with socket.socket() as _s:
         _s.bind(("127.0.0.1", 0))
         port = _s.getsockname()[1]
 
-    # Serve over localhost — bypasses snap AppArmor restrictions on file:// URLs
-    class _Handler(http.server.SimpleHTTPRequestHandler):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, directory=tmp_dir, **kwargs)
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def _send(self, code, body, ctype="application/json"):
+            if isinstance(body, (dict, list)):
+                body = json.dumps(body)
+            data = body.encode() if isinstance(body, str) else body
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def _body(self):
+            length = int(self.headers.get("Content-Length", 0))
+            return json.loads(self.rfile.read(length) or b"{}")
 
         def do_GET(self):
-            if self.path.startswith("/spectrum1d"):
-                from urllib.parse import urlparse, parse_qs
+            url = urlparse(self.path)
+            q   = parse_qs(url.query)
+            if url.path in ("/", "/spectrogram.html"):
+                self._send(200, STATE["html"], "text/html; charset=utf-8")
+
+            elif url.path == "/spectrum1d":
+                if STATE.get("t_full") is None:
+                    return self._send(400, {"error": "no file loaded"})
                 try:
-                    q    = parse_qs(urlparse(self.path).query)
+                    t_full, p_full = STATE["t_full"], STATE["p_full"]
                     tmin = float(q.get("tmin", ["-inf"])[0])
                     tmax = float(q.get("tmax", ["inf"])[0])
-                    i0   = int(np.searchsorted(_t_full, tmin, side="left"))
-                    i1   = int(np.searchsorted(_t_full, tmax, side="left"))
+                    i0   = int(np.searchsorted(t_full, tmin, side="left"))
+                    i1   = int(np.searchsorted(t_full, tmax, side="left"))
                     n    = max(i1 - i0, 0)
-                    y    = (_p_full[i0:i1].sum(axis=0) if n > 0
-                            else np.zeros(_p_full.shape[1]))
-                    resp = json.dumps({
+                    y    = p_full[i0:i1].sum(axis=0) if n > 0 else np.zeros(p_full.shape[1])
+                    self._send(200, {
                         "y":  np.asarray(y, dtype=float).tolist(),
                         "n":  n,
-                        "t0": float(_t_full[i0])     if n > 0 else 0.0,
-                        "t1": float(_t_full[i1 - 1]) if n > 0 else 0.0,
-                    }).encode()
-                    code = 200
+                        "t0": float(t_full[i0])     if n > 0 else 0.0,
+                        "t1": float(t_full[i1 - 1]) if n > 0 else 0.0,
+                    })
                 except Exception as exc:
-                    resp = json.dumps({"error": str(exc)}).encode()
-                    code = 500
-                self.send_response(code)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(resp)))
-                self.end_headers()
-                self.wfile.write(resp)
+                    self._send(500, {"error": str(exc)})
+
+            elif url.path == "/list-dir":
+                try:
+                    d = q.get("path", [""])[0].strip() or read_prefs().get("lastDir") or os.getcwd()
+                    d = os.path.abspath(os.path.expanduser(d))
+                    if os.path.isfile(d):
+                        d = os.path.dirname(d)
+                    if not os.path.isdir(d):
+                        raise FileNotFoundError(f"not a folder: {d}")
+                    dirs, files = [], []
+                    for name in sorted(os.listdir(d), key=str.lower):
+                        if name.startswith("."):
+                            continue
+                        full = os.path.join(d, name)
+                        if os.path.isdir(full):
+                            dirs.append(name)
+                        elif name.lower().endswith(".npz"):
+                            st = os.stat(full)
+                            files.append({
+                                "name":  name,
+                                "size":  st.st_size,
+                                "mtime": datetime.datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M"),
+                            })
+                    self._send(200, {"path": d, "parent": os.path.dirname(d),
+                                     "dirs": dirs, "files": files})
+                except Exception as exc:
+                    self._send(400, {"error": str(exc)})
             else:
-                super().do_GET()
+                self._send(404, {"error": "not found"})
 
         def do_POST(self):
-            if self.path == "/run-decay-fit":
+            if self.path == "/load":
                 try:
-                    length = int(self.headers.get("Content-Length", 0))
-                    body   = json.loads(self.rfile.read(length))
-                    if not os.path.isfile(_decay_path):
-                        raise FileNotFoundError(f"decay_fit.py not found at {_decay_path}")
+                    b = self._body()
+                    html_new, st = load_dataset(b.get("file", ""), b.get("fMin"), b.get("fMax"),
+                                                bool(b.get("linear")), int(b.get("nAvg") or 1))
+                    STATE.clear(); STATE.update(st); STATE["html"] = html_new
+                    self._send(200, {"status": "loaded"})
+                except Exception as exc:
+                    self._send(400, {"error": str(exc)})
+
+            elif self.path == "/run-decay-fit":
+                try:
+                    body = self._body()
+                    if not STATE.get("npz_path"):
+                        raise ValueError("no file loaded")
+                    if not os.path.isfile(DECAY_PATH):
+                        raise FileNotFoundError(f"decay_fit.py not found at {DECAY_PATH}")
                     cmd = [
-                        sys.executable, _decay_path,
-                        _npz_path,
+                        sys.executable, DECAY_PATH,
+                        STATE["npz_path"],
                         str(body["fMin"]), str(body["fMax"]),
                         "--tmin",     str(body["tMin"]),
                         "--tmax",     str(body["tMax"]),
@@ -761,44 +1172,47 @@ _fetchSpec1d();
                     if body.get("errCoeffs") is not None:
                         ea, eb = body["errCoeffs"]
                         cmd += ["--err-coeffs", str(float(ea)), str(float(eb))]
+                    if body.get("unweighted"):
+                        cmd += ["--unweighted"]
+                    if body.get("bateman"):
+                        cmd += ["--bateman"]
+                        if body.get("hlIso") is not None:
+                            cmd += ["--halflife-isomer", str(float(body["hlIso"]))]
+                        if body.get("hlGs") is not None:
+                            cmd += ["--halflife-groundstate", str(float(body["hlGs"]))]
+                        if body.get("parentWindow") is not None:
+                            pw0, pw1 = body["parentWindow"]
+                            cmd += ["--parent-window", str(float(pw0)), str(float(pw1))]
+                    skip = body.get("skip") or [0, 0]
+                    if int(skip[0]) > 0 or int(skip[1]) > 0:
+                        cmd += ["--skip", str(int(skip[0])), str(int(skip[1]))]
+                    if body.get("title"):
+                        cmd += ["--title", str(body["title"])]
                     _subprocess.Popen(cmd)
-                    resp = json.dumps({"status": "launched"}).encode()
-                    code = 200
+                    self._send(200, {"status": "launched"})
                 except Exception as exc:
-                    resp = json.dumps({"error": str(exc)}).encode()
-                    code = 500
+                    self._send(500, {"error": str(exc)})
+
             elif self.path == "/save-pref":
                 try:
-                    length = int(self.headers.get("Content-Length", 0))
-                    body   = json.loads(self.rfile.read(length))
-                    pref_key  = body.get("key")
-                    pref_val  = body.get("value", "")
-                    if pref_key not in ("gamma", "errA", "errB"):
+                    body = self._body()
+                    pref_key = body.get("key")
+                    pref_val = body.get("value", "")
+                    if pref_key not in ("gamma", "errA", "errB", "hlIso", "hlGs",
+                                        "skipStart", "skipEnd", "bateman", "unweighted",
+                                        "parentMin", "parentMax"):
                         raise ValueError(f"unknown pref key: {pref_key!r}")
-                    try:
-                        with open(_prefs_path, "r", encoding="utf-8") as _pf:
-                            prefs = json.loads(_pf.read())
-                    except Exception:
-                        prefs = {}
+                    prefs = read_prefs()
                     if pref_val == "" or pref_val is None:
                         prefs.pop(pref_key, None)
                     else:
                         prefs[pref_key] = pref_val
-                    with open(_prefs_path, "w", encoding="utf-8") as _pf:
-                        _pf.write(json.dumps(prefs))
-                    resp = json.dumps({"status": "saved"}).encode()
-                    code = 200
+                    write_prefs(prefs)
+                    self._send(200, {"status": "saved"})
                 except Exception as exc:
-                    resp = json.dumps({"error": str(exc)}).encode()
-                    code = 500
+                    self._send(500, {"error": str(exc)})
             else:
-                resp = json.dumps({"error": "not found"}).encode()
-                code = 404
-            self.send_response(code)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(resp)))
-            self.end_headers()
-            self.wfile.write(resp)
+                self._send(404, {"error": "not found"})
 
         def log_message(self, *args):
             pass  # silence request logs
@@ -807,7 +1221,7 @@ _fetchSpec1d();
     threading.Thread(target=_srv.serve_forever, daemon=True).start()
 
     url = f"http://127.0.0.1:{port}/spectrogram.html"
-    print(f"Serving 3-D plot at {url}  (Ctrl-C to quit)")
+    print(f"Serving spectrogram GUI at {url}  (Ctrl-C to quit)")
     webbrowser.open(url)
 
     try:
@@ -824,28 +1238,22 @@ _fetchSpec1d();
 def main():
     args = parse_args()
 
-    if not os.path.isfile(args.file):
-        sys.exit(f"Error: file not found — {args.file}")
-
-    freq, time, power = load(args.file)
-    freq_s, power_s = slice_freq(freq, power, args.freq_min, args.freq_max)
-
-    scale_label = "linear" if args.linear else "dB"
-    title = (
-        f"{os.path.basename(args.file)}   "
-        f"[{args.freq_min:,.0f} – {args.freq_max:,.0f} Hz]   "
-        f"({scale_label})"
-    )
-
-    n_avg = args.time_avg  # None or an integer
-    # All options (scale, time-avg) are available as GUI controls;
-    # CLI flags set their initial values only.
-    init_n = n_avg if (n_avg is not None and n_avg >= 1) else 1
-    if n_avg is not None and n_avg < 1:
+    n_avg = args.time_avg if args.time_avg is not None else 1
+    if n_avg < 1:
         sys.exit("Error: --time-avg N requires N ≥ 1.")
-    print(f"Plotting {power_s.shape[1]} freq bins × {power_s.shape[0]} time bins")
-    plot_3d(freq_s, time, power_s, title,
-            log_scale=not args.linear, n_avg=init_n, file_path=args.file)
+    if (args.freq_min is None) != (args.freq_max is None):
+        sys.exit("Error: give both freq_min and freq_max, or neither (full range).")
+
+    if args.file is None:
+        # No file on the command line → open the GUI on the file chooser
+        html, state = build_landing_page(), {}
+    else:
+        try:
+            html, state = load_dataset(args.file, args.freq_min, args.freq_max,
+                                       linear=args.linear, n_avg=n_avg)
+        except Exception as exc:
+            sys.exit(f"Error: {exc}")
+    serve(html, state)
 
 
 if __name__ == "__main__":
