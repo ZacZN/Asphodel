@@ -99,6 +99,12 @@ def plot_3d(freq, time, power, title, log_scale=True, n_avg=1, file_path=None):
 
     z_label = "Power (dB)" if log_scale else "Power (linear)"
 
+    # Full-resolution arrays for the 1-D summed spectrum (served on demand).
+    # Captured here because `time` is re-bound to the time module further down.
+    _t_full = np.asarray(time, dtype=float)
+    _p_full = power
+    f_1d_json = json.dumps(np.asarray(freq, dtype=float).tolist())
+
     # Downsample if very large to keep the browser responsive
     # Target ≤ 500 points per axis
     MAX_PTS = 500
@@ -276,6 +282,11 @@ def plot_3d(freq, time, power, title, log_scale=True, n_avg=1, file_path=None):
       <label for="dbCheck">dB</label>
     </div>
     <div class="opt-grp">
+      <span>1D overlay</span>
+      <input type="checkbox" id="show1d" checked onchange="_renderSpec1d()">
+      <label for="show1d">show</label>
+    </div>
+    <div class="opt-grp">
       <span>Time avg</span>
       <input type="number" id="nAvg" min="1" step="1" value="{n_avg_init}">
       <button onclick="updateSurface()">Apply</button>
@@ -287,14 +298,14 @@ def plot_3d(freq, time, power, title, log_scale=True, n_avg=1, file_path=None):
              placeholder="γ" title="Lorentz factor γ (optional)"
              style="width:64px;" value="{_saved_gamma}"
              oninput="savePref('gamma', this.value)">
-      <span title="Error bar on each point: σ = a·I + b">σ =</span>
+      <span title="Error bar on each point: σ = a·I + b. Leave both blank to estimate a, b automatically from the fit residuals.">σ =</span>
       <input type="number" id="errA" step="any"
-             placeholder="a" title="Error-bar slope a in σ = a·I + b"
+             placeholder="auto" title="Error-bar slope a in σ = a·I + b (single-frame). Blank = estimate from residuals"
              style="width:64px;" value="{_saved_err_a}"
              oninput="savePref('errA', this.value)">
       <span>·I +</span>
       <input type="number" id="errB" step="any"
-             placeholder="b" title="Error-bar intercept b in σ = a·I + b"
+             placeholder="auto" title="Error-bar intercept b in σ = a·I + b (single-frame). Blank = estimate from residuals"
              style="width:64px;" value="{_saved_err_b}"
              oninput="savePref('errB', this.value)">
       <input type="checkbox" id="noOffset" style="accent-color:#f97316;width:14px;height:14px;cursor:pointer;">
@@ -312,6 +323,7 @@ def plot_3d(freq, time, power, title, log_scale=True, n_avg=1, file_path=None):
 const Z_RAW = {z_raw_json};
 const T_RAW = {t_raw_json};
 const F_PLOT = {f_raw_json};  // freq array, low-to-high (2-D heatmap y-axis)
+const F_1D   = {f_1d_json};   // full-resolution freq array for the 1-D spectrum
 
 var _heatReady = true;
 
@@ -388,10 +400,23 @@ function _initHeatmap() {{
     colorscale: INFERNO,
     colorbar: {{ title: {{ text: zLabel, side: 'right' }} }},
     hovertemplate: 'Time: %{{x:.2f}} s<br>Freq: %{{y:,.0f}} Hz<br>' + zLabel + ': %{{z:.2f}}<extra></extra>'
+  }}, {{
+    // 1-D summed spectrum overlay: runs along the frequency (y) axis,
+    // with summed power on its own x-axis along the top
+    type: 'scattergl', mode: 'lines',
+    x: [], y: [],
+    xaxis: 'x2', yaxis: 'y',
+    line: {{ color: 'rgba(56,189,248,0.9)', width: 1.2 }},
+    showlegend: false,
+    hovertemplate: 'Freq: %{{y:,.0f}} Hz<br>Summed: %{{x:.4g}}<extra></extra>'
   }}], {{
     template: {{}},
     title: {{ text: document.getElementById('plotTitle').value,
-              x: 0.5, xanchor: 'center', font: {{ size: 14, color: '#e5e7eb' }} }},
+              x: 0.5, xanchor: 'center', y: 0.985, yanchor: 'top',
+              font: {{ size: 14, color: '#e5e7eb' }} }},
+    xaxis2: {{ overlaying: 'x', side: 'top', title: {{ text: '', standoff: 4 }},
+               showgrid: false, zeroline: false,
+               color: 'rgb(56,189,248)', tickfont: {{ size: 10 }} }},
     xaxis: {{ title: 'Time (s)',
               range: [+document.getElementById('tMin').value, +document.getElementById('tMax').value],
               color: '#9ca3af', gridcolor: '#374151', zerolinecolor: '#374151' }},
@@ -400,7 +425,7 @@ function _initHeatmap() {{
               color: '#9ca3af', gridcolor: '#374151', zerolinecolor: '#374151' }},
     paper_bgcolor: '#111827', plot_bgcolor: '#1f2937',
     font: {{ color: '#e5e7eb' }},
-    margin: {{ l: 90, r: 20, t: 60, b: 60 }},
+    margin: {{ l: 90, r: 20, t: 110, b: 60 }},
     height: 680,
   }}, {{ responsive: true }});
 }}
@@ -421,6 +446,75 @@ function _updateHeatmap() {{
     'xaxis.range': [+document.getElementById('tMin').value, +document.getElementById('tMax').value],
     'yaxis.range': [+document.getElementById('fMax').value, +document.getElementById('fMin').value]
   }});
+}}
+
+// ── 1-D summed spectrum ─────────────────────────────────────────────────────
+// Sum of all full-resolution time frames within the time-slider window,
+// computed server-side so no frames or freq bins are lost to downsampling.
+var _spec1dY = null, _spec1dN = 0, _spec1dT = null;
+var _spec1dTimer = null, _spec1dSeq = 0;
+
+function _fetchSpec1d() {{
+  clearTimeout(_spec1dTimer);
+  _spec1dTimer = setTimeout(async function() {{
+    var seq  = ++_spec1dSeq;
+    var n    = Math.max(1, Math.round(+document.getElementById('nAvg').value || 1));
+    var dtDs = T_RAW.length > 1 ? T_RAW[1] - T_RAW[0] : 0;
+    var half = n * dtDs / 2;   // half-width of one displayed (averaged) time bin
+    var tMin = +document.getElementById('tMin').value;
+    var tMax = +document.getElementById('tMax').value;
+    try {{
+      var r = await fetch('/spectrum1d?tmin=' + (tMin - half) + '&tmax=' + (tMax + half));
+      var d = await r.json();
+      if (seq !== _spec1dSeq) return;          // a newer request superseded this one
+      if (!r.ok) throw new Error(d.error || 'error');
+      _spec1dY = d.y; _spec1dN = d.n; _spec1dT = [d.t0, d.t1];
+      _renderSpec1d();
+    }} catch (e) {{
+      console.log('[spec1d] ' + e.message);
+    }}
+  }}, 120);
+}}
+
+function _spec1dYRange(y, fMin, fMax) {{
+  var lo = Infinity, hi = -Infinity;
+  for (var i = 0; i < F_1D.length; i++) {{
+    if (F_1D[i] < fMin || F_1D[i] > fMax) continue;
+    var v = y[i];
+    if (!isFinite(v)) continue;
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+  }}
+  if (!isFinite(lo)) return null;
+  var pad = (hi - lo) * 0.05 || Math.abs(hi) * 0.05 || 1;
+  return [lo - pad, hi + pad];
+}}
+
+function _renderSpec1d() {{
+  if (!_heatReady || !_spec1dY) return;
+  var show = document.getElementById('show1d').checked;
+  if (!show) {{
+    Plotly.restyle('heatPlot', {{ visible: [false] }}, [1]);
+    Plotly.relayout('heatPlot', {{ 'xaxis2.visible': false }});
+    return;
+  }}
+  var useDb = document.getElementById('dbCheck').checked;
+  var y = useDb ? _spec1dY.map(function(v) {{ return v > 0 ? 10 * Math.log10(v) : NaN; }})
+                : _spec1dY;
+  var fMin = +document.getElementById('fMin').value;
+  var fMax = +document.getElementById('fMax').value;
+  var pLabel = useDb ? 'Summed power (dB)' : 'Summed power (linear)';
+  var info = _spec1dN + ' frame' + (_spec1dN === 1 ? '' : 's') +
+             (_spec1dN > 0 ? ', t = ' + _spec1dT[0].toFixed(2) + '–' + _spec1dT[1].toFixed(2) + ' s' : '');
+  var pr = _spec1dYRange(y, fMin, fMax);
+  Plotly.restyle('heatPlot', {{
+    x: [y], y: [F_1D], visible: [true],
+    hovertemplate: ['Freq: %{{y:,.0f}} Hz<br>' + pLabel + ': %{{x:.4g}}<extra></extra>']
+  }}, [1]);
+  var lay = {{ 'xaxis2.visible': true, 'xaxis2.title.text': pLabel + '  (' + info + ')' }};
+  if (pr) {{ lay['xaxis2.range'] = pr; lay['xaxis2.autorange'] = false; }}
+  else    {{ lay['xaxis2.autorange'] = true; }}
+  Plotly.relayout('heatPlot', lay);
 }}
 
 // ── Persisted preferences ────────────────────────────────────────────────────
@@ -504,6 +598,8 @@ function updateSurface() {{
   if (_heatReady) _updateHeatmap();
   // Rescale colorscale to the highest power in the (now full-range) window
   _rescaleToWindow(rebinned.Z, rebinned.t);
+  // Time sliders were reset → re-sum the 1-D spectrum
+  _fetchSpec1d();
 }}
 
 function fmt(v, dec) {{
@@ -572,10 +668,19 @@ function update() {{
   var n = Math.max(1, Math.round(+document.getElementById('nAvg').value || 1));
   var rebinned = rebin(Z_RAW, T_RAW, n);
   _rescaleToWindow(rebinned.Z, rebinned.t);
+  // 1-D spectrum: re-sum if the time window moved, otherwise just re-range
+  if (_lastT1d[0] !== tMin || _lastT1d[1] !== tMax) {{
+    _lastT1d = [tMin, tMax];
+    _fetchSpec1d();
+  }} else {{
+    _renderSpec1d();
+  }}
 }}
+var _lastT1d = [null, null];
 
-// Initialise the 2-D heatmap immediately on load
+// Initialise the 2-D heatmap and 1-D spectrum immediately on load
 _initHeatmap();
+_fetchSpec1d();
 // Align colorscale max across both plots using full data range
 (function() {{
   var n = Math.max(1, Math.round(+document.getElementById('nAvg').value || 1));
@@ -603,6 +708,36 @@ _initHeatmap();
     class _Handler(http.server.SimpleHTTPRequestHandler):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=tmp_dir, **kwargs)
+
+        def do_GET(self):
+            if self.path.startswith("/spectrum1d"):
+                from urllib.parse import urlparse, parse_qs
+                try:
+                    q    = parse_qs(urlparse(self.path).query)
+                    tmin = float(q.get("tmin", ["-inf"])[0])
+                    tmax = float(q.get("tmax", ["inf"])[0])
+                    i0   = int(np.searchsorted(_t_full, tmin, side="left"))
+                    i1   = int(np.searchsorted(_t_full, tmax, side="left"))
+                    n    = max(i1 - i0, 0)
+                    y    = (_p_full[i0:i1].sum(axis=0) if n > 0
+                            else np.zeros(_p_full.shape[1]))
+                    resp = json.dumps({
+                        "y":  np.asarray(y, dtype=float).tolist(),
+                        "n":  n,
+                        "t0": float(_t_full[i0])     if n > 0 else 0.0,
+                        "t1": float(_t_full[i1 - 1]) if n > 0 else 0.0,
+                    }).encode()
+                    code = 200
+                except Exception as exc:
+                    resp = json.dumps({"error": str(exc)}).encode()
+                    code = 500
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+            else:
+                super().do_GET()
 
         def do_POST(self):
             if self.path == "/run-decay-fit":

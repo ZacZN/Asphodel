@@ -37,9 +37,19 @@ Common options
                     and shows t½(c.o.m.) = t½(lab) / γ in the plot annotation.
   --title TEXT      Extra text appended to the auto-generated plot title
   --skip X Y        Skip the first X and last Y time bins
-  --err-coeffs A B  Per-point error bars σ = A·I + B (single-frame calibration).
-                    With --time-avg N, σ is divided by √N. The fit is weighted
-                    by these (absolute_sigma=True) and χ²/ndf is reported.
+  --err-coeffs A B  Manual per-point error bars σ = A·I + B (single-frame
+                    calibration). With --time-avg N, σ is divided by √N.
+                    Without this option the error model is estimated from the
+                    data (two-pass fit, see below).
+  --unweighted      Skip error bars entirely and do a single unweighted fit.
+
+Error bars (default: automatic two-pass fit)
+  1. Unweighted fit → model f(t).
+  2. Residuals r_i = I_i − f(t_i). Fit |r_i|·√(π/2)·√(n/(n−p)) = a·f(t_i) + b
+     (√(π/2) converts mean |r| to a Gaussian σ; √(n/(n−p)) corrects for the
+     p fitted parameters). If that gives σ ≤ 0 anywhere, a constant σ is used.
+  3. Refit with σ_i = a·f(t_i) + b, absolute_sigma=True; parameter and
+     half-life errors come from this weighted fit.
 
 Example
 -------
@@ -104,6 +114,8 @@ def parse_args():
     parser.add_argument("--err-coeffs", type=float, nargs=2, default=None, metavar=("A", "B"),
                         help="Error bars σ = A·I + B on each intensity point; used as "
                              "absolute 1σ weights in the fit")
+    parser.add_argument("--unweighted", action="store_true",
+                        help="Single unweighted fit, no error bars")
     parser.add_argument("--time-avg", type=int, metavar="N", default=None,
                         help="Average every N consecutive time frames before fitting")
     return parser.parse_args()
@@ -328,6 +340,36 @@ def fit_decay(time, intensity, with_offset=True, bateman=False,
     return popt, perr, model, resolved
 
 
+def estimate_error_model(time, intensity, popt, model):
+    """
+    Estimate σ(I) = a·I + b from the residuals of a first-pass fit.
+
+    Uses the model intensity f(t_i) (not the noisy data) as the regressor, so
+    low-fluctuating points aren't given artificially small errors.
+
+    Returns
+    -------
+    sigma : per-point σ_i evaluated at the model intensity
+    a, b  : coefficients (a = 0 when falling back to a constant σ)
+    kind  : 'linear' or 'constant'
+    """
+    f      = model(time, *popt)
+    r      = intensity - f
+    n, p   = len(r), len(popt)
+    dof_corr = np.sqrt(n / max(n - p, 1))
+    y      = np.abs(r) * np.sqrt(np.pi / 2) * dof_corr
+
+    if np.ptp(f) > 0 and n >= 3:
+        a, b  = np.polyfit(f, y, 1)
+        sigma = a * f + b
+        if np.all(sigma > 0):
+            return sigma, a, b, "linear"
+
+    # Fallback: constant σ = rms residual (dof-corrected)
+    s0 = np.sqrt(np.sum(r ** 2) / max(n - p, 1))
+    return np.full(n, s0), 0.0, s0, "constant"
+
+
 # ---------------------------------------------------------------------------
 # Formatting helpers
 # ---------------------------------------------------------------------------
@@ -420,7 +462,7 @@ def make_equation_text_bateman(resolved, gamma=None):
 
 def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, resolved,
                with_offset, bateman, freq_min, freq_max, filename,
-               gamma=None, title_suffix=None, sigma_fit=None):
+               gamma=None, title_suffix=None, sigma_fit=None, err_note=None):
 
     plt.rcParams.update({"font.size": 20})
 
@@ -462,6 +504,8 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
     if chi2 is not None:
         chi2_red = chi2 / ndf if ndf > 0 else float("nan")
         eq_text += f"\n$\\chi^2/ndf$ = {chi2:.4g}/{ndf} = {chi2_red:.3g}"
+    if err_note:
+        eq_text += f"\n{err_note}"
 
     ax.text(
         0.97, 0.97, eq_text,
@@ -670,14 +714,40 @@ def main():
               f"(range {format_value(sigma_fit.min())} – {format_value(sigma_fit.max())}{avg_note})")
 
     with_offset = not args.no_offset
-    popt, perr, model, resolved = fit_decay(
-        time_fit, intensity_fit,
+    fit_kw = dict(
         with_offset              = with_offset,
         bateman                  = args.bateman,
         halflife_isomer_lab      = halflife_isomer_lab,
         halflife_groundstate_lab = halflife_groundstate_lab,
-        sigma                    = sigma_fit,
     )
+
+    err_note = None
+    if sigma_fit is not None:
+        # Manual error coefficients
+        err_note = f"σ = {err_a:g}·I + {err_b:g}" + (f" (÷√{n_avg})" if n_avg > 1 else "") + "  [manual]"
+        popt, perr, model, resolved = fit_decay(time_fit, intensity_fit, sigma=sigma_fit, **fit_kw)
+
+    elif args.unweighted:
+        popt, perr, model, resolved = fit_decay(time_fit, intensity_fit, **fit_kw)
+
+    else:
+        # Pass 1: unweighted fit
+        popt1, perr1, model1, _ = fit_decay(time_fit, intensity_fit, **fit_kw)
+        # Error model from residuals
+        sigma_fit, err_a, err_b, kind = estimate_error_model(time_fit, intensity_fit, popt1, model1)
+        if kind == "linear":
+            print(f"Error model from residuals: σ = {format_value(err_a)}·I + {format_value(err_b)}  "
+                  f"(range {format_value(sigma_fit.min())} – {format_value(sigma_fit.max())})")
+            err_note = f"σ = {format_value(err_a)}·I + {format_value(err_b)}  [from residuals]"
+        else:
+            print(f"Error model from residuals: linear σ(I) went ≤ 0 or was ill-defined; "
+                  f"using constant σ = {format_value(err_b)}")
+            err_note = f"σ = {format_value(err_b)}  [constant, from residuals]"
+        # Pass 2: weighted fit
+        popt, perr, model, resolved = fit_decay(time_fit, intensity_fit, sigma=sigma_fit, **fit_kw)
+        if not args.bateman:
+            print(f"  Pass 1 (unweighted): τ = {format_time(popt1[1], perr1[1])}")
+            print(f"  Pass 2 (weighted):   τ = {format_time(popt[1], perr[1])}")
 
     plot_decay(
         time, intensity,
@@ -688,6 +758,7 @@ def main():
         gamma=args.gamma,
         title_suffix=args.title,
         sigma_fit=sigma_fit,
+        err_note=err_note,
     )
 
 
