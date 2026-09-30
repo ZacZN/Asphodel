@@ -30,6 +30,16 @@ Bateman options (--bateman mode)
                     Converted to lab frame via T_lab = T × γ, then fixes τ_B.
                     Requires --gamma.
 
+Joint parent + daughter mode (--parent-window)
+  --parent-window FMIN FMAX
+                    Frequency window of the parent peak; freq_min/freq_max are
+                    the daughter peak. Both windows are fitted simultaneously:
+                      parent   I_P(t) = A·e^{-t/τ_A} + C_A          (offset)
+                      daughter I_D(t) = P·(e^{-t/τ_A} − e^{-t/τ_B}) + B·e^{-t/τ_B}
+                                                                   (no offset)
+                    with τ_A shared. Implies --bateman; the fixed half-life
+                    options still apply. Error bars are estimated per window.
+
 Common options
   --tmin T          Only use time frames at or after T seconds
   --tmax T          Only use time frames at or before T seconds
@@ -114,6 +124,10 @@ def parse_args():
     parser.add_argument("--err-coeffs", type=float, nargs=2, default=None, metavar=("A", "B"),
                         help="Error bars σ = A·I + B on each intensity point; used as "
                              "absolute 1σ weights in the fit")
+    parser.add_argument("--parent-window", type=float, nargs=2, default=None, metavar=("FMIN", "FMAX"),
+                        help="Joint Bateman fit: parent peak frequency window. The positional "
+                             "freq_min/freq_max are then the daughter window. Parent fitted as "
+                             "A·e^(-t/τ_A) + C_A, daughter as Bateman growth with no offset, τ_A shared.")
     parser.add_argument("--unweighted", action="store_true",
                         help="Single unweighted fit, no error bars")
     parser.add_argument("--time-avg", type=int, metavar="N", default=None,
@@ -595,6 +609,265 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
 
 
 # ---------------------------------------------------------------------------
+# Joint parent + daughter Bateman fit (two frequency windows)
+# ---------------------------------------------------------------------------
+#
+#   Parent window   : I_P(t) = A·e^{-t/τ_A} + C_A                 (with offset)
+#   Daughter window : I_D(t) = P·(e^{-t/τ_A} − e^{-t/τ_B}) + B·e^{-t/τ_B}
+#                                                                 (no offset)
+#
+# τ_A is shared, so it is constrained by both the parent's decay and the
+# daughter's growth. The daughter has no offset because for τ_B ≫ the
+# measurement, B·e^{-t/τ_B} is nearly flat and would be degenerate with one.
+# For τ_A < τ_B the growth term needs P < 0.
+
+_JOINT_NAMES = ["A", "tau_A", "C_A", "P", "tau_B", "B"]
+
+
+def _joint_curves(tP, tD, A, tau_A, C_A, P, tau_B, B):
+    IP = A * np.exp(-tP / tau_A) + C_A
+    ID = P * (np.exp(-tD / tau_A) - np.exp(-tD / tau_B)) + B * np.exp(-tD / tau_B)
+    return IP, ID
+
+
+def fit_bateman_joint(tP, IP, tD, ID, tau_A_fixed=None, tau_B_fixed=None,
+                      sigmaP=None, sigmaD=None):
+    """
+    Simultaneous fit of the parent and daughter windows.
+
+    Returns
+    -------
+    vals  : dict name → value (all six parameters)
+    errs  : dict name → 1σ error (0 for fixed)
+    free  : list of fitted parameter names
+    pcov  : covariance of the free parameters (order = free)
+    """
+    nP   = len(tP)
+    span = max(tP[-1], tD[-1]) - min(tP[0], tD[0])
+
+    # Initial guesses
+    C_A0 = float(np.min(IP))
+    A0   = max(float(np.max(IP)) - C_A0, 1e-30)
+    above = np.nonzero(IP - C_A0 < A0 / np.e)[0]
+    tau_A0 = float(tP[above[0]] - tP[0]) if len(above) and tP[above[0]] > tP[0] else span / 5
+    tau_A0 = max(tau_A0, span / 200)
+    tau_B0 = 10 * span
+    B0   = float(ID[0])
+    P0   = -max(float(np.max(ID)) - B0, 1e-30)
+
+    guess  = dict(A=A0, tau_A=tau_A0, C_A=C_A0, P=P0, tau_B=tau_B0, B=B0)
+    lower  = dict(A=0, tau_A=0, C_A=-np.inf, P=-np.inf, tau_B=0, B=-np.inf)
+    fixed  = {}
+    if tau_A_fixed is not None:
+        fixed["tau_A"] = tau_A_fixed
+    if tau_B_fixed is not None:
+        fixed["tau_B"] = tau_B_fixed
+    free = [n for n in _JOINT_NAMES if n not in fixed]
+
+    def unpack(args):
+        v = dict(fixed); v.update(zip(free, args)); return v
+
+    def f(x, *args):
+        v = unpack(args)
+        IPm, IDm = _joint_curves(x[:nP], x[nP:], **v)
+        return np.concatenate([IPm, IDm])
+
+    x = np.concatenate([tP, tD])
+    y = np.concatenate([IP, ID])
+    kw = {}
+    if sigmaP is not None:
+        kw = dict(sigma=np.concatenate([sigmaP, sigmaD]), absolute_sigma=True)
+    try:
+        popt, pcov = curve_fit(
+            f, x, y,
+            p0=[guess[n] for n in free],
+            bounds=([lower[n] for n in free], [np.inf] * len(free)),
+            maxfev=50_000, **kw,
+        )
+    except RuntimeError as exc:
+        sys.exit(f"Joint Bateman fit failed: {exc}")
+
+    vals = unpack(popt)
+    perr = np.sqrt(np.diag(pcov))
+    errs = {n: 0.0 for n in _JOINT_NAMES}
+    errs.update(zip(free, perr))
+    return vals, errs, free, pcov
+
+
+def _window_intensity(freq, power, time, fmin, fmax, n_avg, skip):
+    """Integrate a frequency window, time-average, then apply --skip."""
+    fs, ps = slice_freq(freq, power, fmin, fmax)
+    I = integrate_band(fs, ps)
+    t = time
+    if n_avg > 1:
+        T_trim = (len(I) // n_avg) * n_avg
+        I = I[:T_trim].reshape(-1, n_avg).mean(axis=1)
+        t = t[:T_trim].reshape(-1, n_avg).mean(axis=1)
+    s0, s1 = skip
+    end = len(t) - s1 if s1 > 0 else len(t)
+    return t[s0:end], I[s0:end], ps.shape[1]
+
+
+def run_joint(args, halflife_isomer_lab, halflife_groundstate_lab):
+    pmin, pmax = args.parent_window
+    dmin, dmax = args.freq_min, args.freq_max
+    n_avg = args.time_avg if (args.time_avg is not None and args.time_avg > 1) else 1
+
+    freq, time, power = load(args.file)
+    tP_all, IP_all, nbP = _window_intensity(freq, power, time, pmin, pmax, n_avg, args.skip)
+    tD_all, ID_all, nbD = _window_intensity(freq, power, time, dmin, dmax, n_avg, args.skip)
+    print(f"Parent window   [{pmin:,.0f} – {pmax:,.0f} Hz]: {nbP} bins")
+    print(f"Daughter window [{dmin:,.0f} – {dmax:,.0f} Hz]: {nbD} bins")
+    if n_avg > 1:
+        print(f"Time rebinned: averaged {n_avg} frames")
+
+    mask = np.ones(len(tP_all), dtype=bool)
+    if args.tmin is not None:
+        mask &= tP_all >= args.tmin
+    if args.tmax is not None:
+        mask &= tP_all <= args.tmax
+    tP, IP = tP_all[mask], IP_all[mask]
+    tD, ID = tD_all[mask], ID_all[mask]
+
+    tau_A_fixed = halflife_isomer_lab      / np.log(2) if halflife_isomer_lab      is not None else None
+    tau_B_fixed = halflife_groundstate_lab / np.log(2) if halflife_groundstate_lab is not None else None
+    n_free = 6 - (tau_A_fixed is not None) - (tau_B_fixed is not None)
+    if 2 * len(tP) <= n_free:
+        sys.exit(f"Only {len(tP)} points per window — too few for {n_free} free parameters.")
+    print(f"Joint Bateman fit: {len(tP)} points per window from t={tP[0]:.2f} s "
+          f"to t={tP[-1]:.2f} s  ({n_free} free parameters)")
+
+    # ---- Error bars
+    sigmaP = sigmaD = None
+    err_note = None
+    if args.err_coeffs is not None:
+        a, b = args.err_coeffs
+        sigmaP = (a * IP + b) / np.sqrt(n_avg)
+        sigmaD = (a * ID + b) / np.sqrt(n_avg)
+        if np.any(sigmaP <= 0) or np.any(sigmaD <= 0):
+            sys.exit(f"Error bars σ = {a:g}·I + {b:g} are ≤ 0 for some points. Adjust the coefficients.")
+        err_note = f"σ = {a:g}·I + {b:g}" + (f" (÷√{n_avg})" if n_avg > 1 else "") + "  [manual, both windows]"
+        vals, errs, free, pcov = fit_bateman_joint(tP, IP, tD, ID, tau_A_fixed, tau_B_fixed, sigmaP, sigmaD)
+    else:
+        vals, errs, free, pcov = fit_bateman_joint(tP, IP, tD, ID, tau_A_fixed, tau_B_fixed)
+        if not args.unweighted:
+            # Two-pass: separate error model per window from the pass-1 residuals
+            v1 = vals
+            nP_par = sum(n in free for n in ("A", "tau_A", "C_A"))
+            nD_par = sum(n in free for n in ("P", "tau_A", "tau_B", "B"))
+            mP = lambda t, *_: _joint_curves(t, t, **v1)[0]
+            mD = lambda t, *_: _joint_curves(t, t, **v1)[1]
+            sigmaP, aP, bP, kP = estimate_error_model(tP, IP, np.zeros(nP_par), mP)
+            sigmaD, aD, bD, kD = estimate_error_model(tD, ID, np.zeros(nD_par), mD)
+            def _desc(a, b, k):
+                return (f"{format_value(a)}·I + {format_value(b)}" if k == "linear"
+                        else f"{format_value(b)} (const)")
+            print(f"Error model from residuals — parent: σ = {_desc(aP, bP, kP)};  "
+                  f"daughter: σ = {_desc(aD, bD, kD)}")
+            print(f"  Pass 1 (unweighted): τ_A = {format_time(vals['tau_A'], errs['tau_A'])}, "
+                  f"τ_B = {format_time(vals['tau_B'], errs['tau_B'])}")
+            err_note = "σ from residuals (per window)"
+            vals, errs, free, pcov = fit_bateman_joint(tP, IP, tD, ID, tau_A_fixed, tau_B_fixed, sigmaP, sigmaD)
+
+    # ---- χ² and τ_A–τ_B correlation
+    IPm, IDm = _joint_curves(tP, tD, **vals)
+    chi2 = ndf = None
+    if sigmaP is not None:
+        chi2 = float(np.sum(((IP - IPm) / sigmaP) ** 2) + np.sum(((ID - IDm) / sigmaD) ** 2))
+        ndf  = 2 * len(tP) - len(free)
+    corr = None
+    if "tau_A" in free and "tau_B" in free:
+        i, j = free.index("tau_A"), free.index("tau_B")
+        corr = pcov[i, j] / np.sqrt(pcov[i, i] * pcov[j, j])
+
+    plot_joint(args, tP, IP, tD, ID, sigmaP, sigmaD, vals, errs,
+               tau_A_fixed is not None, tau_B_fixed is not None,
+               chi2, ndf, corr, err_note, (pmin, pmax), (dmin, dmax))
+
+
+def plot_joint(args, tP, IP, tD, ID, sigmaP, sigmaD, vals, errs,
+               fixA, fixB, chi2, ndf, corr, err_note, pwin, dwin):
+    gamma = args.gamma
+    ln2   = np.log(2)
+    hlA, dhlA = vals["tau_A"] * ln2, (None if fixA else errs["tau_A"] * ln2)
+    hlB, dhlB = vals["tau_B"] * ln2, (None if fixB else errs["tau_B"] * ln2)
+
+    plt.rcParams.update({"font.size": 20})
+    fig, (axP, axD) = plt.subplots(2, 1, figsize=(16, 11), sharex=True)
+    t0 = min(tP[0], tD[0]); t1 = max(tP[-1], tD[-1])
+    td = np.linspace(t0, t1, 2000)
+    IPd, IDd = _joint_curves(td, td, **vals)
+
+    for ax, t, I, s, Id, lab, loc in ((axP, tP, IP, sigmaP, IPd, "Parent",   "upper center"),
+                                      (axD, tD, ID, sigmaD, IDd, "Daughter", "center right")):
+        if s is not None:
+            ax.errorbar(t, I, yerr=s, fmt="o", ms=3, color="black", ecolor="black",
+                        elinewidth=0.8, capsize=2.5, capthick=0.8, label=f"{lab} data")
+        else:
+            ax.plot(t, I, "o", ms=3, color="black", label=f"{lab} data")
+        ax.plot(td, Id, "-", lw=2, color="#dd4444", label="Joint fit")
+        ax.set_ylabel("Integrated power\n(arb. units)", fontsize=20)
+        ax.tick_params(labelsize=18)
+        ax.legend(fontsize=16, loc=loc)
+
+    fix = lambda f: "  [fixed]" if f else ""
+    com = lambda k, hl, dhl: (f"\n$t_{{1/2,{k}}}$ (c.o.m.) = {format_time(hl / gamma, dhl / gamma if dhl else None)}"
+                              if gamma is not None else "")
+    txtP = (r"$I_P(t) = A \cdot e^{-t/\tau_A} + C_A$" +
+            f"\n$A$     = {format_value(vals['A'], errs['A'])}"
+            f"\n$\\tau_A$ = {format_time(vals['tau_A'], None if fixA else errs['tau_A'])}{fix(fixA)}"
+            f"\n$C_A$   = {format_value(vals['C_A'], errs['C_A'])}"
+            f"\n\n$t_{{1/2,A}}$ (lab)   = {format_time(hlA, dhlA)}" + com("A", hlA, dhlA))
+    txtD = (r"$I_D(t) = P \cdot (e^{-t/\tau_A} - e^{-t/\tau_B}) + B \cdot e^{-t/\tau_B}$" +
+            f"\n$P$     = {format_value(vals['P'], errs['P'])}"
+            f"\n$\\tau_B$ = {format_time(vals['tau_B'], None if fixB else errs['tau_B'])}{fix(fixB)}"
+            f"\n$B$     = {format_value(vals['B'], errs['B'])}"
+            f"\n\n$t_{{1/2,B}}$ (lab)   = {format_time(hlB, dhlB)}" + com("B", hlB, dhlB))
+    if chi2 is not None:
+        txtD += f"\n\n$\\chi^2/ndf$ = {chi2:.4g}/{ndf} = {chi2 / ndf if ndf > 0 else float('nan'):.3g}"
+    if corr is not None:
+        txtD += f"\n$\\rho(\\tau_A, \\tau_B)$ = {corr:+.2f}"
+    if err_note:
+        txtD += f"\n{err_note}"
+    box = dict(boxstyle="round,pad=0.5", facecolor="white", edgecolor="0.7", alpha=0.9)
+    axP.text(0.97, 0.95, txtP, transform=axP.transAxes, va="top", ha="right",
+             fontsize=14, family="monospace", bbox=box)
+    axD.text(0.60, 0.05, txtD, transform=axD.transAxes, va="bottom", ha="right",
+             fontsize=14, family="monospace", bbox=box)
+
+    title = (f"{os.path.basename(args.file)}   joint Bateman   "
+             f"parent [{pwin[0]:,.0f} – {pwin[1]:,.0f} Hz]   "
+             f"daughter [{dwin[0]:,.0f} – {dwin[1]:,.0f} Hz]")
+    if args.title:
+        title += f"   {args.title}"
+    axP.set_title(title, fontsize=18, pad=8)
+    axD.set_xlabel("Time (s)", fontsize=22)
+    axD.set_xlim(left=0)
+    fig.tight_layout()
+    plt.show()
+
+    # Console summary
+    print(f"\n{'─'*60}")
+    print("  Joint fit:  I_P = A·e^(-t/τ_A) + C_A")
+    print("              I_D = P·(e^(-t/τ_A) - e^(-t/τ_B)) + B·e^(-t/τ_B)")
+    for n, lab in (("A", "A"), ("C_A", "C_A"), ("P", "P"), ("B", "B")):
+        print(f"  {lab:<6} = {format_value(vals[n], errs[n])}")
+    print(f"  τ_A    = {format_time(vals['tau_A'], None if fixA else errs['tau_A'])}{fix(fixA)}")
+    print(f"  τ_B    = {format_time(vals['tau_B'], None if fixB else errs['tau_B'])}{fix(fixB)}")
+    print(f"  t½_A (lab)    = {format_time(hlA, dhlA)}")
+    if gamma is not None:
+        print(f"  t½_A (c.o.m.) = {format_time(hlA / gamma, dhlA / gamma if dhlA else None)}")
+    print(f"  t½_B (lab)    = {format_time(hlB, dhlB)}")
+    if gamma is not None:
+        print(f"  t½_B (c.o.m.) = {format_time(hlB / gamma, dhlB / gamma if dhlB else None)}")
+    if chi2 is not None:
+        print(f"  χ²/ndf        = {chi2:.4g}/{ndf} = {chi2 / ndf if ndf > 0 else float('nan'):.3g}")
+    if corr is not None:
+        print(f"  ρ(τ_A, τ_B)   = {corr:+.2f}")
+    print(f"{'─'*60}\n")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -603,6 +876,9 @@ def main():
 
     if not os.path.isfile(args.file):
         sys.exit(f"Error: file not found — {args.file}")
+
+    if args.parent_window is not None:
+        args.bateman = True          # joint mode is always a Bateman fit
 
     if (args.halflife_isomer is not None or args.halflife_groundstate is not None):
         if not args.bateman:
@@ -624,6 +900,10 @@ def main():
     else:
         halflife_isomer_lab      = None
         halflife_groundstate_lab = None
+
+    if args.parent_window is not None:
+        run_joint(args, halflife_isomer_lab, halflife_groundstate_lab)
+        return
 
     freq, time, power = load(args.file)
     freq_s, power_s   = slice_freq(freq, power, args.freq_min, args.freq_max)
