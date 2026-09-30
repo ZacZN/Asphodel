@@ -217,8 +217,8 @@ def detect_peaks(ff, pp, p):
     else:
         widths = np.array([])
 
-    if p["min_width_hz"] > 0 and len(idx):
-        k = widths >= p["min_width_hz"]
+    if p["min_width_bins"] > 0 and len(idx):
+        k = widths / bin_hz >= p["min_width_bins"]
         idx, prom, prom_snr, h_snr, widths = idx[k], prom[k], prom_snr[k], h_snr[k], widths[k]
 
     dist = hz_to_bins(p["min_distance_hz"], bin_hz)
@@ -417,7 +417,7 @@ DEFAULTS = dict(
     k_prom             = 5.0,
     k_height           = 5.0,
     rel_noise          = 0.05,
-    min_width_hz       = 0,
+    min_width_bins     = 0,
     min_distance_hz    = 0,
     shoulders          = ["on"],
     shoulder_scale_hz  = 10,
@@ -492,7 +492,7 @@ def parse_settings(raw):
     s["k_prom"] = _f(raw.get("k_prom"), "Prominence threshold", 0)
     s["k_height"] = _f(raw.get("k_height"), "Height threshold", 0)
     s["rel_noise"] = _f(raw.get("rel_noise"), "Relative noise", 0)
-    s["min_width_hz"] = _f(raw.get("min_width_hz"), "Min width", 0)
+    s["min_width_bins"] = _f(raw.get("min_width_bins"), "Min width", 0)
     s["min_distance_hz"] = _f(raw.get("min_distance_hz"), "Min separation", 0)
     s["shoulders"] = bool(raw.get("shoulders"))
     s["shoulder_scale_hz"] = _f(raw.get("shoulder_scale_hz"), "Shoulder scale", 0)
@@ -950,7 +950,8 @@ sidebar = html.Div([
         help="Keep peaks rising ≥ k·σ above the local baseline"),
     inp("Relative noise r", "rel_noise", True,
         help="σ = √(σ_bg² + (r·height)²). Suppresses noise spikes on top of big peaks. 0 = off"),
-    inp("Min width FWHM (Hz)  [0 = off]", "min_width_hz", True),
+    inp("Min width FWHM (bins)  [0 = off]", "min_width_bins", True,
+        help="Width at half prominence, in frequency bins (can be fractional)"),
     inp("Min separation (Hz)  [0 = off]", "min_distance_hz", True),
     check("Detect shoulders (merged peaks)", "shoulders"),
     inp("Shoulder scale s (Hz)", "shoulder_scale_hz", True,
