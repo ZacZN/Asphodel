@@ -10,3 +10,7 @@ __pycache__/
 
 # Local config (contains machine-specific paths)
 viewer_config.json
+
+
+scans/
+scanner_config.json
