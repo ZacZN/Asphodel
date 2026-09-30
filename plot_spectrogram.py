@@ -332,6 +332,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
     _saved_pmax   = str(_prefs.get("parentMax", ""))
     _chk_bateman    = "checked" if _prefs.get("bateman")    else ""
     _chk_unweighted = "checked" if _prefs.get("unweighted") else ""
+    _chk_bars3d     = "" if _prefs.get("bars3d") == "0" else "checked"   # bars by default
 
     z_label = "Power (dB)" if log_scale else "Power (linear)"
 
@@ -521,6 +522,12 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
       <span>Scale</span>
       <input type="checkbox" id="dbCheck" {db_checked} onchange="updateSurface()">
       <label for="dbCheck">dB</label>
+    </div>
+    <div class="opt-grp">
+      <span>3D</span>
+      <input type="checkbox" id="bars3d" {_chk_bars3d}
+             onchange="savePref('bars3d', this.checked ? '1' : '0'); _renderSurface()">
+      <label for="bars3d" title="Draw each point of the 3-D view as a flat-topped square bar (like the heatmap cells) instead of a smooth surface">bars</label>
     </div>
     <div class="opt-grp">
       <span>1D overlay</span>
@@ -907,22 +914,73 @@ function updateTitle() {{
   if (_heatReady) Plotly.relayout('heatPlot', {{'title.text': t}});
 }}
 
+// ── 3-D surface: smooth or square bars ──────────────────────────────────────
+// Bars are drawn as a "stepped" surface: every grid point becomes a flat
+// square top spanning its cell, with near-vertical walls to its neighbours.
+// Each axis is expanded to two vertices per cell, inset by a tiny epsilon so
+// adjacent cells' vertices stay distinct.
+function _cellEdges(c) {{
+  var n = c.length;
+  if (n === 1) return [c[0] - 0.5, c[0] + 0.5];
+  var e = [c[0] - (c[1] - c[0]) / 2];
+  for (var i = 0; i < n - 1; i++) e.push((c[i] + c[i + 1]) / 2);
+  e.push(c[n - 1] + (c[n - 1] - c[n - 2]) / 2);
+  return e;
+}}
+
+function _stepAxis(c) {{
+  var e = _cellEdges(c), out = [];
+  for (var i = 0; i < c.length; i++) {{
+    var eps = (e[i + 1] - e[i]) * 1e-4;   // works for increasing or decreasing axes
+    out.push(e[i] + eps, e[i + 1] - eps);
+  }}
+  return out;
+}}
+
+function _renderSurface(rebinned) {{
+  if (!rebinned) {{
+    var n = Math.max(1, Math.round(+document.getElementById('nAvg').value || 1));
+    rebinned = rebin(Z_RAW, T_RAW, n);
+  }}
+  var useDb  = document.getElementById('dbCheck').checked;
+  var bars   = document.getElementById('bars3d').checked;
+  var zLabel = useDb ? 'Power (dB)' : 'Power (linear)';
+  var Zt     = transpose(useDb ? toDb(rebinned.Z) : rebinned.Z);   // (F_desc, T)
+  var fDesc  = F_PLOT.slice().reverse();                            // matches Z_RAW's flipped freq
+  var upd;
+  if (bars) {{
+    var t = rebinned.t, nT = t.length, nF = fDesc.length;
+    var Zs = [], cd = [];
+    for (var j = 0; j < nF; j++) {{
+      var zr = new Array(2 * nT), cr = new Array(2 * nT), src = Zt[j];
+      for (var i = 0; i < nT; i++) {{
+        zr[2 * i] = zr[2 * i + 1] = src[i];
+        cr[2 * i] = cr[2 * i + 1] = [t[i], fDesc[j]];
+      }}
+      Zs.push(zr, zr.slice()); cd.push(cr, cr);
+    }}
+    upd = {{
+      x: [_stepAxis(t)], y: [_stepAxis(fDesc)], z: [Zs], customdata: [cd],
+      hovertemplate: ['Time: %{{customdata[0]:.2f}} s<br>Freq: %{{customdata[1]:,.0f}} Hz<br>' +
+                      zLabel + ': %{{z:.2f}}<extra></extra>']
+    }};
+  }} else {{
+    upd = {{
+      x: [rebinned.t], y: [fDesc], z: [Zt], customdata: [null],
+      hovertemplate: ['Time: %{{x:.2f}} s<br>Freq: %{{y:,.0f}} Hz<br>' + zLabel + ': %{{z:.2f}}<extra></extra>']
+    }};
+  }}
+  upd['colorbar.title.text'] = [zLabel];
+  Plotly.restyle('specPlot', upd, [0]);
+  Plotly.relayout('specPlot', {{'scene.zaxis.title.text': zLabel}});
+}}
+
 function updateSurface() {{
   var n = Math.max(1, Math.round(+document.getElementById('nAvg').value || 1));
   document.getElementById('nAvg').value = n;
   var useDb = document.getElementById('dbCheck').checked;
   var rebinned = rebin(Z_RAW, T_RAW, n);
-  var Zdisp = useDb ? toDb(rebinned.Z) : rebinned.Z;
-  var Zt = transpose(Zdisp);
-  var zLabel = useDb ? 'Power (dB)' : 'Power (linear)';
-  var hoverTmpl = 'Time: %{{x:.2f}} s<br>Freq: %{{y:,.0f}} Hz<br>' + zLabel + ': %{{z:.2f}}<extra></extra>';
-  Plotly.restyle('specPlot', {{
-    x: [rebinned.t],
-    z: [Zt],
-    'colorbar.title.text': [zLabel],
-    hovertemplate: [hoverTmpl]
-  }}, [0]);
-  Plotly.relayout('specPlot', {{'scene.zaxis.title.text': zLabel}});
+  _renderSurface(rebinned);
   resetTimeSliders(rebinned.t);
   var T = Z_RAW.length;
   var discarded = T % n;
@@ -1019,6 +1077,7 @@ _fetchSpec1d();
 (function() {{
   var n = Math.max(1, Math.round(+document.getElementById('nAvg').value || 1));
   var rebinned = rebin(Z_RAW, T_RAW, n);
+  if (document.getElementById('bars3d').checked) _renderSurface(rebinned);
   _rescaleToWindow(rebinned.Z, rebinned.t);
 }})();
 </script>
@@ -1200,7 +1259,7 @@ def serve(html, state):
                     pref_val = body.get("value", "")
                     if pref_key not in ("gamma", "errA", "errB", "hlIso", "hlGs",
                                         "skipStart", "skipEnd", "bateman", "unweighted",
-                                        "parentMin", "parentMax"):
+                                        "parentMin", "parentMax", "bars3d"):
                         raise ValueError(f"unknown pref key: {pref_key!r}")
                     prefs = read_prefs()
                     if pref_val == "" or pref_val is None:
