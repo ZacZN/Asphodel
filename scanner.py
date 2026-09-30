@@ -54,6 +54,7 @@ import hashlib
 import sqlite3
 import datetime
 import threading
+import logging
 import traceback
 from functools import lru_cache
 
@@ -1093,7 +1094,8 @@ app.layout = html.Div([
         dcc.Tab(label="Results", value="results", style=TAB_STYLE, selected_style=TAB_SEL,
                 children=[results_tab]),
     ], style={"height": "42px"}),
-    dcc.Interval(id="poll", interval=700),
+    # Polls the background scan; only enabled while a scan is running
+    dcc.Interval(id="poll", interval=700, disabled=True),
     dcc.Store(id="scan-finished"),
 ])
 
@@ -1218,17 +1220,20 @@ def cancel_scan(_):
     Output("progress-bar", "style"),
     Output("scan-status", "children"),
     Output("scan-finished", "data"),
+    Output("poll", "disabled"),
     Input("poll", "n_intervals"),
+    Input("action-msg", "children"),   # fires when a scan is started -> enables polling
     State("progress-bar", "style"),
     State("scan-finished", "data"),
 )
-def poll_scan(_, style, finished):
+def poll_scan(_, _started, style, finished):
     with SCAN_LOCK:
         st = dict(SCAN_STATE)
     pct = 100.0 * st["done"] / st["total"] if st["total"] else (100.0 if not st["running"] and st["db_path"] else 0)
     style = {**(style or {}), "width": f"{pct:.1f}%"}
     new_finished = st["db_path"] if (not st["running"] and st["db_path"]) else None
-    return style, st["msg"], (new_finished if new_finished != finished else dash.no_update)
+    return (style, st["msg"], (new_finished if new_finished != finished else dash.no_update),
+            not st["running"])
 
 
 # ===========================================================================
@@ -1437,6 +1442,8 @@ def show_snippet(selected, half_width, rows, path):
 # ===========================================================================
 if __name__ == "__main__":
     import webbrowser
+    # Hide the per-request access log lines; warnings and errors are still shown
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)
     url = "http://127.0.0.1:8052/"
     print(f"Starting Theia scanner at {url}")
     threading.Timer(1.0, lambda: webbrowser.open(url)).start()
