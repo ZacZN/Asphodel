@@ -25,9 +25,10 @@ the same hash.
 
 Peak detection (no smoothing is ever applied to the data)
 ---------------------------------------------------------
-1.  Noise: the spectrum is split into blocks of `noise_block_hz`; the
-    median (local baseline b) and the MAD-based sigma (σ_bg) of each block are
-    interpolated across the spectrum.  Signal-dependent noise on top of large
+1.  Noise: bins above -min(spectrum) * X (`noise_cut_factor`, 0 = off) are
+    treated as signal and excluded.  The rest of the spectrum is split into
+    blocks of `noise_block_hz`; the median (local baseline b) and the MAD-based
+    sigma (σ_bg) of each block are interpolated across the spectrum.  Signal-dependent noise on top of large
     peaks is modelled as  σ = sqrt(σ_bg² + (r · (p − b))²), where r is the
     "relative noise" parameter.
 2.  Maxima: every local maximum in the raw data is a candidate.  It is kept if
@@ -149,16 +150,41 @@ def hz_to_bins(hz, bin_hz):
     return max(1, int(round(hz / bin_hz)))
 
 
-def estimate_noise(pp, block_bins):
-    """Blockwise median (baseline) and MAD sigma, interpolated per bin."""
+def noise_cutoff(pp, factor):
+    """Upper cutoff for the noise estimate: -min(pp) * factor.
+
+    In a baseline-subtracted spectrum the most negative value is set by the
+    noise alone, so bins above (-min * factor) are taken to be signal and are
+    excluded from the noise estimate.  Returns None (no cut) if factor <= 0 or
+    the spectrum has no negative values.
+    """
+    pmin = float(np.min(pp))
+    if factor is None or factor <= 0 or pmin >= 0:
+        return None
+    return -pmin * factor
+
+
+def estimate_noise(pp, block_bins, cutoff=None):
+    """Blockwise median (baseline) and MAD sigma, interpolated per bin.
+
+    Bins above `cutoff` (peaks) are excluded from the statistics.  A block with
+    too few bins left after the cut (i.e. lying inside a peak) is skipped and
+    its values are interpolated from the neighbouring blocks.
+    """
     n = len(pp)
+    MIN_BINS = 10
 
     def _stats(seg):
+        if cutoff is not None:
+            seg = seg[seg <= cutoff]
+        if len(seg) < MIN_BINS:
+            return None
         med = np.median(seg)
         sig = 1.4826 * np.median(np.abs(seg - med))
         return med, sig
 
-    g_med, g_sig = _stats(pp)
+    g = _stats(pp)
+    g_med, g_sig = g if g is not None else (0.0, 0.0)
     if g_sig <= 0:
         g_sig = np.std(pp) or 1.0
     if block_bins <= 0 or block_bins * 2 > n:
@@ -168,10 +194,15 @@ def estimate_noise(pp, block_bins):
     edges = np.linspace(0, n, nblocks + 1).astype(int)
     centres, meds, sigs = [], [], []
     for a, b in zip(edges[:-1], edges[1:]):
-        m, s = _stats(pp[a:b])
+        st = _stats(pp[a:b])
+        if st is None:
+            continue
+        m, s = st
         centres.append(0.5 * (a + b - 1))
         meds.append(m)
         sigs.append(s if s > 0 else g_sig)
+    if not centres:
+        return np.full(n, g_med), np.full(n, g_sig)
     x = np.arange(n)
     return np.interp(x, centres, meds), np.interp(x, centres, sigs)
 
@@ -190,7 +221,8 @@ def detect_peaks(ff, pp, p):
         return pd.DataFrame(columns=cols), np.zeros(n), np.ones(n)
 
     bin_hz = (ff[-1] - ff[0]) / (n - 1)
-    base, sig_bg = estimate_noise(pp, hz_to_bins(p["noise_block_hz"], bin_hz))
+    cutoff = noise_cutoff(pp, p["noise_cut_factor"])
+    base, sig_bg = estimate_noise(pp, hz_to_bins(p["noise_block_hz"], bin_hz), cutoff)
     r = p["rel_noise"]
 
     def sig_at(level, sbg):
@@ -414,6 +446,7 @@ DEFAULTS = dict(
     corr_b             = _viewer_cfg.get("corr_b", 0),
     corr_c             = _viewer_cfg.get("corr_c", 0),
     noise_block_hz     = 2000,
+    noise_cut_factor   = 0,
     k_prom             = 5.0,
     k_height           = 5.0,
     rel_noise          = 0.05,
@@ -489,6 +522,7 @@ def parse_settings(raw):
     s["corr_b"] = _f(raw.get("corr_b"), "b", 0)
     s["corr_c"] = _f(raw.get("corr_c"), "c", 0)
     s["noise_block_hz"] = _f(raw.get("noise_block_hz"), "Noise block", 0)
+    s["noise_cut_factor"] = _f(raw.get("noise_cut_factor"), "Noise cutoff factor", 0)
     s["k_prom"] = _f(raw.get("k_prom"), "Prominence threshold", 0)
     s["k_height"] = _f(raw.get("k_height"), "Height threshold", 0)
     s["rel_noise"] = _f(raw.get("rel_noise"), "Relative noise", 0)
@@ -944,6 +978,8 @@ sidebar = html.Div([
     *section("Peak detection (raw data)"),
     inp("Noise block (Hz)", "noise_block_hz", True,
         help="Block size for the local median / MAD noise estimate. 0 = global"),
+    inp("Noise cutoff factor X  [0 = off]", "noise_cut_factor", True,
+        help="Bins above −min(spectrum)·X are excluded from the noise estimate"),
     inp("Prominence threshold (σ)", "k_prom", True,
         help="Keep maxima with prominence ≥ k·σ"),
     inp("Height threshold (σ)", "k_height", True,
@@ -1158,11 +1194,13 @@ def do_preview(_, fname, *values):
     n_max = int((peaks["kind"] == "max").sum()) if len(peaks) else 0
     n_sh = int((peaks["kind"] == "shoulder").sum()) if len(peaks) else 0
     n_id_peaks = 0 if m is None or not len(m) else m["peak_row"].nunique()
+    cut = noise_cutoff(pp, s["noise_cut_factor"])
+    cut_txt = "off" if cut is None else f"{cut:.3g}"
     ref_txt = (f"{r['ref_used']:.1f} Hz (shift {r['ref_used'] - s['ref_frequency']:+.1f} Hz, {r['status']})"
                if r["ref_used"] is not None else "NOT FOUND in search window")
     info = (f"{fname}:  {n_max} maxima + {n_sh} shoulders  |  reference {ref_txt}  |  "
             f"{0 if m is None else len(m)} identifications on {n_id_peaks} peaks  |  "
-            f"median σ = {np.median(r['sig']):.3g}  |  {dt:.2f} s")
+            f"median σ = {np.median(r['sig']):.3g}  |  noise cutoff = {cut_txt}  |  {dt:.2f} s")
     fig = spectrum_figure(ff, pp, peaks, r["base"], r["sig"], s, r, title=fname)
     rows = [] if m is None else _fmt_records(m.sort_values("peak_freq"))
     return fig, rows, info, ""
