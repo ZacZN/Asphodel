@@ -34,18 +34,20 @@ def compute_frequencies_multi(df, mq_col, ref_ion_name, ref_freq, gamma_t, harmo
     for h in harmonics:
         ref_mq = result.loc[ref_ion_name, mq_col]
 
-        def _direct(row_mq, _h=h, _ref_mq=ref_mq):
+        def _direct(row_mq, _h=h, _ref_mq=ref_mq, _corr=correction_enabled):
             if row_mq == _ref_mq:
                 f_true = ref_freq
             else:
                 delta_mq = row_mq - _ref_mq
                 f_true = ref_freq + delta_f(ref_freq, _ref_mq, delta_mq, gamma_t)
             # Apply correction to the true (revolution) frequency before harmonic scaling
-            if correction_enabled:
+            if _corr:
                 f_true = apply_correction(f_true, corr_a, corr_b, corr_c)
             return f_true * _h
 
         result[f"frequency_direct_{h}"] = result[mq_col].apply(_direct)
+        # Same frequency without the 2nd-order correction (for the tooltip)
+        result[f"frequency_uncorr_{h}"] = result[mq_col].apply(_direct, _corr=False)
     return result
 
 
@@ -243,8 +245,12 @@ def build_figure(file_path, spectrum_name, ref_name, ref_frequency, ref_harmonic
                     continue
                 if f < freq_min or f > freq_max:
                     continue
-                label = (build_hover_label(str(ion_name), row)
-                         + f"<br>Harmonic: {h}<br>f_sim = {f:.1f} Hz")
+                label = build_hover_label(str(ion_name), row) + f"<br>Harmonic: {h}"
+                if correction_enabled:
+                    label += (f"<br>f_sim (uncorrected) = {row[f'frequency_uncorr_{h}']:.1f} Hz"
+                              f"<br>f_sim (corrected) = {f:.1f} Hz")
+                else:
+                    label += f"<br>f_sim = {f:.1f} Hz"
                 seg_x = [f] * n_points + [None]
                 seg_y = list(y_range)  + [None]
                 seg_h = [label] * n_points + [None]
