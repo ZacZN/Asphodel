@@ -211,7 +211,9 @@ def build_figure(file_path, spectrum_name, ref_name, ref_frequency, ref_harmonic
         fig.add_trace(go.Scattergl(
             x=ff, y=pp,
             mode="lines",
-            line=dict(shape="hv", color="black", width=1),
+            # "hvh" centres each step on its frequency value (vertical edges
+            # halfway between bins); "hv" would start each step at its value.
+            line=dict(shape="hvh", color="black", width=1),
             name="Spectrum",
             hoverinfo="skip"
         ))
