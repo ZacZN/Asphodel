@@ -94,7 +94,12 @@ def main():
     rms = np.sqrt(np.mean(resid[fit_mask] ** 2))
 
     print(f"\nShifted (s1 (x-x0) + s2 (x-x0)^2): s1 = {a:.6e} ± {da:.2e},  s2 = {b:.6e} ± {db:.2e},  x0 = {x0:.6f} Hz")
-    print(f"Expanded (a x^2 + b x + c): a = {c2:.6e} ± {dc2:.2e},  b = {c1:.6e} ± {dc1:.2e},  c = {c0:.6e} ± {dc0:.2e}")
+    # Full 17 significant figures: the three terms are ~1e6 Hz and cancel near x0,
+    # so truncated coefficients give errors of order 1 Hz
+    print("Expanded (a x^2 + b x + c), full precision:")
+    print(f"  a = {c2:.16e} ± {dc2:.2e}")
+    print(f"  b = {c1:.16e} ± {dc1:.2e}")
+    print(f"  c = {c0:.16e} ± {dc0:.2e}")
     print(f"RMS residual = {rms:.3f} Hz")
 
     # ---- Plot ----
