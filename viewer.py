@@ -534,12 +534,32 @@ app.clientside_callback(
                     // automargin widens the plot margins to fit tick labels,
                     // so margin.l/t understate where the plot area starts.
                     var mx = evt.clientX - rect.left - layout.xaxis._offset;
-                    var my = evt.clientY - rect.top  - layout.yaxis._offset;
                     var x = layout.xaxis.p2d(mx);
-                    var y = layout.yaxis.p2d(my);
-                    if (isFinite(x) && isFinite(y)) {
-                        readout.innerText = 'x: ' + x.toFixed(0) + ' Hz\\ny: ' + y.toExponential(3);
+                    if (!isFinite(x)) return;
+
+                    // Snap to the nearest spectrum bin and report that bin's
+                    // frequency and power (with "hvh" steps, the nearest bin
+                    // is the one drawn under the cursor).
+                    var spec = null;
+                    var fd = gd._fullData || [];
+                    for (var i = 0; i < fd.length; i++) {
+                        if (fd[i].name === 'Spectrum') { spec = fd[i]; break; }
                     }
+                    if (!spec || !spec.x || spec.x.length === 0) return;
+                    var xs = spec.x, ys = spec.y, n = xs.length;
+                    var asc = xs[n - 1] >= xs[0];
+                    // Binary search for the first index whose value is past x
+                    var lo = 0, hi = n - 1;
+                    while (lo < hi) {
+                        var mid = (lo + hi) >> 1;
+                        if (asc ? xs[mid] < x : xs[mid] > x) lo = mid + 1; else hi = mid;
+                    }
+                    var k = lo;
+                    if (k > 0 && Math.abs(xs[k - 1] - x) <= Math.abs(xs[k] - x)) k = k - 1;
+
+                    var bx = Number(xs[k]), by = Number(ys[k]);
+                    readout.innerText = 'x: ' + bx.toFixed(1) + ' Hz\\ny: ' +
+                        (isFinite(by) ? by.toExponential(3) : '---');
                 });
 
                 gd.addEventListener('mouseleave', function() {
