@@ -528,8 +528,11 @@ app.clientside_callback(
                     var layout = gd._fullLayout;
                     if (!layout) return;
                     var rect = gd.getBoundingClientRect();
-                    var mx = evt.clientX - rect.left - layout.margin.l;
-                    var my = evt.clientY - rect.top  - layout.margin.t;
+                    // Use the axes' actual pixel offsets, not layout.margin:
+                    // automargin widens the plot margins to fit tick labels,
+                    // so margin.l/t understate where the plot area starts.
+                    var mx = evt.clientX - rect.left - layout.xaxis._offset;
+                    var my = evt.clientY - rect.top  - layout.yaxis._offset;
                     var x = layout.xaxis.p2d(mx);
                     var y = layout.yaxis.p2d(my);
                     if (isFinite(x) && isFinite(y)) {
