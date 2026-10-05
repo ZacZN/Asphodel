@@ -243,7 +243,8 @@ def build_figure(file_path, spectrum_name, ref_name, ref_frequency, ref_harmonic
                     continue
                 if f < freq_min or f > freq_max:
                     continue
-                label = build_hover_label(str(ion_name), row)
+                label = (build_hover_label(str(ion_name), row)
+                         + f"<br>Harmonic: {h}<br>f_sim = {f:.1f} Hz")
                 seg_x = [f] * n_points + [None]
                 seg_y = list(y_range)  + [None]
                 seg_h = [label] * n_points + [None]
