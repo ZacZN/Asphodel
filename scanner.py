@@ -892,8 +892,10 @@ def empty_fig(msg=""):
 
 def spectrum_figure(ff, pp, peaks, base, sig, s, r, title, xrange=None, highlight_ion=None):
     fig = go.Figure()
+    # "hvh" centres each step on its frequency value (vertical edges halfway
+    # between bins); "hv" would start each step at its value.
     fig.add_trace(go.Scattergl(x=ff, y=pp, mode="lines", name="Spectrum", hoverinfo="skip",
-                               line=dict(shape="hv", color="black", width=1)))
+                               line=dict(shape="hvh", color="black", width=1)))
     if base is not None and sig is not None:
         fig.add_trace(go.Scattergl(x=ff, y=base + s["k_height"] * sig, mode="lines",
                                    name=f"baseline + {s['k_height']:g}σ", hoverinfo="skip",
@@ -1205,6 +1207,8 @@ results_tab = html.Div([
 
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
 app.title = "Theia Scanner"
+# Spectrum graphs that get the bottom-right coordinate readout
+READOUT_GRAPHS = ["preview-graph", "snippet-graph"]
 TAB_STYLE = {"padding": "8px 16px", "fontWeight": "600"}
 TAB_SEL = {**TAB_STYLE, "borderTop": f"3px solid {ACCENT}"}
 
@@ -1219,7 +1223,81 @@ app.layout = html.Div([
     # Polls the background scan; only enabled while a scan is running
     dcc.Interval(id="poll", interval=700, disabled=True),
     dcc.Store(id="scan-finished"),
+    # Hidden hooks used by the clientside callbacks that attach the readout
+    *[html.Div(id=f"_readout-hook-{gid}", style={"display": "none"}) for gid in READOUT_GRAPHS],
 ])
+
+# ---------------------------------------------------------------------------
+# Coordinate readout (bottom-right) for the spectrum graphs
+# ---------------------------------------------------------------------------
+# Snaps to the spectrum bin under the cursor and shows that bin's frequency
+# and power.  Pixel positions are converted using the axes' real offsets
+# (xaxis._offset) rather than layout.margin, because automargin widens the
+# margins to fit tick labels and margin.l would bias the readout.
+_READOUT_JS = """
+function(figure) {
+    var graphId = '%s';
+    setTimeout(function() {
+        var gd = document.querySelector('#' + graphId + ' .js-plotly-plot');
+        if (!gd || gd._theiaReadout) return;
+        gd._theiaReadout = true;
+
+        var readout = document.getElementById('_coord-readout');
+        if (!readout) {
+            readout = document.createElement('div');
+            readout.id = '_coord-readout';
+            readout.style.cssText = [
+                'position:fixed', 'bottom:12px', 'right:16px',
+                'background:rgba(30,30,30,0.80)', 'color:#e8e8e8',
+                'padding:5px 12px', 'border-radius:5px',
+                'font-family:monospace', 'font-size:16px',
+                'pointer-events:none', 'z-index:9999',
+                'letter-spacing:0.03em', 'white-space:pre', 'display:none'
+            ].join(';');
+            document.body.appendChild(readout);
+        }
+
+        gd.addEventListener('mousemove', function(evt) {
+            var layout = gd._fullLayout;
+            if (!layout || !layout.xaxis) return;
+            var rect = gd.getBoundingClientRect();
+            var x = layout.xaxis.p2d(evt.clientX - rect.left - layout.xaxis._offset);
+            if (!isFinite(x)) return;
+
+            var spec = null, fd = gd._fullData || [];
+            for (var i = 0; i < fd.length; i++) {
+                if (fd[i].name === 'Spectrum') { spec = fd[i]; break; }
+            }
+            if (!spec || !spec.x || spec.x.length === 0) return;
+            var xs = spec.x, ys = spec.y, n = xs.length;
+            var asc = xs[n - 1] >= xs[0];
+            var lo = 0, hi = n - 1;
+            while (lo < hi) {
+                var mid = (lo + hi) >> 1;
+                if (asc ? xs[mid] < x : xs[mid] > x) lo = mid + 1; else hi = mid;
+            }
+            var k = lo;
+            if (k > 0 && Math.abs(xs[k - 1] - x) <= Math.abs(xs[k] - x)) k = k - 1;
+
+            var bx = Number(xs[k]), by = Number(ys[k]);
+            readout.style.display = 'block';
+            readout.innerText = 'x: ' + bx.toFixed(1) + ' Hz\\ny: ' +
+                (isFinite(by) ? by.toExponential(3) : '---');
+        });
+        gd.addEventListener('mouseleave', function() {
+            readout.style.display = 'none';
+        });
+    }, 150);
+    return window.dash_clientside.no_update;
+}
+"""
+
+for _gid in READOUT_GRAPHS:
+    app.clientside_callback(
+        _READOUT_JS % _gid,
+        Output(f"_readout-hook-{_gid}", "children"),
+        Input(_gid, "figure"),
+    )
 
 SETTING_KEYS = list(SETTING_FIELDS)
 SETTING_STATES = [State(cid, prop) for cid, prop in SETTING_FIELDS.values()]
