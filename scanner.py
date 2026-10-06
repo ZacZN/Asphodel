@@ -1754,7 +1754,9 @@ def show_snippet(idx, half_width, rows, path):
                         (int(row["spectrum_id"]),))
         w = float(half_width or 1000)
         x0, x1 = row["peak_freq"] - w, row["peak_freq"] + w
-        sims = sims[(sims["f_sim"] >= x0) & (sims["f_sim"] <= x1)].reset_index(drop=True)
+        # All simulated lines in the spectrum (not just the view), so they are
+        # there when you pan or zoom out
+        sims = sims[(sims["f_sim"] >= ff.min()) & (sims["f_sim"] <= ff.max())].reset_index(drop=True)
         r = dict(sims=sims, ion_db=ion_db, matches=hits, ref_used=float(row["ref_found"]),
                  status="found", predicted=None)
         fig = spectrum_figure(ff, pp, peaks, None, None, s, r,
