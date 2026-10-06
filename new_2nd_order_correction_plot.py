@@ -71,6 +71,7 @@ def main():
     if anchor.empty:
         raise ValueError(f"Anchor ion {ANCHOR_ION} not found in table")
     x0 = float(anchor["f_sim_true"].iloc[0])
+    f_exp_anchor = anchor["f_exp"].iloc[0].item()  # .item(): plain int/float so the legend shows every digit
     y0 = float(anchor["f_diff"].iloc[0])
     if y0 != 0:
         print(f"Warning: f_diff of {ANCHOR_ION} is {y0}, not 0; anchoring at (x0, 0) anyway")
@@ -109,7 +110,7 @@ def main():
     fig.get_layout_engine().set(hspace=0.0, h_pad=0.05)
     ax.scatter(x[fit_mask], y[fit_mask], color="C0", zorder=3, label="Data")
     ax.scatter([x0], [0], color="C3", marker="*", s=360, zorder=4,
-               label=f"Anchor ({pretty_ion(ANCHOR_ION)})")
+               label=f"Anchor ({pretty_ion(ANCHOR_ION)}, $f_{{exp}}$ = {f_exp_anchor!r} Hz)")
 
     # Group nearby points into clusters and stack their labels to avoid overlap
     xr, yr = np.ptp(x) or 1.0, np.ptp(y) or 1.0
