@@ -895,6 +895,34 @@ def empty_fig(msg=""):
     return fig
 
 
+def add_sim_lines(fig, sims, ion_db, matches, y0, y1, highlight_ion=None):
+    """Draw simulated ion frequencies as vertical dashed lines with tooltips.
+
+    Grey: no peak matched; dark grey: identified (a peak within the match
+    window); orange: `highlight_ion`.  `matches` needs columns ion, harmonic.
+    """
+    if sims is None or not len(sims):
+        return
+    ions = ion_db["ion"].to_numpy()
+    names = ions[sims["ion_row"].to_numpy()]
+    hover = ion_db["hover"].to_numpy()[sims["ion_row"].to_numpy()]
+    labels = [f"{lab}<br>Harmonic: {h}<br>f_sim = {f:.1f} Hz" for lab, h, f in
+              zip(hover, sims["harmonic"], sims["f_sim"])]
+    matched = set() if matches is None else set(zip(matches["ion"], matches["harmonic"]))
+    is_m = np.array([(n, h) in matched for n, h in zip(names, sims["harmonic"])])
+    is_hi = np.array([highlight_ion is not None and n == highlight_ion for n in names])
+    for mask, name, style in [
+        (~is_m & ~is_hi, "Simulated (no peak)", dict(color="#bbbbbb", width=1, dash="dash")),
+        (is_m & ~is_hi, "Simulated (identified)", dict(color="#555555", width=1.5, dash="dash")),
+        (is_hi, highlight_ion or "", dict(color=ACCENT, width=3, dash="solid")),
+    ]:
+        if mask.any():
+            X, Y, H = _vlines(sims["f_sim"].to_numpy()[mask], y0, y1,
+                              np.array(labels, dtype=object)[mask])
+            fig.add_trace(go.Scattergl(x=X, y=Y, mode="lines", name=name, line=style,
+                                       hoverinfo="text", hovertext=H, connectgaps=False))
+
+
 def spectrum_figure(ff, pp, peaks, base, sig, s, r, title, xrange=None, highlight_ion=None):
     fig = go.Figure()
     # "hvh" centres each step on its frequency value (vertical edges halfway
@@ -909,26 +937,8 @@ def spectrum_figure(ff, pp, peaks, base, sig, s, r, title, xrange=None, highligh
     pad = 0.05 * (ymax - ymin or 1)
 
     # simulated ions
-    sims, ion_db, matches = r.get("sims"), r.get("ion_db"), r.get("matches")
-    if sims is not None and len(sims):
-        ions = ion_db["ion"].to_numpy()
-        names = ions[sims["ion_row"].to_numpy()]
-        hover = ion_db["hover"].to_numpy()[sims["ion_row"].to_numpy()]
-        labels = [f"{lab}<br>Harmonic: {h}<br>f_sim = {f:.1f} Hz" for lab, h, f in
-                  zip(hover, sims["harmonic"], sims["f_sim"])]
-        matched = set() if matches is None else set(zip(matches["ion"], matches["harmonic"]))
-        is_m = np.array([(n, h) in matched for n, h in zip(names, sims["harmonic"])])
-        is_hi = np.array([highlight_ion is not None and n == highlight_ion for n in names])
-        for mask, name, style in [
-            (~is_m & ~is_hi, "Simulated (no peak)", dict(color="#bbbbbb", width=1, dash="dash")),
-            (is_m & ~is_hi, "Simulated (identified)", dict(color="#555555", width=1.5, dash="dash")),
-            (is_hi, highlight_ion or "", dict(color=ACCENT, width=3, dash="solid")),
-        ]:
-            if mask.any():
-                X, Y, H = _vlines(sims["f_sim"].to_numpy()[mask], ymin - pad, ymax + pad,
-                                  np.array(labels, dtype=object)[mask])
-                fig.add_trace(go.Scattergl(x=X, y=Y, mode="lines", name=name, line=style,
-                                           hoverinfo="text", hovertext=H, connectgaps=False))
+    add_sim_lines(fig, r.get("sims"), r.get("ion_db"), r.get("matches"),
+                  ymin - pad, ymax + pad, highlight_ion)
 
     # reference window + found reference
     pred = r.get("predicted")
@@ -1768,6 +1778,29 @@ def refview_plot(seq, half_width, path):
     fig = go.Figure()
     fig.add_trace(go.Scattergl(x=ff, y=pp, mode="lines", name="Spectrum", hoverinfo="skip",
                                line=dict(shape="hvh", color="black", width=1)))
+    # Simulated lines, recalculated from this spectrum's reference exactly as in the scan
+    if found is not None:
+        try:
+            s_db = parse_settings(st)
+            ion_db, ref_mq = build_ion_database(*s_db["ion_key"])
+            sims = simulate_frequencies(ion_db, ref_mq, float(found), s_db["ref_harmonic"],
+                                        s_db["gamma_t"], s_db["harmonics"],
+                                        s_db["correction_enabled"],
+                                        s_db["corr_a"], s_db["corr_b"], s_db["corr_c"])
+            sims = sims[(sims["f_sim"] >= ff.min()) & (sims["f_sim"] <= ff.max())].reset_index(drop=True)
+            ids = db_query(path, "SELECT ion, harmonic FROM identifications WHERE spectrum_id = ?",
+                           (int(row["spectrum_id"]),))
+            ylo, yhi = float(np.nanmin(pp)), float(np.nanmax(pp))
+            pad = 0.05 * (yhi - ylo or 1)
+            add_sim_lines(fig, sims, ion_db, ids, ylo - pad, yhi + pad)
+            n_id = len(set(zip(ids["ion"], ids["harmonic"])))
+            info += (f"\n{len(sims)} simulated lines from this reference "
+                     f"({n_id} identified: dark dashed; no peak: light dashed)")
+        except Exception as exc:
+            info += f"\nCould not calculate simulated lines: {exc}"
+    else:
+        info += "\nNo simulated lines: the reference was not found in this spectrum"
+
     pk = db_query(path, "SELECT freq, power, snr, kind FROM peaks WHERE spectrum_id = ?",
                   (int(row["spectrum_id"]),))
     pk = pk[pk["kind"] == "max"]
