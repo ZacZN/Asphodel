@@ -1109,16 +1109,18 @@ sidebar = html.Div([
           "overflowY": "auto", "borderRight": "1px solid #dddddd", "height": "calc(100vh - 42px)"})
 
 
-def _table(id_, columns, page_size=20, height=None, **kw):
+def _table(id_, columns, page_size=20, height=None, overflow_x="auto", **kw):
     return dash_table.DataTable(
         id=id_, columns=[{"name": c, "id": c} for c in columns], data=[],
         page_size=page_size, sort_action="native", filter_action="native",
-        style_table={"overflowX": "auto", **({"maxHeight": height, "overflowY": "auto"} if height else {})},
+        style_table={"overflowX": overflow_x,
+                     **({"maxHeight": height, "overflowY": "auto"} if height else {})},
         style_header=TABLE_HEADER, style_cell=TABLE_CELL, style_data_conditional=TABLE_ODD,
         style_filter={"backgroundColor": "#f9f9f9"}, **kw)
 
 
 BTN = {"marginRight": "8px"}
+TABLE_PAGE_SIZE = 15   # rows per page for the two Results tables (kept equal so pagers align)
 
 scan_main = html.Div([
     html.Div([
@@ -1173,12 +1175,51 @@ results_tab = html.Div([
         ], style={"display": "flex", "marginTop": "6px"}),
     ], open=False, style={"marginBottom": "12px"}),
 
+    # Grid so the two tables start at the same height and have the same number
+    # of rows per page: their pagination buttons then line up.
+    #   row 1: headings / filters (bottom-aligned)   row 2: the two tables
+    #   row 3: reference tracking (left) / snippet viewer (right)
     html.Div([
-        # left: ion summary
+        # row 1, left
         html.Div([
             html.H6("Ions found (click a row to filter)", style={"fontWeight": "600"}),
-            _table("summary-table", ["ion", "n_spectra", "n_hits", "mean_delta_hz", "std_delta_hz"],
-                   page_size=25),
+        ], style={"alignSelf": "end"}),
+        # row 1, right
+        html.Div([
+            html.Div([
+                html.Div([
+                    html.Label("Ion filter", style=LABEL_STYLE),
+                    dcc.Dropdown(id="ion-filter", options=[], multi=True,
+                                 placeholder="Type an ion, e.g. 197Os (all charge states) or 197Os76+",
+                                 style={"fontSize": "13px"}),
+                ], style={"flex": "1", "marginRight": "10px"}),
+                html.Div([
+                    html.Label("Spectrum filter", style=LABEL_STYLE),
+                    dcc.Dropdown(id="spec-filter", options=[], multi=True, placeholder="All spectra",
+                                 style={"fontSize": "13px"}),
+                ], style={"flex": "1"}),
+            ], style={"display": "flex", "marginBottom": "6px"}),
+            dcc.Checklist(id="closest-filter", options=[
+                {"label": " Only the closest peak for each ion", "value": "ion"},
+                {"label": " Only the closest ion for each peak", "value": "peak"},
+            ], value=[], inline=True, inputStyle={"marginRight": "4px"},
+                labelStyle={"marginRight": "16px"}, style={"fontSize": "13px", "marginBottom": "6px"}),
+            html.Div(id="hits-info", style={"fontSize": "13px", "color": "#333", "marginBottom": "4px"}),
+        ], style={"alignSelf": "end", "minWidth": "0"}),
+
+        # row 2: tables (same page size, both with an Export button and a
+        # horizontal scroll bar so their heights match exactly)
+        html.Div(_table("summary-table", ["ion", "n_spectra", "n_hits", "mean_delta_hz", "std_delta_hz"],
+                        page_size=TABLE_PAGE_SIZE, export_format="csv", overflow_x="scroll"),
+                 style={"minWidth": "0"}),
+        html.Div(_table("hits-table", ["spectrum", "seq", "ion", "harmonic", "peak_freq", "sim_freq",
+                                       "delta_hz", "power", "snr", "kind", "closest_for_ion",
+                                       "closest_for_peak"],
+                        page_size=TABLE_PAGE_SIZE, export_format="csv", overflow_x="scroll"),
+                 style={"minWidth": "0"}),
+
+        # row 3, left: reference tracking + per-spectrum reference viewer
+        html.Div([
             html.H6("Reference tracking", style={"fontWeight": "600", "marginTop": "10px"}),
             dcc.Graph(id="ref-graph", figure=empty_fig(), style={"height": "280px"}),
             html.Small("Click a point to open that spectrum below", style=HELP_STYLE),
@@ -1211,33 +1252,9 @@ results_tab = html.Div([
                 dcc.Store(id="refview-seq", data=0),
             ], style={"border": "1px solid #dddddd", "borderRadius": "6px", "padding": "10px",
                       "marginTop": "10px", "background": "#ffffff"}),
-        ], style={"width": "34%", "marginRight": "16px"}),
-
-        # right: filtered hits
+        ], style={"minWidth": "0"}),
+        # row 3, right: peak-by-peak snippet viewer
         html.Div([
-            html.Div([
-                html.Div([
-                    html.Label("Ion filter", style=LABEL_STYLE),
-                    dcc.Dropdown(id="ion-filter", options=[], multi=True,
-                                 placeholder="Type an ion, e.g. 197Os (all charge states) or 197Os76+",
-                                 style={"fontSize": "13px"}),
-                ], style={"flex": "1", "marginRight": "10px"}),
-                html.Div([
-                    html.Label("Spectrum filter", style=LABEL_STYLE),
-                    dcc.Dropdown(id="spec-filter", options=[], multi=True, placeholder="All spectra",
-                                 style={"fontSize": "13px"}),
-                ], style={"flex": "1"}),
-            ], style={"display": "flex", "marginBottom": "6px"}),
-            dcc.Checklist(id="closest-filter", options=[
-                {"label": " Only the closest peak for each ion", "value": "ion"},
-                {"label": " Only the closest ion for each peak", "value": "peak"},
-            ], value=[], inline=True, inputStyle={"marginRight": "4px"},
-                labelStyle={"marginRight": "16px"}, style={"fontSize": "13px", "marginBottom": "6px"}),
-            html.Div(id="hits-info", style={"fontSize": "13px", "color": "#333", "marginBottom": "4px"}),
-            _table("hits-table", ["spectrum", "seq", "ion", "harmonic", "peak_freq", "sim_freq",
-                                  "delta_hz", "power", "snr", "kind", "closest_for_ion",
-                                  "closest_for_peak"],
-                   page_size=15, export_format="csv"),
             # Peak-by-peak viewer: steps through the rows of the hits table as
             # currently filtered (and sorted) above
             html.Div([
@@ -1260,8 +1277,9 @@ results_tab = html.Div([
             dcc.Store(id="snippet-idx", data=0),
             dcc.Graph(id="snippet-graph", figure=empty_fig(), style={"height": "420px"},
                       config={"scrollZoom": True}),
-        ], style={"flex": "1", "minWidth": "0"}),
-    ], style={"display": "flex"}),
+        ], style={"minWidth": "0"}),
+    ], style={"display": "grid", "gridTemplateColumns": "34% minmax(0, 1fr)",
+              "columnGap": "16px", "alignItems": "start"}),
 ], style={"padding": "14px 18px", "overflowY": "auto", "height": "calc(100vh - 42px)"})
 
 
