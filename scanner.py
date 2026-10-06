@@ -1239,9 +1239,6 @@ results_tab = html.Div([
                                   "closest_for_peak"],
                    page_size=15, row_selectable="single", export_format="csv"),
             html.Div([
-                dcc.Graph(id="hits-graph", figure=empty_fig(), style={"height": "300px", "flex": "1"}),
-            ], style={"display": "flex"}),
-            html.Div([
                 html.Label("Snippet half-width (Hz)", style={**LABEL_STYLE, "marginRight": "8px"}),
                 dcc.Input(id="snippet-width", type="number", value=1000, debounce=True,
                           className="form-control form-control-sm", style={"width": "140px"}),
@@ -1591,7 +1588,6 @@ MAX_ROWS = 20000
     Output("hits-table", "data"),
     Output("hits-table", "selected_rows"),
     Output("hits-info", "children"),
-    Output("hits-graph", "figure"),
     Input("db-select", "value"),
     Input("ion-filter", "value"),
     Input("spec-filter", "value"),
@@ -1599,7 +1595,7 @@ MAX_ROWS = 20000
 )
 def query_hits(path, ion_filter, spec_filter, closest):
     if not path or not os.path.exists(path):
-        return [], [], "", empty_fig()
+        return [], [], ""
     where, params = [], []
     ions = [v[4:] for v in (ion_filter or []) if v.startswith("ion:")]
     bases = [v[5:] for v in (ion_filter or []) if v.startswith("base:")]
@@ -1629,18 +1625,7 @@ def query_hits(path, ion_filter, spec_filter, closest):
     info = (f"{len(df)} identifications in {n_spec} spectra"
             + (f"  (showing first {MAX_ROWS}; narrow the filter)" if truncated else ""))
 
-    fig = go.Figure()
-    if len(df):
-        groups = df.groupby(["ion", "harmonic"]) if ors else [(("all", ""), df)]
-        for (ion, h), d in list(groups)[:40]:
-            fig.add_trace(go.Scattergl(x=d["seq"], y=d["delta_hz"], mode="markers",
-                                       name=f"{ion} h={h}" if ors else "all hits",
-                                       marker=dict(size=6 if ors else 3),
-                                       hovertext=d["spectrum"] + "<br>" + d["ion"], hoverinfo="text+y"))
-    fig.update_layout(template="plotly_white", margin=dict(l=60, r=10, t=10, b=40),
-                      xaxis_title="spectrum #", yaxis_title="f_peak − f_sim (Hz)", font=dict(size=11),
-                      colorway=[ACCENT, "#333333", "#999999", "#c45a00", "#666666", "#ffb877"])
-    return _fmt_records(df), [], info, fig
+    return _fmt_records(df), [], info
 
 
 @app.callback(
