@@ -1395,6 +1395,9 @@ body.dark .current-page-container input, body.dark .last-page { color: #fff !imp
 body.dark #scan-status, body.dark #preview-info, body.dark #hits-info, body.dark #refview-info,
 body.dark #snippet-count { color: #fff !important; }
 body.dark .theia-progress-track { background: #3a3a3a !important; }
+/* the current page number is the box's placeholder until you type in it */
+body.dark .current-page::placeholder { color: #fff !important; opacity: 1 !important; }
+body.dark .current-page-shadow { color: transparent !important; }
 /* plots: full inversion -> black background, white traces; orange stays orange */
 body.dark .js-plotly-plot { filter: invert(1) hue-rotate(180deg) contrast(1.15); }
 """
