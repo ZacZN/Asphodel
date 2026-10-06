@@ -1767,6 +1767,14 @@ def show_snippet(idx, half_width, rows, path):
                                  name="this peak", hoverinfo="skip",
                                  marker=dict(symbol="circle-open", size=18, color=ACCENT,
                                              line=dict(width=2))))
+        # Fix the vertical scale so this peak always reaches exactly half the
+        # plot height: bottom = lowest point in view, top = bottom + 2 x height
+        in_view = (ff >= x0) & (ff <= x1)
+        if in_view.any():
+            lo = float(pp[in_view].min())
+            top = float(pp[int(np.argmin(np.abs(ff - float(row["peak_freq"]))))])
+            if top > lo:
+                fig.update_yaxes(range=[lo, lo + 2.0 * (top - lo)], autorange=False)
         return fig
     except Exception as exc:
         traceback.print_exc()
