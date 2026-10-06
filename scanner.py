@@ -74,6 +74,7 @@ HERE        = os.path.dirname(os.path.abspath(__file__))
 SCANS_DIR   = os.path.join(HERE, "scans")
 INDEX_PATH  = os.path.join(SCANS_DIR, "index.csv")
 CONFIG_PATH = os.path.join(HERE, "scanner_config.json")
+CONFIRMED_DIR = os.path.join(HERE, "confirmed")
 ACCENT      = "#f57d15"
 ACCENT_PALE = "#fff4ec"
 
@@ -1137,6 +1138,10 @@ def _table(id_, columns, page_size=20, height=None, overflow_x="auto", **kw):
 
 
 BTN = {"marginRight": "8px"}
+ACCEPT_BTN = {"backgroundColor": "#2e7d32", "color": "white", "fontSize": "22px", "fontWeight": "700",
+              "width": "56px", "height": "42px", "lineHeight": "1", "marginRight": "16px"}
+REJECT_BTN = {**ACCEPT_BTN, "backgroundColor": "#c62828", "marginRight": "8px"}
+CONFIRM_BAR = {"display": "flex", "alignItems": "center", "flexWrap": "wrap", "margin": "8px 0 2px 0"}
 # Outline used around the plots in the Results tab
 BOX_STYLE = {"border": "1px solid #dddddd", "borderRadius": "6px", "padding": "10px",
              "background": "#ffffff"}
@@ -1302,11 +1307,33 @@ results_tab = html.Div([
                 html.Label("Snippet half-width (Hz)", style={**LABEL_STYLE, "margin": "0 8px 0 0"}),
                 dcc.Input(id="snippet-width", type="number", value=CFG["snippet_half_width"],
                           debounce=True,
-                          className="form-control form-control-sm", style={"width": "140px"}),
+                          className="form-control form-control-sm",
+                          style={"width": "140px", "marginRight": "16px"}),
+                html.Button("Confirmation mode", id="btn-confirm-mode",
+                            className="btn btn-outline-secondary btn-sm"),
             ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap"}),
             html.Small("Steps through every identification in the table above, in table order; "
                        "the filters and table sorting decide which peaks are shown",
                        style=HELP_STYLE),
+            # Confirmation mode: accept / reject the identification shown, then
+            # move to the next one.  Decisions are kept for this session only,
+            # until "Save accepted" writes them to confirmed/.
+            html.Div([
+                html.Button("✗", id="btn-reject", title="Reject this identification",
+                            className="btn btn-sm", style=REJECT_BTN),
+                html.Button("✓", id="btn-accept", title="Accept this identification",
+                            className="btn btn-sm", style=ACCEPT_BTN),
+                html.Div([
+                    html.Div(id="confirm-status", style={"fontSize": "14px", "fontWeight": "600"}),
+                    html.Div(id="confirm-counts", style={"fontSize": "12px"}),
+                ], style={"marginRight": "16px"}),
+                html.Button("Save accepted", id="btn-save-confirmed",
+                            className="btn btn-sm",
+                            style={"backgroundColor": ACCENT, "color": "white", "marginRight": "10px"}),
+                html.Span(id="confirm-save-msg", style={"fontSize": "12px"}),
+            ], id="confirm-bar", style={"display": "none"}),
+            dcc.Store(id="confirm-mode", data=False),
+            dcc.Store(id="confirm-store", data={}),
             dcc.Store(id="snippet-idx", data=0),
             # Grows downwards to fill the row: this box and the reference-viewer
             # box on the left end at the same height and have the same padding,
@@ -1813,11 +1840,13 @@ def query_hits(path, ion_filter, spec_filter, closest):
     Output("snippet-count", "children"),
     Input("btn-snip-prev", "n_clicks"),
     Input("btn-snip-next", "n_clicks"),
+    Input("btn-accept", "n_clicks"),
+    Input("btn-reject", "n_clicks"),
     Input("snippet-idx-input", "value"),
     Input("hits-table", "derived_virtual_data"),
     State("snippet-idx", "data"),
 )
-def snippet_step(_p, _n, typed, rows, current):
+def snippet_step(_p, _n, _a, _r, typed, rows, current):
     """Which row of the (filtered, sorted) hits table the snippet shows.
     Goes back to the first peak whenever the table contents change."""
     n = len(rows or [])
@@ -1825,8 +1854,8 @@ def snippet_step(_p, _n, typed, rows, current):
         return 0, 1, "of 0"
     trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
     cur = int(current or 0)
-    if trig.startswith("btn-snip-next"):
-        new = cur + 1
+    if trig.startswith(("btn-snip-next", "btn-accept", "btn-reject")):
+        new = cur + 1   # accept / reject also move on to the next peak
     elif trig.startswith("btn-snip-prev"):
         new = cur - 1
     elif trig.startswith("snippet-idx-input") and typed is not None:
@@ -1912,6 +1941,172 @@ def remember_snippet_width(value):
     if value is not None and value > 0:
         save_config({"snippet_half_width": value})
     return dash.no_update
+
+
+
+# ===========================================================================
+# Callbacks — confirmation mode (Results tab, snippet viewer)
+# ===========================================================================
+
+def _ident_key(path, row):
+    """Unique key for one identification (peak + ion + harmonic) in one database."""
+    return f"{os.path.basename(path)}|{int(row['spectrum_id'])}|{int(row['peak_id'])}|" \
+           f"{row['ion']}|{int(row['harmonic'])}"
+
+
+def _filter_text(ion_filter, spec_filter, closest):
+    ions = [v.split(":", 1)[1] + (" (all charge states)" if v.startswith("base:") else "")
+            for v in (ion_filter or [])]
+    parts = ["ions: " + (", ".join(ions) if ions else "all")]
+    parts.append("spectra: " + (", ".join(map(str, spec_filter)) if spec_filter else "all"))
+    if closest:
+        parts.append("closest only: " + ", ".join(closest))
+    return "; ".join(parts)
+
+
+@app.callback(
+    Output("confirm-mode", "data"),
+    Output("confirm-bar", "style"),
+    Output("btn-confirm-mode", "className"),
+    Output("btn-confirm-mode", "style"),
+    Input("btn-confirm-mode", "n_clicks"),
+    State("confirm-mode", "data"),
+)
+def toggle_confirm_mode(n, active):
+    on = (not active) if n else False
+    style = CONFIRM_BAR if on else {"display": "none"}
+    if on:
+        return True, style, "btn btn-sm", {"backgroundColor": ACCENT, "color": "white"}
+    return False, style, "btn btn-outline-secondary btn-sm", {}
+
+
+@app.callback(
+    Output("confirm-store", "data"),
+    Input("btn-accept", "n_clicks"),
+    Input("btn-reject", "n_clicks"),
+    State("snippet-idx", "data"),
+    State("hits-table", "derived_virtual_data"),
+    State("db-select", "value"),
+    State("ion-filter", "value"),
+    State("spec-filter", "value"),
+    State("closest-filter", "value"),
+    State("confirm-store", "data"),
+    prevent_initial_call=True,
+)
+def record_decision(_a, _r, idx, rows, path, ion_filter, spec_filter, closest, store):
+    """Remember accept/reject for the identification currently shown."""
+    if not rows or not path or idx is None or idx >= len(rows):
+        return dash.no_update
+    trig = dash.callback_context.triggered[0]["prop_id"]
+    row = rows[int(idx)]
+    store = dict(store or {})
+    store[_ident_key(path, row)] = dict(
+        decision="accept" if trig.startswith("btn-accept") else "reject",
+        db=os.path.basename(path), spectrum=row["spectrum"],
+        spectrum_id=int(row["spectrum_id"]), peak_id=int(row["peak_id"]),
+        ion=row["ion"], harmonic=int(row["harmonic"]),
+        filter=_filter_text(ion_filter, spec_filter, closest),
+        time=datetime.datetime.now().isoformat(timespec="seconds"),
+    )
+    return store
+
+
+@app.callback(
+    Output("confirm-status", "children"),
+    Output("confirm-status", "style"),
+    Output("confirm-counts", "children"),
+    Input("confirm-store", "data"),
+    Input("snippet-idx", "data"),
+    Input("hits-table", "derived_virtual_data"),
+    State("db-select", "value"),
+)
+def show_decision(store, idx, rows, path):
+    base = {"fontSize": "14px", "fontWeight": "600"}
+    if not path:
+        return "", base, ""
+    store = store or {}
+    db = os.path.basename(path)
+    mine = [v for v in store.values() if v["db"] == db]
+    n_acc = sum(v["decision"] == "accept" for v in mine)
+    n_rej = len(mine) - n_acc
+    counts = f"Accepted {n_acc} · rejected {n_rej} (this database, unsaved until you press Save)"
+    if not rows or idx is None or idx >= len(rows):
+        return "", base, counts
+    row = rows[int(idx)]
+    d = store.get(_ident_key(path, row))
+    label = f"{row['ion']} (h={row['harmonic']}) in {row['spectrum']}: "
+    if d is None:
+        return label + "undecided", base, counts
+    if d["decision"] == "accept":
+        return label + "✓ accepted", {**base, "color": "#2e7d32"}, counts
+    return label + "✗ rejected", {**base, "color": "#c62828"}, counts
+
+
+@app.callback(
+    Output("confirm-save-msg", "children"),
+    Input("btn-save-confirmed", "n_clicks"),
+    State("confirm-store", "data"),
+    State("db-select", "value"),
+    State("ion-filter", "value"),
+    State("spec-filter", "value"),
+    State("closest-filter", "value"),
+    State("hits-table", "filter_query"),
+    State("hits-table", "sort_by"),
+    State("hits-table", "derived_virtual_data"),
+    prevent_initial_call=True,
+)
+def save_confirmed(_n, store, path, ion_filter, spec_filter, closest, table_filter, sort_by, rows):
+    """Write the accepted identifications for this database to confirmed/*.csv,
+    with the filters and the scan's run info and settings as '#' header lines."""
+    if not path or not os.path.exists(path):
+        return "No database loaded."
+    db = os.path.basename(path)
+    decisions = [v for v in (store or {}).values() if v["db"] == db]
+    accepted = [v for v in decisions if v["decision"] == "accept"]
+    if not accepted:
+        return "Nothing accepted yet - nothing saved."
+
+    # Exact (unrounded) values straight from the database
+    con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    info, st = read_kv(con, "run_info"), read_kv(con, "settings")
+    cols = ("s.name AS spectrum, s.seq, i.spectrum_id, i.peak_id, i.ion, i.ion_base, i.Z, i.N, i.A, "
+            "i.charge, i.harmonic, i.peak_freq, i.sim_freq, i.delta_hz, i.power, i.snr, i.kind, "
+            "i.closest_for_ion, i.closest_for_peak, s.ref_found")
+    out = []
+    for v in sorted(accepted, key=lambda d: (d["spectrum_id"], d["peak_id"], d["ion"])):
+        r = pd.read_sql_query(
+            f"SELECT {cols} FROM identifications i JOIN spectra s USING (spectrum_id) "
+            "WHERE i.spectrum_id = ? AND i.peak_id = ? AND i.ion = ? AND i.harmonic = ?",
+            con, params=(v["spectrum_id"], v["peak_id"], v["ion"], v["harmonic"]))
+        if len(r):
+            r = r.iloc[:1].copy()
+            r["filter_when_accepted"] = v["filter"]
+            r["accepted_at"] = v["time"]
+            out.append(r)
+    con.close()
+    table = pd.concat(out, ignore_index=True)
+
+    os.makedirs(CONFIRMED_DIR, exist_ok=True)
+    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    fname = os.path.join(CONFIRMED_DIR, f"confirmed_{stamp}_{os.path.splitext(db)[0]}.csv")
+    n_list = len(rows or [])
+    header = {
+        "saved": datetime.datetime.now().isoformat(timespec="seconds"),
+        "database": path,
+        "filter": _filter_text(ion_filter, spec_filter, closest),
+        "table_filter": table_filter or "",
+        "table_sort": json.dumps(sort_by or []),
+        "identifications_in_filtered_list": n_list,
+        "accepted": len(accepted),
+        "rejected": len(decisions) - len(accepted),
+        "run_info": json.dumps(info),
+        "scan_settings": json.dumps(st),
+    }
+    with open(fname, "w", newline="") as fh:
+        for k, v in header.items():
+            fh.write(f"# {k}: {v}\n")
+        table.to_csv(fh, index=False)
+    return f"Saved {len(table)} accepted identifications to confirmed/{os.path.basename(fname)}"
 
 
 
