@@ -1237,14 +1237,27 @@ results_tab = html.Div([
             _table("hits-table", ["spectrum", "seq", "ion", "harmonic", "peak_freq", "sim_freq",
                                   "delta_hz", "power", "snr", "kind", "closest_for_ion",
                                   "closest_for_peak"],
-                   page_size=15, row_selectable="single", export_format="csv"),
+                   page_size=15, export_format="csv"),
+            # Peak-by-peak viewer: steps through the rows of the hits table as
+            # currently filtered (and sorted) above
             html.Div([
-                html.Label("Snippet half-width (Hz)", style={**LABEL_STYLE, "marginRight": "8px"}),
+                html.Button("◀ Prev", id="btn-snip-prev", className="btn btn-outline-secondary btn-sm",
+                            style={"marginRight": "6px"}),
+                dcc.Input(id="snippet-idx-input", type="number", min=1, step=1, value=1, debounce=True,
+                          className="form-control form-control-sm",
+                          style={"width": "90px", "marginRight": "6px"}),
+                html.Span(id="snippet-count", style={"fontSize": "13px", "marginRight": "6px"}),
+                html.Button("Next ▶", id="btn-snip-next", className="btn btn-outline-secondary btn-sm",
+                            style={"marginRight": "16px"}),
+                html.Label("Snippet half-width (Hz)", style={**LABEL_STYLE, "margin": "0 8px 0 0"}),
                 dcc.Input(id="snippet-width", type="number", value=1000, debounce=True,
                           className="form-control form-control-sm", style={"width": "140px"}),
-                html.Small("  Select a row in the table to view that peak in its spectrum",
-                           style={**HELP_STYLE, "marginLeft": "10px", "marginTop": "0"}),
-            ], style={"display": "flex", "alignItems": "center", "marginTop": "6px"}),
+            ], style={"display": "flex", "alignItems": "center", "marginTop": "8px",
+                      "flexWrap": "wrap"}),
+            html.Small("Steps through every identification in the table above, in table order; "
+                       "the filters and table sorting decide which peaks are shown",
+                       style=HELP_STYLE),
+            dcc.Store(id="snippet-idx", data=0),
             dcc.Graph(id="snippet-graph", figure=empty_fig(), style={"height": "420px"},
                       config={"scrollZoom": True}),
         ], style={"flex": "1", "minWidth": "0"}),
@@ -1586,7 +1599,6 @@ MAX_ROWS = 20000
 
 @app.callback(
     Output("hits-table", "data"),
-    Output("hits-table", "selected_rows"),
     Output("hits-info", "children"),
     Input("db-select", "value"),
     Input("ion-filter", "value"),
@@ -1595,7 +1607,7 @@ MAX_ROWS = 20000
 )
 def query_hits(path, ion_filter, spec_filter, closest):
     if not path or not os.path.exists(path):
-        return [], [], ""
+        return [], ""
     where, params = [], []
     ions = [v[4:] for v in (ion_filter or []) if v.startswith("ion:")]
     bases = [v[5:] for v in (ion_filter or []) if v.startswith("base:")]
@@ -1625,20 +1637,50 @@ def query_hits(path, ion_filter, spec_filter, closest):
     info = (f"{len(df)} identifications in {n_spec} spectra"
             + (f"  (showing first {MAX_ROWS}; narrow the filter)" if truncated else ""))
 
-    return _fmt_records(df), [], info
+    return _fmt_records(df), info
+
+
+@app.callback(
+    Output("snippet-idx", "data"),
+    Output("snippet-idx-input", "value"),
+    Output("snippet-count", "children"),
+    Input("btn-snip-prev", "n_clicks"),
+    Input("btn-snip-next", "n_clicks"),
+    Input("snippet-idx-input", "value"),
+    Input("hits-table", "derived_virtual_data"),
+    State("snippet-idx", "data"),
+)
+def snippet_step(_p, _n, typed, rows, current):
+    """Which row of the (filtered, sorted) hits table the snippet shows.
+    Goes back to the first peak whenever the table contents change."""
+    n = len(rows or [])
+    if n == 0:
+        return 0, 1, "of 0"
+    trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
+    cur = int(current or 0)
+    if trig.startswith("btn-snip-next"):
+        new = cur + 1
+    elif trig.startswith("btn-snip-prev"):
+        new = cur - 1
+    elif trig.startswith("snippet-idx-input") and typed is not None:
+        new = int(typed) - 1
+    else:
+        new = 0
+    new = min(max(new, 0), n - 1)
+    return new, new + 1, f"of {n}"
 
 
 @app.callback(
     Output("snippet-graph", "figure"),
-    Input("hits-table", "selected_rows"),
+    Input("snippet-idx", "data"),
     Input("snippet-width", "value"),
-    State("hits-table", "data"),
+    State("hits-table", "derived_virtual_data"),
     State("db-select", "value"),
 )
-def show_snippet(selected, half_width, rows, path):
-    if not selected or not rows or not path or selected[0] >= len(rows):
-        return empty_fig("Select a row in the table above")
-    row = rows[selected[0]]
+def show_snippet(idx, half_width, rows, path):
+    if not rows or not path or idx is None or idx >= len(rows):
+        return empty_fig("No identifications to show")
+    row = rows[int(idx)]
     try:
         con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
         st = read_kv(con, "settings")
