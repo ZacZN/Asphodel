@@ -2088,7 +2088,17 @@ def save_confirmed(_n, store, path, ion_filter, spec_filter, closest, table_filt
 
     os.makedirs(CONFIRMED_DIR, exist_ok=True)
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    fname = os.path.join(CONFIRMED_DIR, f"confirmed_{stamp}_{os.path.splitext(db)[0]}.csv")
+    # Ion names in the file name: the ions the list was filtered to, or, with
+    # no ion filter, the ions that were accepted (first 6, then "+N more")
+    if ion_filter:
+        name_ions = [v.split(":", 1)[1] for v in ion_filter]
+    else:
+        name_ions = sorted(table["ion"].unique(), key=natural_key)
+    if len(name_ions) > 6:
+        name_ions = name_ions[:6] + [f"+{len(name_ions) - 6}more"]
+    ion_part = "_".join(re.sub(r"[^A-Za-z0-9+.-]", "", s) for s in name_ions) or "ions"
+    fname = os.path.join(CONFIRMED_DIR,
+                         f"confirmed_{ion_part}_{stamp}_{os.path.splitext(db)[0]}.csv")
     n_list = len(rows or [])
     header = {
         "saved": datetime.datetime.now().isoformat(timespec="seconds"),
