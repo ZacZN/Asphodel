@@ -1120,7 +1120,11 @@ def _table(id_, columns, page_size=20, height=None, overflow_x="auto", **kw):
 
 
 BTN = {"marginRight": "8px"}
-TABLE_PAGE_SIZE = 15   # rows per page for the two Results tables (kept equal so pagers align)
+TABLE_PAGE_SIZE = 15    # rows per page of the hits table
+TABLE_ROW_PX = 30       # DataTable row height
+FILTER_HEAD_PX = 120    # height of the filter block above the hits table
+SUMMARY_EXTRA_ROWS = 3  # extra rows in the ions-found table, which starts higher up
+SUMMARY_HEAD_PX = FILTER_HEAD_PX - SUMMARY_EXTRA_ROWS * TABLE_ROW_PX   # its heading (30 px)
 
 scan_main = html.Div([
     html.Div([
@@ -1175,16 +1179,25 @@ results_tab = html.Div([
         ], style={"display": "flex", "marginTop": "6px"}),
     ], open=False, style={"marginBottom": "12px"}),
 
-    # Grid so the two tables start at the same height and have the same number
-    # of rows per page: their pagination buttons then line up.
-    #   row 1: headings / filters (bottom-aligned)   row 2: the two tables
+    # Grid layout.  The "Ions found" heading sits level with the filter labels
+    # and its table starts straight under it; the hits table starts below the
+    # filters.  Both header blocks have fixed heights, and the ions-found table
+    # shows exactly enough extra rows to fill the difference, so the two
+    # tables' pagination buttons line up (DataTable rows are 30 px).
+    #   left  (rows 1-2): heading + ions-found table
+    #   right row 1: filters        right row 2: hits table
     #   row 3: reference tracking (left) / snippet viewer (right)
     html.Div([
-        # row 1, left
+        # left, rows 1-2
         html.Div([
-            html.H6("Ions found (click a row to filter)", style={"fontWeight": "600"}),
-        ], style={"alignSelf": "end"}),
-        # row 1, right
+            html.Div(html.H6("Ions found (click a row to filter)",
+                             style={"fontWeight": "600", "margin": "0", "paddingTop": "2px"}),
+                     style={"height": f"{SUMMARY_HEAD_PX}px"}),
+            _table("summary-table", ["ion", "n_spectra", "n_hits", "mean_delta_hz", "std_delta_hz"],
+                   page_size=TABLE_PAGE_SIZE + SUMMARY_EXTRA_ROWS, export_format="csv",
+                   overflow_x="scroll"),
+        ], style={"gridColumn": "1", "gridRow": "1 / 3", "minWidth": "0"}),
+        # right, row 1: filters
         html.Div([
             html.Div([
                 html.Div([
@@ -1205,18 +1218,16 @@ results_tab = html.Div([
             ], value=[], inline=True, inputStyle={"marginRight": "4px"},
                 labelStyle={"marginRight": "16px"}, style={"fontSize": "13px", "marginBottom": "6px"}),
             html.Div(id="hits-info", style={"fontSize": "13px", "color": "#333", "marginBottom": "4px"}),
-        ], style={"alignSelf": "end", "minWidth": "0"}),
+        ], style={"gridColumn": "2", "gridRow": "1", "height": f"{FILTER_HEAD_PX}px",
+                  "minWidth": "0"}),
 
-        # row 2: tables (same page size, both with an Export button and a
-        # horizontal scroll bar so their heights match exactly)
-        html.Div(_table("summary-table", ["ion", "n_spectra", "n_hits", "mean_delta_hz", "std_delta_hz"],
-                        page_size=TABLE_PAGE_SIZE, export_format="csv", overflow_x="scroll"),
-                 style={"minWidth": "0"}),
+        # right, row 2: hits table (both tables have an Export button and an
+        # always-visible horizontal scroll bar so their heights match)
         html.Div(_table("hits-table", ["spectrum", "seq", "ion", "harmonic", "peak_freq", "sim_freq",
                                        "delta_hz", "power", "snr", "kind", "closest_for_ion",
                                        "closest_for_peak"],
                         page_size=TABLE_PAGE_SIZE, export_format="csv", overflow_x="scroll"),
-                 style={"minWidth": "0"}),
+                 style={"gridColumn": "2", "gridRow": "2", "minWidth": "0"}),
 
         # row 3, left: reference tracking + per-spectrum reference viewer
         html.Div([
@@ -1252,7 +1263,7 @@ results_tab = html.Div([
                 dcc.Store(id="refview-seq", data=0),
             ], style={"border": "1px solid #dddddd", "borderRadius": "6px", "padding": "10px",
                       "marginTop": "10px", "background": "#ffffff"}),
-        ], style={"minWidth": "0"}),
+        ], style={"gridColumn": "1", "gridRow": "3", "minWidth": "0"}),
         # row 3, right: peak-by-peak snippet viewer
         html.Div([
             # Peak-by-peak viewer: steps through the rows of the hits table as
@@ -1277,7 +1288,7 @@ results_tab = html.Div([
             dcc.Store(id="snippet-idx", data=0),
             dcc.Graph(id="snippet-graph", figure=empty_fig(), style={"height": "420px"},
                       config={"scrollZoom": True}),
-        ], style={"minWidth": "0"}),
+        ], style={"gridColumn": "2", "gridRow": "3", "minWidth": "0"}),
     ], style={"display": "grid", "gridTemplateColumns": "34% minmax(0, 1fr)",
               "columnGap": "16px", "alignItems": "start"}),
 ], style={"padding": "14px 18px", "overflowY": "auto", "height": "calc(100vh - 42px)"})
