@@ -386,12 +386,14 @@ def detect_peaks(ff, pp, p):
 # Reference tracking and identification
 # ===========================================================================
 
-def find_reference(peaks, predicted, window_hz, mode="strongest"):
+def find_reference(peaks, predicted, window_hz, mode="strongest", min_height=0.0):
     """Pick the reference peak among detected maxima within ±window of the
-    predicted position.  Returns the row (Series) or None."""
+    predicted position that are at least `min_height` tall (raw power).
+    Returns the row (Series) or None."""
     if peaks is None or len(peaks) == 0:
         return None
-    cand = peaks[(peaks["kind"] == "max") & ((peaks["freq"] - predicted).abs() <= window_hz)]
+    cand = peaks[(peaks["kind"] == "max") & ((peaks["freq"] - predicted).abs() <= window_hz)
+                 & (peaks["power"] >= min_height)]
     if len(cand) == 0:
         return None
     if mode == "nearest":
@@ -467,7 +469,8 @@ def load_spectrum(directory, name):
 def analyse_spectrum(ff, pp, s, predicted_ref):
     """Full per-spectrum pipeline.  Returns dict with peaks, ref info, sims, matches."""
     peaks, base, sig = detect_peaks(ff, pp, s)
-    ref = find_reference(peaks, predicted_ref, s["ref_window_hz"], s["ref_mode"])
+    ref = find_reference(peaks, predicted_ref, s["ref_window_hz"], s["ref_mode"],
+                         s["ref_min_height"])
     if ref is not None:
         ref_used, status = float(ref["freq"]), "found"
     elif s["use_predicted"]:
@@ -512,6 +515,7 @@ DEFAULTS = dict(
     ref_frequency      = _viewer_cfg.get("ref_frequency", 411910517),
     ref_harmonic       = _viewer_cfg.get("ref_harmonic", 213),
     ref_window_hz      = 500,
+    ref_min_height     = 1000,
     ref_mode           = "strongest",
     ref_tracking       = ["on"],
     use_predicted      = [],
@@ -586,6 +590,7 @@ def parse_settings(raw):
     s["ref_frequency"] = _f(raw.get("ref_frequency"), "Reference frequency")
     s["ref_harmonic"] = int(_f(raw.get("ref_harmonic"), "Reference harmonic"))
     s["ref_window_hz"] = _f(raw.get("ref_window_hz"), "Reference search window")
+    s["ref_min_height"] = _f(raw.get("ref_min_height"), "Reference min height", 0)
     s["ref_mode"] = raw.get("ref_mode") or "strongest"
     s["ref_tracking"] = bool(raw.get("ref_tracking"))
     s["use_predicted"] = bool(raw.get("use_predicted"))
@@ -931,6 +936,9 @@ def spectrum_figure(ff, pp, peaks, base, sig, s, r, title, xrange=None, highligh
         w = s["ref_window_hz"]
         fig.add_vrect(x0=pred - w, x1=pred + w, fillcolor=ACCENT_PALE, opacity=0.7,
                       line_width=0, layer="below")
+        if s.get("ref_min_height", 0) > 0:
+            fig.add_shape(type="line", x0=pred - w, x1=pred + w, y0=s["ref_min_height"],
+                          y1=s["ref_min_height"], line=dict(color=ACCENT, width=1, dash="dot"))
     if r.get("ref_used") is not None:
         fig.add_vline(x=r["ref_used"], line=dict(color=ACCENT, width=2),
                       annotation_text=f"ref {s['ref_name']} ({r['status']})",
@@ -1037,6 +1045,8 @@ sidebar = html.Div([
     inp("Frequency (Hz) — in first spectrum", "ref_frequency", True, step=1),
     inp("Harmonic", "ref_harmonic", True, step=1),
     inp("Search window ± (Hz)", "ref_window_hz", True),
+    inp("Min reference height (a.u.)", "ref_min_height", True,
+        help="Only peaks at least this tall (raw power) can be the reference. 0 = off"),
     radio("Pick in window", "ref_mode", [
         {"label": "Strongest peak", "value": "strongest"},
         {"label": "Nearest to prediction", "value": "nearest"},
@@ -1771,6 +1781,10 @@ def refview_plot(seq, half_width, path):
     if pd.notna(pred):
         fig.add_vrect(x0=pred - window, x1=pred + window, fillcolor=ACCENT_PALE, opacity=0.8,
                       line_width=0, layer="below")
+        hmin = float(st.get("ref_min_height") or 0)
+        if hmin > 0:
+            fig.add_shape(type="line", x0=pred - window, x1=pred + window, y0=hmin, y1=hmin,
+                          line=dict(color=ACCENT, width=1, dash="dot"))
         fig.add_vline(x=pred, line=dict(color="#999999", width=1, dash="dash"),
                       annotation_text="predicted", annotation_font_color="#999999",
                       annotation_position="top left")
