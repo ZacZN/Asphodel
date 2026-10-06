@@ -1343,53 +1343,60 @@ _TABLE_CSS = """
 # turns the white background dark and black traces light while keeping the
 # orange accents orange, so the figure code doesn't need a second colour scheme.
 _DARK_CSS = """
-body.dark { background: #161616 !important; color: #e2e2e2 !important; }
-body.dark .theia-sidebar { background: #1e1e1e !important; border-color: #3a3a3a !important; }
-body.dark .theia-box { background: #161616 !important; border-color: #3a3a3a !important; }
-body.dark hr { border-color: #555 !important; }
-body.dark label, body.dark h5, body.dark h6, body.dark summary { color: #e2e2e2 !important; }
+/* High-contrast dark theme: near-black backgrounds, near-white text */
+body.dark { background: #0a0a0a !important; color: #f5f5f5 !important; }
+body.dark .theia-sidebar { background: #141414 !important; border-color: #4a4a4a !important; }
+body.dark .theia-box { background: #0a0a0a !important; border-color: #4a4a4a !important; }
+body.dark hr { border-color: #6a6a6a !important; opacity: 1 !important; }
+body.dark label, body.dark h5, body.dark h6, body.dark summary, body.dark span { color: #f5f5f5 !important; }
+/* help text and sidebar section titles have grey colours set inline */
+body.dark small { color: #c4c4c4 !important; }
+body.dark .theia-sidebar p { color: #d6d6d6 !important; }
 body.dark .form-control, body.dark input[type=number], body.dark input[type=text] {
-    background: #222 !important; color: #e2e2e2 !important; border-color: #444 !important; }
-body.dark .btn-outline-secondary { color: #ccc !important; border-color: #666 !important; }
-body.dark .btn-outline-secondary:hover { background: #333 !important; }
-body.dark .btn-outline-danger { color: #ff8a80 !important; border-color: #a33 !important; }
+    background: #000 !important; color: #fff !important; border-color: #6a6a6a !important; }
+body.dark .dash-input-container { background: #000 !important; }
+body.dark .dash-input-stepper { background: #1c1c1c !important; color: #f0f0f0 !important; border-color: #6a6a6a !important; }
+body.dark .btn-outline-secondary { color: #f0f0f0 !important; border-color: #9a9a9a !important; }
+body.dark .btn-outline-secondary:hover { background: #2e2e2e !important; }
+body.dark .btn-outline-danger { color: #ff9c94 !important; border-color: #e0574c !important; }
 /* tabs */
-body.dark .tab { background: #1e1e1e !important; color: #e2e2e2 !important; border-color: #3a3a3a !important; }
-body.dark .tab--selected { background: #161616 !important; }
-body.dark .tab-container, body.dark .tab-parent { background: #1e1e1e !important; }
+body.dark .tab { background: #141414 !important; color: #d6d6d6 !important; border-color: #4a4a4a !important; }
+body.dark .tab--selected { background: #0a0a0a !important; color: #fff !important; }
+body.dark .tab-container, body.dark .tab-parent { background: #141414 !important; }
 /* dropdowns: Dash 2 (react-select) and Dash 3+ */
 body.dark .Select-control, body.dark .Select-menu-outer, body.dark .Select-menu,
 body.dark .Select-option, body.dark .VirtualizedSelectOption,
 body.dark .dash-dropdown, body.dark .dash-dropdown-content, body.dark .dash-dropdown-options,
 body.dark .dash-dropdown-option, body.dark .dash-dropdown-search, body.dark .dash-dropdown-trigger {
-    background: #222 !important; color: #e2e2e2 !important; border-color: #444 !important; }
-body.dark .Select-value-label, body.dark .Select-placeholder, body.dark .Select-input input,
-body.dark .Select--single > .Select-control .Select-value .Select-value-label { color: #e2e2e2 !important; }
+    background: #000 !important; color: #fff !important; border-color: #6a6a6a !important; }
+body.dark .Select-value-label, body.dark .Select-input input,
+body.dark .Select--single > .Select-control .Select-value .Select-value-label,
+body.dark .dash-dropdown-wrapper, body.dark .dash-dropdown-value-item { color: #fff !important; }
+body.dark .Select-placeholder, body.dark .dash-dropdown-placeholder,
+body.dark .dash-dropdown-action-button { color: #b8b8b8 !important; }
 body.dark .Select-option.is-focused, body.dark .VirtualizedSelectFocusedOption,
-body.dark .dash-dropdown-option:hover { background: #333 !important; }
-body.dark .Select--multi .Select-value { background: #3a2a1c !important; color: #ffd2ab !important;
-    border-color: #6b4a2e !important; }
+body.dark .dash-dropdown-option:hover { background: #2e2e2e !important; }
+body.dark .Select--multi .Select-value { background: #4a2a0c !important; color: #ffd9b8 !important;
+    border-color: #a5642c !important; }
 /* tables (orange header row is kept) */
-body.dark .dash-spreadsheet td { background-color: #1c1c1c !important; color: #e2e2e2 !important;
-    border-color: #3a3a3a !important; }
-body.dark .dash-spreadsheet tr:nth-child(even) td { background-color: #262019 !important; }
-body.dark .dash-spreadsheet th.dash-filter { background-color: #222 !important; border-color: #3a3a3a !important; }
-body.dark .dash-spreadsheet th.dash-filter input { color: #e2e2e2 !important; }
+body.dark .dash-spreadsheet td { background-color: #000 !important; color: #fff !important;
+    border-color: #4a4a4a !important; }
+body.dark .dash-spreadsheet tr:nth-child(even) td { background-color: #33220f !important; }
+body.dark .dash-spreadsheet th.dash-filter { background-color: #141414 !important; border-color: #4a4a4a !important; }
+body.dark .dash-spreadsheet th.dash-filter input { color: #fff !important; background: transparent !important; }
+body.dark .dash-dropdown-clear, body.dark .dash-dropdown-trigger-icon, body.dark .Select-arrow-zone,
+body.dark .Select-clear-zone { color: #d0d0d0 !important; }
 body.dark .dash-spreadsheet-menu .export, body.dark .previous-next-container button {
-    background: #2a2a2a !important; color: #e2e2e2 !important; border-color: #555 !important; }
+    background: #1c1c1c !important; color: #fff !important; border-color: #8a8a8a !important; }
 body.dark .previous-next-container, body.dark .page-number, body.dark .current-page,
-body.dark .current-page-container input, body.dark .last-page { color: #e2e2e2 !important;
+body.dark .current-page-container input, body.dark .last-page { color: #fff !important;
     background: transparent !important; }
-body.dark .dash-input-container { background: #222 !important; }
-body.dark .dash-input-stepper { background: #2a2a2a !important; color: #ccc !important; border-color: #444 !important; }
-body.dark .dash-dropdown-placeholder, body.dark .dash-dropdown-action-button { color: #9a9a9a !important; }
-body.dark .dash-dropdown-wrapper, body.dark .dash-dropdown-value-item { color: #e2e2e2 !important; }
 /* status / info lines that have a dark grey text colour set inline */
 body.dark #scan-status, body.dark #preview-info, body.dark #hits-info, body.dark #refview-info,
-body.dark #snippet-count { color: #e2e2e2 !important; }
-body.dark .theia-progress-track { background: #333 !important; }
-/* plots */
-body.dark .js-plotly-plot { filter: invert(0.9) hue-rotate(180deg); }
+body.dark #snippet-count { color: #fff !important; }
+body.dark .theia-progress-track { background: #3a3a3a !important; }
+/* plots: full inversion -> black background, white traces; orange stays orange */
+body.dark .js-plotly-plot { filter: invert(1) hue-rotate(180deg) contrast(1.15); }
 """
 app.index_string = app.index_string.replace(
     "{%css%}", "{%css%}\n<style>" + _TABLE_CSS + _DARK_CSS + "</style>")
