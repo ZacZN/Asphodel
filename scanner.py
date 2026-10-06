@@ -1286,9 +1286,14 @@ results_tab = html.Div([
                        "the filters and table sorting decide which peaks are shown",
                        style=HELP_STYLE),
             dcc.Store(id="snippet-idx", data=0),
-            dcc.Graph(id="snippet-graph", figure=empty_fig(), style={"height": "420px"},
+            # Grows downwards to fill the row, so its bottom is level with the
+            # bottom of the reference-viewer plot on the left (that plot sits
+            # inside a box with 10 px padding + 1 px border, hence paddingBottom)
+            dcc.Graph(id="snippet-graph", figure=empty_fig(), responsive=True,
+                      style={"flex": "1", "minHeight": "420px"},
                       config={"scrollZoom": True}),
-        ], style={"gridColumn": "2", "gridRow": "3", "minWidth": "0"}),
+        ], style={"gridColumn": "2", "gridRow": "3", "minWidth": "0", "alignSelf": "stretch",
+                  "display": "flex", "flexDirection": "column", "paddingBottom": "11px"}),
     ], style={"display": "grid", "gridTemplateColumns": "34% minmax(0, 1fr)",
               "columnGap": "16px", "alignItems": "start"}),
 ], style={"padding": "14px 18px", "overflowY": "auto", "height": "calc(100vh - 42px)"})
@@ -1314,6 +1319,7 @@ app.layout = html.Div([
     dcc.Store(id="scan-finished"),
     # Hidden hooks used by the clientside callbacks that attach the readout
     *[html.Div(id=f"_readout-hook-{gid}", style={"display": "none"}) for gid in READOUT_GRAPHS],
+    html.Div(id="_snippet-resize-hook", style={"display": "none"}),
 ])
 
 # ---------------------------------------------------------------------------
@@ -1387,6 +1393,28 @@ for _gid in READOUT_GRAPHS:
         Output(f"_readout-hook-{_gid}", "children"),
         Input(_gid, "figure"),
     )
+
+# The snippet plot stretches to fill its grid row, whose height depends on the
+# left column (e.g. when the reference-viewer info text wraps).  Plotly only
+# resizes on window resize, so watch the container and resize the plot.
+app.clientside_callback(
+    """
+    function(figure) {
+        setTimeout(function() {
+            var box = document.getElementById('snippet-graph');
+            if (!box || box._theiaResize || !window.ResizeObserver) return;
+            box._theiaResize = true;
+            new ResizeObserver(function() {
+                var gd = box.querySelector('.js-plotly-plot');
+                if (gd && window.Plotly) { window.Plotly.Plots.resize(gd); }
+            }).observe(box);
+        }, 200);
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("_snippet-resize-hook", "children"),
+    Input("snippet-graph", "figure"),
+)
 
 SETTING_KEYS = list(SETTING_FIELDS)
 SETTING_STATES = [State(cid, prop) for cid, prop in SETTING_FIELDS.values()]
