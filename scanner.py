@@ -541,6 +541,7 @@ DEFAULTS = dict(
     shoulder_scale_hz  = 10,
     k_shoulder         = 5.0,
     match_tol_hz       = 100,
+    snippet_half_width = 5000,   # Results tab, not a scan setting
 )
 
 
@@ -549,9 +550,12 @@ def load_config():
 
 
 def save_config(cfg):
+    """Merge `cfg` into scanner_config.json (keys not in cfg are kept, e.g. the
+    snippet half-width is saved separately from the scan settings)."""
     try:
+        merged = {**_load_json(CONFIG_PATH), **cfg}
         with open(CONFIG_PATH, "w") as fh:
-            json.dump(cfg, fh, indent=2)
+            json.dump(merged, fh, indent=2)
     except Exception:
         pass
 
@@ -1278,7 +1282,8 @@ results_tab = html.Div([
                 html.Button("Next ▶", id="btn-snip-next", className="btn btn-outline-secondary btn-sm",
                             style={"marginRight": "16px"}),
                 html.Label("Snippet half-width (Hz)", style={**LABEL_STYLE, "margin": "0 8px 0 0"}),
-                dcc.Input(id="snippet-width", type="number", value=1000, debounce=True,
+                dcc.Input(id="snippet-width", type="number", value=CFG["snippet_half_width"],
+                          debounce=True,
                           className="form-control form-control-sm", style={"width": "140px"}),
             ], style={"display": "flex", "alignItems": "center", "marginTop": "8px",
                       "flexWrap": "wrap"}),
@@ -1320,6 +1325,7 @@ app.layout = html.Div([
     # Hidden hooks used by the clientside callbacks that attach the readout
     *[html.Div(id=f"_readout-hook-{gid}", style={"display": "none"}) for gid in READOUT_GRAPHS],
     html.Div(id="_snippet-resize-hook", style={"display": "none"}),
+    html.Div(id="_snippet-width-saved", style={"display": "none"}),
 ])
 
 # ---------------------------------------------------------------------------
@@ -1781,6 +1787,28 @@ def show_snippet(idx, half_width, rows, path):
     except Exception as exc:
         traceback.print_exc()
         return empty_fig(f"Could not load spectrum: {exc}")
+
+
+@app.callback(
+    Output("snippet-width", "value"),
+    Input("tabs", "value"),
+)
+def restore_snippet_width(_tab):
+    """Show the last saved half-width when the page (re)loads."""
+    return load_config().get("snippet_half_width", DEFAULTS["snippet_half_width"])
+
+
+@app.callback(
+    Output("_snippet-width-saved", "children"),
+    Input("snippet-width", "value"),
+    prevent_initial_call=True,
+)
+def remember_snippet_width(value):
+    """Save the half-width so it is restored next time scanner.py runs."""
+    if value is not None and value > 0:
+        save_config({"snippet_half_width": value})
+    return dash.no_update
+
 
 
 # ===========================================================================
