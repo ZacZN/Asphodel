@@ -1124,6 +1124,9 @@ def _table(id_, columns, page_size=20, height=None, overflow_x="auto", **kw):
 
 
 BTN = {"marginRight": "8px"}
+# Outline used around the plots in the Results tab
+BOX_STYLE = {"border": "1px solid #dddddd", "borderRadius": "6px", "padding": "10px",
+             "background": "#ffffff"}
 TABLE_PAGE_SIZE = 15    # rows per page of the hits table
 TABLE_ROW_PX = 30       # DataTable row height
 FILTER_HEAD_PX = 120    # height of the filter block above the hits table
@@ -1235,9 +1238,11 @@ results_tab = html.Div([
 
         # row 3, left: reference tracking + per-spectrum reference viewer
         html.Div([
-            html.H6("Reference tracking", style={"fontWeight": "600", "marginTop": "10px"}),
-            dcc.Graph(id="ref-graph", figure=empty_fig(), style={"height": "280px"}),
-            html.Small("Click a point to open that spectrum below", style=HELP_STYLE),
+            html.Div([
+                html.H6("Reference tracking", style={"fontWeight": "600", "marginBottom": "6px"}),
+                dcc.Graph(id="ref-graph", figure=empty_fig(), style={"height": "280px"}),
+                html.Small("Click a point to open that spectrum below", style=HELP_STYLE),
+            ], style={**BOX_STYLE, "marginTop": "10px"}),
 
             # Reference viewer: flip through spectra and see where the ref was found
             html.Div([
@@ -1265,8 +1270,7 @@ results_tab = html.Div([
                 dcc.Graph(id="refview-graph", figure=empty_fig("Load a database"),
                           style={"height": "340px"}, config={"scrollZoom": True}),
                 dcc.Store(id="refview-seq", data=0),
-            ], style={"border": "1px solid #dddddd", "borderRadius": "6px", "padding": "10px",
-                      "marginTop": "10px", "background": "#ffffff"}),
+            ], style={**BOX_STYLE, "marginTop": "10px"}),
         ], style={"gridColumn": "1", "gridRow": "3", "minWidth": "0"}),
         # row 3, right: peak-by-peak snippet viewer
         html.Div([
@@ -1285,20 +1289,20 @@ results_tab = html.Div([
                 dcc.Input(id="snippet-width", type="number", value=CFG["snippet_half_width"],
                           debounce=True,
                           className="form-control form-control-sm", style={"width": "140px"}),
-            ], style={"display": "flex", "alignItems": "center", "marginTop": "8px",
-                      "flexWrap": "wrap"}),
+            ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap"}),
             html.Small("Steps through every identification in the table above, in table order; "
                        "the filters and table sorting decide which peaks are shown",
                        style=HELP_STYLE),
             dcc.Store(id="snippet-idx", data=0),
-            # Grows downwards to fill the row, so its bottom is level with the
-            # bottom of the reference-viewer plot on the left (that plot sits
-            # inside a box with 10 px padding + 1 px border, hence paddingBottom)
+            # Grows downwards to fill the row: this box and the reference-viewer
+            # box on the left end at the same height and have the same padding,
+            # so the bottoms of the two plots line up
             dcc.Graph(id="snippet-graph", figure=empty_fig(), responsive=True,
                       style={"flex": "1", "minHeight": "420px"},
                       config={"scrollZoom": True}),
-        ], style={"gridColumn": "2", "gridRow": "3", "minWidth": "0", "alignSelf": "stretch",
-                  "display": "flex", "flexDirection": "column", "paddingBottom": "11px"}),
+        ], style={**BOX_STYLE, "gridColumn": "2", "gridRow": "3", "minWidth": "0",
+                  "alignSelf": "stretch", "marginTop": "10px",
+                  "display": "flex", "flexDirection": "column"}),
     ], style={"display": "grid", "gridTemplateColumns": "34% minmax(0, 1fr)",
               "columnGap": "16px", "alignItems": "start"}),
 ], style={"padding": "14px 18px", "overflowY": "auto", "height": "calc(100vh - 42px)"})
