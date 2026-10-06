@@ -1161,6 +1161,35 @@ results_tab = html.Div([
                    page_size=25),
             html.H6("Reference tracking", style={"fontWeight": "600", "marginTop": "10px"}),
             dcc.Graph(id="ref-graph", figure=empty_fig(), style={"height": "280px"}),
+            html.Small("Click a point to open that spectrum below", style=HELP_STYLE),
+
+            # Reference viewer: flip through spectra and see where the ref was found
+            html.Div([
+                html.H6("Reference in each spectrum", style={"fontWeight": "600", "marginBottom": "6px"}),
+                html.Div([
+                    html.Button("◀ Prev", id="btn-ref-prev", className="btn btn-outline-secondary btn-sm",
+                                style={"marginRight": "6px"}),
+                    dcc.Input(id="refview-seq-input", type="number", min=0, step=1, value=0,
+                              debounce=True, className="form-control form-control-sm",
+                              style={"width": "90px", "marginRight": "6px"}),
+                    html.Button("Next ▶", id="btn-ref-next", className="btn btn-outline-secondary btn-sm",
+                                style={"marginRight": "12px"}),
+                    html.Label("View ± (Hz)", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
+                    dcc.Input(id="refview-width", type="number", value=2000, min=100, debounce=True,
+                              className="form-control form-control-sm", style={"width": "100px"}),
+                ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap"}),
+                dcc.Checklist(id="refview-only-notfound",
+                              options=[{"label": " Step only through spectra where the ref was not found",
+                                        "value": "on"}],
+                              value=[], inputStyle={"marginRight": "4px"},
+                              style={"fontSize": "12px", "margin": "6px 0"}),
+                html.Div(id="refview-info", style={"fontSize": "12px", "color": "#333",
+                                                   "whiteSpace": "pre-wrap"}),
+                dcc.Graph(id="refview-graph", figure=empty_fig("Load a database"),
+                          style={"height": "340px"}, config={"scrollZoom": True}),
+                dcc.Store(id="refview-seq", data=0),
+            ], style={"border": "1px solid #dddddd", "borderRadius": "6px", "padding": "10px",
+                      "marginTop": "10px", "background": "#ffffff"}),
         ], style={"width": "34%", "marginRight": "16px"}),
 
         # right: filtered hits
@@ -1208,7 +1237,7 @@ results_tab = html.Div([
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
 app.title = "Theia Scanner"
 # Spectrum graphs that get the bottom-right coordinate readout
-READOUT_GRAPHS = ["preview-graph", "snippet-graph"]
+READOUT_GRAPHS = ["preview-graph", "snippet-graph", "refview-graph"]
 TAB_STYLE = {"padding": "8px 16px", "fontWeight": "600"}
 TAB_SEL = {**TAB_STYLE, "borderTop": f"3px solid {ACCENT}"}
 
@@ -1637,6 +1666,128 @@ def show_snippet(selected, half_width, rows, path):
     except Exception as exc:
         traceback.print_exc()
         return empty_fig(f"Could not load spectrum: {exc}")
+
+
+# ===========================================================================
+# Callbacks — reference viewer (Results tab)
+# ===========================================================================
+
+@app.callback(
+    Output("refview-seq", "data"),
+    Output("refview-seq-input", "value"),
+    Input("btn-ref-prev", "n_clicks"),
+    Input("btn-ref-next", "n_clicks"),
+    Input("refview-seq-input", "value"),
+    Input("ref-graph", "clickData"),
+    Input("db-select", "value"),
+    State("refview-seq", "data"),
+    State("refview-only-notfound", "value"),
+)
+def refview_step(_p, _n, typed, click, path, current, only_nf):
+    """Work out which spectrum (seq number) the reference viewer shows."""
+    if not path or not os.path.exists(path):
+        return 0, 0
+    sp = db_query(path, "SELECT seq, ref_status FROM spectra ORDER BY seq")
+    if sp.empty:
+        return 0, 0
+    allowed = sp[sp["ref_status"] != "found"]["seq"].to_numpy() if only_nf else sp["seq"].to_numpy()
+    if len(allowed) == 0:
+        allowed = sp["seq"].to_numpy()
+    trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
+    cur = int(current or 0)
+
+    if trig.startswith("db-select"):
+        new = int(allowed[0])
+    elif trig.startswith("btn-ref-next"):
+        later = allowed[allowed > cur]
+        new = int(later[0]) if len(later) else int(allowed[-1])
+    elif trig.startswith("btn-ref-prev"):
+        earlier = allowed[allowed < cur]
+        new = int(earlier[-1]) if len(earlier) else int(allowed[0])
+    elif trig.startswith("ref-graph") and click and click.get("points"):
+        new = int(round(click["points"][0]["x"]))
+    elif trig.startswith("refview-seq-input") and typed is not None:
+        new = int(typed)
+    else:
+        new = cur
+    new = int(min(max(new, int(sp["seq"].min())), int(sp["seq"].max())))
+    return new, new
+
+
+@app.callback(
+    Output("refview-graph", "figure"),
+    Output("refview-info", "children"),
+    Input("refview-seq", "data"),
+    Input("refview-width", "value"),
+    Input("db-select", "value"),
+)
+def refview_plot(seq, half_width, path):
+    if not path or not os.path.exists(path):
+        return empty_fig("Load a database"), ""
+    row = db_query(path, "SELECT * FROM spectra WHERE seq = ?", (int(seq or 0),))
+    if row.empty:
+        return empty_fig("No such spectrum"), ""
+    row = row.iloc[0]
+    con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    st = read_kv(con, "settings")
+    con.close()
+    n_total = int(db_query(path, "SELECT COUNT(*) AS n FROM spectra")["n"].iloc[0])
+
+    pred = row["ref_predicted"]
+    found = row["ref_found"] if pd.notna(row["ref_found"]) else None
+    window = float(st.get("ref_window_hz", 0))
+    centre = found if found is not None else pred
+    w = float(half_width or 2000)
+
+    info = (f"#{int(row['seq'])} of {n_total - 1}:  {row['name']}  |  ref {st.get('ref_name', '?')} "
+            f"(h={st.get('ref_harmonic', '?')})  |  status: {row['ref_status']}  |  "
+            f"predicted {pred:.1f} Hz" if pd.notna(pred) else f"#{int(row['seq'])}: {row['name']}")
+    if found is not None:
+        info += f"  |  found {found:.1f} Hz ({found - pred:+.1f} Hz from prediction)"
+    if isinstance(row.get("error"), str) and row["error"]:
+        info += f"\nError: {row['error']}"
+
+    try:
+        ff, pp = load_spectrum(st["spectra_dir"], row["name"])
+    except Exception as exc:
+        return empty_fig(f"Could not load spectrum: {exc}"), info
+
+    # Only send a few view-widths of data to the browser
+    m = (ff >= centre - 3 * w) & (ff <= centre + 3 * w)
+    fig = go.Figure()
+    fig.add_trace(go.Scattergl(x=ff[m], y=pp[m], mode="lines", name="Spectrum", hoverinfo="skip",
+                               line=dict(shape="hvh", color="black", width=1)))
+    pk = db_query(path, "SELECT freq, power, snr, kind FROM peaks WHERE spectrum_id = ? "
+                        "AND freq BETWEEN ? AND ?",
+                  (int(row["spectrum_id"]), centre - 3 * w, centre + 3 * w))
+    pk = pk[pk["kind"] == "max"]
+    if len(pk):
+        fig.add_trace(go.Scatter(x=pk["freq"], y=pk["power"], mode="markers", name="Detected maxima",
+                                 marker=dict(symbol="triangle-up", color=ACCENT, size=8,
+                                             line=dict(color="black", width=0.6)),
+                                 hovertext=[f"f = {f:.1f} Hz<br>P = {p:.4g}<br>SNR = {s:.1f}"
+                                            for f, p, s in zip(pk["freq"], pk["power"], pk["snr"])],
+                                 hoverinfo="text"))
+    if pd.notna(pred):
+        fig.add_vrect(x0=pred - window, x1=pred + window, fillcolor=ACCENT_PALE, opacity=0.8,
+                      line_width=0, layer="below")
+        fig.add_vline(x=pred, line=dict(color="#999999", width=1, dash="dash"),
+                      annotation_text="predicted", annotation_font_color="#999999",
+                      annotation_position="top left")
+    if found is not None:
+        fig.add_vline(x=found, line=dict(color=ACCENT, width=2),
+                      annotation_text="found", annotation_font_color=ACCENT)
+
+    vm = (ff >= centre - w) & (ff <= centre + w)
+    fig.update_layout(template="plotly_white", margin=dict(l=55, r=10, t=10, b=40),
+                      xaxis_title="Frequency (Hz)", yaxis_title="Power (a.u.)",
+                      dragmode="pan", hovermode="x", font=dict(size=11), showlegend=False)
+    fig.update_xaxes(range=[centre - w, centre + w], autorange=False)
+    if vm.any():
+        lo, hi = float(pp[vm].min()), float(pp[vm].max())
+        fig.update_yaxes(range=[lo - 0.05 * (hi - lo or 1), hi + 0.12 * (hi - lo or 1)])
+    return fig, info
+
 
 
 # ===========================================================================
