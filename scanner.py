@@ -1190,7 +1190,7 @@ results_tab = html.Div([
     # and its table starts straight under it; the hits table starts below the
     # filters.  Both header blocks have fixed heights, and the ions-found table
     # shows exactly enough extra rows to fill the difference, so the two
-    # tables' pagination buttons line up (DataTable rows are 30 px).
+    # tables end level with each other (DataTable rows are 30 px).
     #   left  (rows 1-2): heading + ions-found table
     #   right row 1: filters        right row 2: hits table
     #   row 3: reference tracking (left) / snippet viewer (right)
@@ -1310,6 +1310,20 @@ results_tab = html.Div([
 
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
 app.title = "Theia Scanner"
+
+# Results tables: move the page buttons from below the table to the top right,
+# level with the Export button (both 30 px tall), so nothing is left below it.
+_TABLE_CSS = """
+#summary-table, #hits-table { position: relative; }
+#summary-table .previous-next-container, #hits-table .previous-next-container {
+    position: absolute; top: 0; right: 0; margin: 0; padding: 0;
+    height: 30px; display: flex; align-items: center;
+}
+#summary-table .previous-next-container button, #hits-table .previous-next-container button {
+    height: 30px; padding-top: 0; padding-bottom: 0;
+}
+"""
+app.index_string = app.index_string.replace("{%css%}", "{%css%}\n<style>" + _TABLE_CSS + "</style>")
 # Spectrum graphs that get the bottom-right coordinate readout
 READOUT_GRAPHS = ["preview-graph", "snippet-graph", "refview-graph"]
 TAB_STYLE = {"padding": "8px 16px", "fontWeight": "600"}
