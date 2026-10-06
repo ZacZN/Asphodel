@@ -542,6 +542,7 @@ DEFAULTS = dict(
     k_shoulder         = 5.0,
     match_tol_hz       = 100,
     snippet_half_width = 5000,   # Results tab, not a scan setting
+    dark_mode          = [],     # display only, not a scan setting
 )
 
 
@@ -549,13 +550,24 @@ def load_config():
     return {**DEFAULTS, **_load_json(CONFIG_PATH)}
 
 
+_CONFIG_LOCK = threading.Lock()
+
+
 def save_config(cfg):
     """Merge `cfg` into scanner_config.json (keys not in cfg are kept, e.g. the
-    snippet half-width is saved separately from the scan settings)."""
+    snippet half-width is saved separately from the scan settings).
+
+    Several callbacks can save at the same moment (the server is threaded), so
+    the read-merge-write is locked and the file is replaced atomically; this
+    stops one save reading a half-written file and wiping the others.
+    """
     try:
-        merged = {**_load_json(CONFIG_PATH), **cfg}
-        with open(CONFIG_PATH, "w") as fh:
-            json.dump(merged, fh, indent=2)
+        with _CONFIG_LOCK:
+            merged = {**_load_json(CONFIG_PATH), **cfg}
+            tmp = CONFIG_PATH + ".tmp"
+            with open(tmp, "w") as fh:
+                json.dump(merged, fh, indent=2)
+            os.replace(tmp, CONFIG_PATH)
     except Exception:
         pass
 
@@ -1109,7 +1121,8 @@ sidebar = html.Div([
     inp("Match window ± x (Hz)", "match_tol_hz", True,
         help="Any peak within ±x of a simulated ion is identified as it"),
     html.Div(style={"height": "30px"}),
-], style={"width": "300px", "minWidth": "300px", "padding": "14px 18px", "background": "#f9f9f9",
+], className="theia-sidebar",
+   style={"width": "300px", "minWidth": "300px", "padding": "14px 18px", "background": "#f9f9f9",
           "overflowY": "auto", "borderRight": "1px solid #dddddd", "height": "calc(100vh - 42px)"})
 
 
@@ -1150,7 +1163,8 @@ scan_main = html.Div([
     html.Div([
         html.Div(id="progress-bar", style={"height": "100%", "width": "0%", "background": ACCENT,
                                            "transition": "width 0.4s"}),
-    ], style={"height": "8px", "background": "#eeeeee", "borderRadius": "4px", "overflow": "hidden",
+    ], className="theia-progress-track",
+       style={"height": "8px", "background": "#eeeeee", "borderRadius": "4px", "overflow": "hidden",
               "margin": "8px 0 4px 0"}),
     html.Div(id="scan-status", style={"fontSize": "13px", "color": "#333"}),
     html.Div([html.Span(id="action-msg"), html.Span(id="cancel-msg", style={"marginLeft": "8px"})],
@@ -1242,7 +1256,7 @@ results_tab = html.Div([
                 html.H6("Reference tracking", style={"fontWeight": "600", "marginBottom": "6px"}),
                 dcc.Graph(id="ref-graph", figure=empty_fig(), style={"height": "280px"}),
                 html.Small("Click a point to open that spectrum below", style=HELP_STYLE),
-            ], style={**BOX_STYLE, "marginTop": "10px"}),
+            ], className="theia-box", style={**BOX_STYLE, "marginTop": "10px"}),
 
             # Reference viewer: flip through spectra and see where the ref was found
             html.Div([
@@ -1270,7 +1284,7 @@ results_tab = html.Div([
                 dcc.Graph(id="refview-graph", figure=empty_fig("Load a database"),
                           style={"height": "340px"}, config={"scrollZoom": True}),
                 dcc.Store(id="refview-seq", data=0),
-            ], style={**BOX_STYLE, "marginTop": "10px"}),
+            ], className="theia-box", style={**BOX_STYLE, "marginTop": "10px"}),
         ], style={"gridColumn": "1", "gridRow": "3", "minWidth": "0"}),
         # row 3, right: peak-by-peak snippet viewer
         html.Div([
@@ -1300,7 +1314,7 @@ results_tab = html.Div([
             dcc.Graph(id="snippet-graph", figure=empty_fig(), responsive=True,
                       style={"flex": "1", "minHeight": "420px"},
                       config={"scrollZoom": True}),
-        ], style={**BOX_STYLE, "gridColumn": "2", "gridRow": "3", "minWidth": "0",
+        ], className="theia-box", style={**BOX_STYLE, "gridColumn": "2", "gridRow": "3", "minWidth": "0",
                   "alignSelf": "stretch", "marginTop": "10px",
                   "display": "flex", "flexDirection": "column"}),
     ], style={"display": "grid", "gridTemplateColumns": "34% minmax(0, 1fr)",
@@ -1323,13 +1337,75 @@ _TABLE_CSS = """
     height: 30px; padding-top: 0; padding-bottom: 0;
 }
 """
-app.index_string = app.index_string.replace("{%css%}", "{%css%}\n<style>" + _TABLE_CSS + "</style>")
+
+# Dark mode: a "dark" class on <body> (set by a clientside callback) switches
+# these rules on.  Plots are darkened with an invert + hue-rotate filter, which
+# turns the white background dark and black traces light while keeping the
+# orange accents orange, so the figure code doesn't need a second colour scheme.
+_DARK_CSS = """
+body.dark { background: #161616 !important; color: #e2e2e2 !important; }
+body.dark .theia-sidebar { background: #1e1e1e !important; border-color: #3a3a3a !important; }
+body.dark .theia-box { background: #161616 !important; border-color: #3a3a3a !important; }
+body.dark hr { border-color: #555 !important; }
+body.dark label, body.dark h5, body.dark h6, body.dark summary { color: #e2e2e2 !important; }
+body.dark .form-control, body.dark input[type=number], body.dark input[type=text] {
+    background: #222 !important; color: #e2e2e2 !important; border-color: #444 !important; }
+body.dark .btn-outline-secondary { color: #ccc !important; border-color: #666 !important; }
+body.dark .btn-outline-secondary:hover { background: #333 !important; }
+body.dark .btn-outline-danger { color: #ff8a80 !important; border-color: #a33 !important; }
+/* tabs */
+body.dark .tab { background: #1e1e1e !important; color: #e2e2e2 !important; border-color: #3a3a3a !important; }
+body.dark .tab--selected { background: #161616 !important; }
+body.dark .tab-container, body.dark .tab-parent { background: #1e1e1e !important; }
+/* dropdowns: Dash 2 (react-select) and Dash 3+ */
+body.dark .Select-control, body.dark .Select-menu-outer, body.dark .Select-menu,
+body.dark .Select-option, body.dark .VirtualizedSelectOption,
+body.dark .dash-dropdown, body.dark .dash-dropdown-content, body.dark .dash-dropdown-options,
+body.dark .dash-dropdown-option, body.dark .dash-dropdown-search, body.dark .dash-dropdown-trigger {
+    background: #222 !important; color: #e2e2e2 !important; border-color: #444 !important; }
+body.dark .Select-value-label, body.dark .Select-placeholder, body.dark .Select-input input,
+body.dark .Select--single > .Select-control .Select-value .Select-value-label { color: #e2e2e2 !important; }
+body.dark .Select-option.is-focused, body.dark .VirtualizedSelectFocusedOption,
+body.dark .dash-dropdown-option:hover { background: #333 !important; }
+body.dark .Select--multi .Select-value { background: #3a2a1c !important; color: #ffd2ab !important;
+    border-color: #6b4a2e !important; }
+/* tables (orange header row is kept) */
+body.dark .dash-spreadsheet td { background-color: #1c1c1c !important; color: #e2e2e2 !important;
+    border-color: #3a3a3a !important; }
+body.dark .dash-spreadsheet tr:nth-child(even) td { background-color: #262019 !important; }
+body.dark .dash-spreadsheet th.dash-filter { background-color: #222 !important; border-color: #3a3a3a !important; }
+body.dark .dash-spreadsheet th.dash-filter input { color: #e2e2e2 !important; }
+body.dark .dash-spreadsheet-menu .export, body.dark .previous-next-container button {
+    background: #2a2a2a !important; color: #e2e2e2 !important; border-color: #555 !important; }
+body.dark .previous-next-container, body.dark .page-number, body.dark .current-page,
+body.dark .current-page-container input, body.dark .last-page { color: #e2e2e2 !important;
+    background: transparent !important; }
+body.dark .dash-input-container { background: #222 !important; }
+body.dark .dash-input-stepper { background: #2a2a2a !important; color: #ccc !important; border-color: #444 !important; }
+body.dark .dash-dropdown-placeholder, body.dark .dash-dropdown-action-button { color: #9a9a9a !important; }
+body.dark .dash-dropdown-wrapper, body.dark .dash-dropdown-value-item { color: #e2e2e2 !important; }
+/* status / info lines that have a dark grey text colour set inline */
+body.dark #scan-status, body.dark #preview-info, body.dark #hits-info, body.dark #refview-info,
+body.dark #snippet-count { color: #e2e2e2 !important; }
+body.dark .theia-progress-track { background: #333 !important; }
+/* plots */
+body.dark .js-plotly-plot { filter: invert(0.9) hue-rotate(180deg); }
+"""
+app.index_string = app.index_string.replace(
+    "{%css%}", "{%css%}\n<style>" + _TABLE_CSS + _DARK_CSS + "</style>")
 # Spectrum graphs that get the bottom-right coordinate readout
 READOUT_GRAPHS = ["preview-graph", "snippet-graph", "refview-graph"]
 TAB_STYLE = {"padding": "8px 16px", "fontWeight": "600"}
 TAB_SEL = {**TAB_STYLE, "borderTop": f"3px solid {ACCENT}"}
 
 app.layout = html.Div([
+    # Dark-mode tick box: sits at the right-hand end of the tab bar, so it is
+    # visible on both pages
+    dcc.Checklist(id="dark-mode", options=[{"label": " Dark mode", "value": "on"}],
+                  value=CFG.get("dark_mode", []), inputStyle={"marginRight": "5px"},
+                  style={"position": "absolute", "top": "11px", "right": "18px", "zIndex": "10",
+                         "fontSize": "13px", "fontWeight": "600"}),
+    html.Div(id="_dark-mode-hook", style={"display": "none"}),
     dcc.Tabs(id="tabs", value="scan", children=[
         dcc.Tab(label="Scan", value="scan", style=TAB_STYLE, selected_style=TAB_SEL, children=[
             html.Div([sidebar, scan_main], style={"display": "flex"}),
@@ -1344,7 +1420,7 @@ app.layout = html.Div([
     *[html.Div(id=f"_readout-hook-{gid}", style={"display": "none"}) for gid in READOUT_GRAPHS],
     html.Div(id="_snippet-resize-hook", style={"display": "none"}),
     html.Div(id="_snippet-width-saved", style={"display": "none"}),
-])
+], style={"position": "relative"})
 
 # ---------------------------------------------------------------------------
 # Coordinate readout (bottom-right) for the spectrum graphs
@@ -1825,6 +1901,43 @@ def remember_snippet_width(value):
     """Save the half-width so it is restored next time scanner.py runs."""
     if value is not None and value > 0:
         save_config({"snippet_half_width": value})
+    return dash.no_update
+
+
+
+# ===========================================================================
+# Callbacks — dark mode (both pages)
+# ===========================================================================
+
+app.clientside_callback(
+    """
+    function(value) {
+        document.body.classList.toggle('dark', !!(value && value.length));
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("_dark-mode-hook", "children"),
+    Input("dark-mode", "value"),
+)
+
+
+@app.callback(
+    Output("dark-mode", "value"),
+    Input("tabs", "value"),
+)
+def restore_dark_mode(_tab):
+    """Show the last saved dark-mode choice when the page (re)loads."""
+    return load_config().get("dark_mode", [])
+
+
+@app.callback(
+    Output("_dark-mode-hook", "title"),
+    Input("dark-mode", "value"),
+    prevent_initial_call=True,
+)
+def remember_dark_mode(value):
+    """Save the choice so it is restored next time scanner.py runs."""
+    save_config({"dark_mode": value or []})
     return dash.no_update
 
 
