@@ -1174,7 +1174,7 @@ results_tab = html.Div([
                               style={"width": "90px", "marginRight": "6px"}),
                     html.Button("Next ▶", id="btn-ref-next", className="btn btn-outline-secondary btn-sm",
                                 style={"marginRight": "12px"}),
-                    html.Label("View ± (Hz)", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
+                    html.Label("Initial view ± (Hz)", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
                     dcc.Input(id="refview-width", type="number", value=2000, min=100, debounce=True,
                               className="form-control form-control-sm", style={"width": "100px"}),
                 ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap"}),
@@ -1183,6 +1183,7 @@ results_tab = html.Div([
                                         "value": "on"}],
                               value=[], inputStyle={"marginRight": "4px"},
                               style={"fontSize": "12px", "margin": "6px 0"}),
+                html.Small("Double-click the plot to see the whole spectrum", style=HELP_STYLE),
                 html.Div(id="refview-info", style={"fontSize": "12px", "color": "#333",
                                                    "whiteSpace": "pre-wrap"}),
                 dcc.Graph(id="refview-graph", figure=empty_fig("Load a database"),
@@ -1752,14 +1753,13 @@ def refview_plot(seq, half_width, path):
     except Exception as exc:
         return empty_fig(f"Could not load spectrum: {exc}"), info
 
-    # Only send a few view-widths of data to the browser
-    m = (ff >= centre - 3 * w) & (ff <= centre + 3 * w)
+    # The whole spectrum is sent so you can zoom/pan anywhere; the initial
+    # view is zoomed on the reference (double-click to see everything)
     fig = go.Figure()
-    fig.add_trace(go.Scattergl(x=ff[m], y=pp[m], mode="lines", name="Spectrum", hoverinfo="skip",
+    fig.add_trace(go.Scattergl(x=ff, y=pp, mode="lines", name="Spectrum", hoverinfo="skip",
                                line=dict(shape="hvh", color="black", width=1)))
-    pk = db_query(path, "SELECT freq, power, snr, kind FROM peaks WHERE spectrum_id = ? "
-                        "AND freq BETWEEN ? AND ?",
-                  (int(row["spectrum_id"]), centre - 3 * w, centre + 3 * w))
+    pk = db_query(path, "SELECT freq, power, snr, kind FROM peaks WHERE spectrum_id = ?",
+                  (int(row["spectrum_id"]),))
     pk = pk[pk["kind"] == "max"]
     if len(pk):
         fig.add_trace(go.Scatter(x=pk["freq"], y=pk["power"], mode="markers", name="Detected maxima",
