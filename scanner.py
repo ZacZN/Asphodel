@@ -1325,7 +1325,13 @@ results_tab = html.Div([
                 html.Button("?", id="btn-unsure", title="Unsure about this identification",
                             className="btn btn-sm", style=UNSURE_BTN),
                 html.Button("✓", id="btn-accept", title="Accept this identification",
-                            className="btn btn-sm", style=ACCEPT_BTN),
+                            className="btn btn-sm", style={**ACCEPT_BTN, "marginRight": "8px"}),
+                html.Button("✓ Accept all", id="btn-accept-all",
+                            title="Accept every identification in the current filtered list "
+                                  "(overwrites rejects / unsures)",
+                            className="btn btn-sm",
+                            style={"backgroundColor": "#2e7d32", "color": "white", "fontWeight": "600",
+                                   "height": "42px", "marginRight": "16px"}),
                 html.Div([
                     html.Div(id="confirm-status", style={"fontSize": "14px", "fontWeight": "600"}),
                     html.Div(id="confirm-counts", style={"fontSize": "12px"}),
@@ -2008,6 +2014,7 @@ def toggle_confirm_mode(n, active):
     Input("btn-accept", "n_clicks"),
     Input("btn-reject", "n_clicks"),
     Input("btn-unsure", "n_clicks"),
+    Input("btn-accept-all", "n_clicks"),
     State("snippet-idx", "data"),
     State("hits-table", "derived_virtual_data"),
     State("db-select", "value"),
@@ -2017,22 +2024,30 @@ def toggle_confirm_mode(n, active):
     State("confirm-store", "data"),
     prevent_initial_call=True,
 )
-def record_decision(_a, _r, _u, idx, rows, path, ion_filter, spec_filter, closest, store):
-    """Remember accept / reject / unsure for the identification currently shown."""
-    if not rows or not path or idx is None or idx >= len(rows):
+def record_decision(_a, _r, _u, _all, idx, rows, path, ion_filter, spec_filter, closest, store):
+    """Remember accept / reject / unsure for the identification currently shown,
+    or accept every identification in the filtered list ("Accept all")."""
+    if not rows or not path:
         return dash.no_update
     trig = dash.callback_context.triggered[0]["prop_id"]
-    row = rows[int(idx)]
     store = dict(store or {})
-    store[_ident_key(path, row)] = dict(
-        decision=("accept" if trig.startswith("btn-accept") else
-                  "unsure" if trig.startswith("btn-unsure") else "reject"),
-        db=os.path.basename(path), spectrum=row["spectrum"],
-        spectrum_id=int(row["spectrum_id"]), peak_id=int(row["peak_id"]),
-        ion=row["ion"], harmonic=int(row["harmonic"]),
-        filter=_filter_text(ion_filter, spec_filter, closest),
-        time=datetime.datetime.now().isoformat(timespec="seconds"),
-    )
+    flt = _filter_text(ion_filter, spec_filter, closest)
+    now = datetime.datetime.now().isoformat(timespec="seconds")
+
+    def _rec(row, decision):
+        store[_ident_key(path, row)] = dict(
+            decision=decision, db=os.path.basename(path), spectrum=row["spectrum"],
+            spectrum_id=int(row["spectrum_id"]), peak_id=int(row["peak_id"]),
+            ion=row["ion"], harmonic=int(row["harmonic"]), filter=flt, time=now)
+
+    if trig.startswith("btn-accept-all"):
+        for row in rows:          # whole filtered list; overwrites earlier decisions
+            _rec(row, "accept")
+        return store
+    if idx is None or idx >= len(rows):
+        return dash.no_update
+    _rec(rows[int(idx)], "accept" if trig.startswith("btn-accept") else
+                         "unsure" if trig.startswith("btn-unsure") else "reject")
     return store
 
 
