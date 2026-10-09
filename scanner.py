@@ -1920,6 +1920,25 @@ def show_snippet(idx, half_width, rows, path):
             top = float(pp[int(np.argmin(np.abs(ff - float(row["peak_freq"]))))])
             if top > lo:
                 fig.update_yaxes(range=[lo, lo + 2.0 * (top - lo)], autorange=False)
+
+        # Peak properties (as stored by the scan) in a box at the top right
+        pk = db_query(path, "SELECT power, prominence, snr, height_snr, width_hz, kind "
+                            "FROM peaks WHERE peak_id = ?", (int(row["peak_id"]),))
+        if len(pk):
+            p = pk.iloc[0]
+            bin_hz = (ff[-1] - ff[0]) / (len(ff) - 1)
+            fmt = lambda v, f: "–" if pd.isna(v) else format(float(v), f)
+            lines = [f"<b>Peak ({p['kind']})</b>",
+                     f"Height: {fmt(p['power'], '.4g')}  ({fmt(p['height_snr'], '.1f')} σ)",
+                     f"Prominence: {fmt(p['prominence'], '.4g')}  ({fmt(p['snr'], '.1f')} σ)"]
+            if pd.notna(p["width_hz"]):
+                lines.append(f"Width (FWHM): {p['width_hz']:.1f} Hz  ({p['width_hz'] / bin_hz:.2f} bins)")
+            else:
+                lines.append("Width: –")
+            fig.add_annotation(text="<br>".join(lines), xref="paper", yref="paper", x=0.995, y=0.99,
+                               xanchor="right", yanchor="top", showarrow=False, align="left",
+                               font=dict(size=12, color="#222"), bgcolor="rgba(255,255,255,0.88)",
+                               bordercolor=ACCENT, borderwidth=1, borderpad=6)
         return fig
     except Exception as exc:
         traceback.print_exc()
