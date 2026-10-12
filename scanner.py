@@ -1358,6 +1358,17 @@ results_tab = html.Div([
 ], style={"padding": "14px 18px", "overflowY": "auto", "height": "calc(100vh - 42px)"})
 
 
+# Further output: reads files saved by confirmation mode (confirmed/*.csv) for
+# further processing.  Placeholder until its contents are specified.
+further_tab = html.Div([
+    html.H5("Further output", style={"fontWeight": "700"}),
+    html.P("This page will read in the files saved by confirmation mode (confirmed/*.csv) "
+           "for further processing. Contents to be added.",
+           style={"fontSize": "13px", "color": "#888"}),
+    html.Div(id="further-content"),
+], style={"padding": "14px 18px", "overflowY": "auto", "height": "calc(100vh - 42px)"})
+
+
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
 app.title = "Theia Scanner"
 
@@ -1458,7 +1469,10 @@ app.layout = html.Div([
         ]),
         dcc.Tab(label="Results", value="results", style=TAB_STYLE, selected_style=TAB_SEL,
                 children=[results_tab]),
-    ], style={"height": "42px"}),
+        dcc.Tab(label="Further output", value="further", style=TAB_STYLE, selected_style=TAB_SEL,
+                children=[further_tab]),
+    # Tab bar stops short of the right edge to leave room for the dark-mode box
+    ], style={"height": "42px", "width": "calc(100% - 130px)"}),
     # Polls the background scan; only enabled while a scan is running
     dcc.Interval(id="poll", interval=700, disabled=True),
     dcc.Store(id="scan-finished"),
