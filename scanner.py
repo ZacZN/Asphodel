@@ -66,7 +66,7 @@ from scipy.signal import find_peaks, peak_widths
 import plotly.graph_objects as go
 
 import dash
-from dash import dcc, html, Input, Output, State, dash_table
+from dash import dcc, html, Input, Output, State, ALL, dash_table
 import dash_bootstrap_components as dbc
 
 
@@ -1362,15 +1362,19 @@ results_tab = html.Div([
 # further processing.  Placeholder until its contents are specified.
 further_tab = html.Div([
     html.H5("Further output", style={"fontWeight": "700"}),
+    # Numbered list of loaded confirmation files (any number); "+ Add file"
+    # opens a picker, choosing a file appends it to the list.
+    html.Div(id="further-list"),
     html.Div([
+        html.Button("+ Add file", id="btn-further-add", className="btn btn-sm",
+                    style={"backgroundColor": ACCENT, "color": "white", "marginRight": "10px"}),
         html.Div([
-            html.Label("Confirmation file (confirmed/*.csv)", style=LABEL_STYLE),
-            dcc.Dropdown(id="further-file", options=[], placeholder="Select a confirmation file…",
+            dcc.Dropdown(id="further-file", options=[], placeholder="Choose a confirmation file…",
                          style={"fontSize": "13px", "width": "720px"}),
-        ], style={"marginRight": "10px"}),
-        html.Button("Refresh list", id="btn-further-refresh", className="btn btn-outline-secondary btn-sm"),
-    ], style={"display": "flex", "alignItems": "flex-end", "marginBottom": "10px"}),
-    html.Div(id="further-file-info", style={"fontSize": "13px", "whiteSpace": "pre-wrap"}),
+        ], id="further-picker", style={"display": "none"}),
+    ], style={"display": "flex", "alignItems": "center", "margin": "8px 0 10px 0"}),
+    html.Div(id="further-total", style={"fontSize": "13px", "fontWeight": "600", "marginBottom": "8px"}),
+    dcc.Store(id="further-files", data=[]),
     html.Div(id="further-content"),
 ], style={"padding": "14px 18px", "overflowY": "auto", "height": "calc(100vh - 42px)"})
 
@@ -2237,44 +2241,112 @@ def list_confirmed():
     return out
 
 
-@app.callback(
-    Output("further-file", "options"),
-    Output("further-file", "value"),
-    Input("btn-further-refresh", "n_clicks"),
-    Input("tabs", "value"),
-    State("further-file", "value"),
-)
-def refresh_further_files(_n, tab, current):
-    files = list_confirmed()
-    opts = [{"label": f"{os.path.basename(p)}  ·  {h.get('accepted', '?')} accepted, "
-                      f"{h.get('unsure', '0')} unsure  ·  saved {h.get('saved', '?')}",
-             "value": p} for p, h in files]
-    paths = [p for p, _ in files]
-    return opts, (current if current in paths else None)
+def load_further_files(paths):
+    """Read the listed confirmation files and combine them into one table.
+    Adds file_no (1, 2, ... as numbered in the list) and source_file columns."""
+    frames = []
+    for n, path in enumerate(paths, start=1):
+        _, t = read_confirmed(path)
+        t.insert(0, "file_no", n)
+        t.insert(1, "source_file", os.path.basename(path))
+        frames.append(t)
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
-@app.callback(
-    Output("further-file-info", "children"),
-    Input("further-file", "value"),
-)
-def show_further_file(path):
-    if not path or not os.path.exists(path):
-        return ""
-    try:
-        header, table = read_confirmed(path)
-    except Exception as exc:
-        return f"Could not read {os.path.basename(path)}: {exc}"
-    run = header.get("run_info") if isinstance(header.get("run_info"), dict) else {}
+def _confirmed_summary(path):
+    """One-line description of a confirmation file for the numbered list."""
+    header, table = read_confirmed(path)
     n_acc = int((table["decision"] == "accepted").sum()) if "decision" in table else len(table)
     n_uns = int((table["decision"] == "unsure").sum()) if "decision" in table else 0
     ions = ", ".join(sorted(table["ion"].unique(), key=natural_key)) if "ion" in table else "?"
-    return (f"Loaded {len(table)} identifications ({n_acc} accepted, {n_uns} unsure) "
-            f"from {table['spectrum'].nunique() if 'spectrum' in table else '?'} spectra\n"
-            f"Ions: {ions}\n"
-            f"Filter: {header.get('filter', '?')}\n"
-            f"Scan: {os.path.basename(str(header.get('database', '?')))}"
-            f"{' · ' + run['label'] if run.get('label') else ''}  ·  saved {header.get('saved', '?')}")
+    run = header.get("run_info") if isinstance(header.get("run_info"), dict) else {}
+    scan = os.path.basename(str(header.get("database", "?")))
+    return (f"{len(table)} identifications ({n_acc} accepted, {n_uns} unsure), "
+            f"{table['spectrum'].nunique() if 'spectrum' in table else '?'} spectra  ·  ions: {ions}  ·  "
+            f"scan: {scan}{' (' + run['label'] + ')' if run.get('label') else ''}  ·  "
+            f"saved {header.get('saved', '?')}")
 
+
+def _picker_options(files):
+    opts = [{"label": f"{os.path.basename(p)}  ·  {h.get('accepted', '?')} accepted, "
+                      f"{h.get('unsure', '0')} unsure  ·  saved {h.get('saved', '?')}",
+             "value": p} for p, h in list_confirmed() if p not in files]
+    return opts or [{"label": "No more confirmation files in confirmed/", "value": "",
+                     "disabled": True}]
+
+
+@app.callback(
+    Output("further-files", "data"),
+    Output("further-picker", "style"),
+    Output("further-file", "options"),
+    Output("further-file", "value"),
+    Input("btn-further-add", "n_clicks"),
+    Input("further-file", "value"),
+    Input({"type": "further-remove", "index": ALL}, "n_clicks"),
+    State("further-files", "data"),
+    prevent_initial_call=True,
+)
+def edit_further_files(n_add, chosen, remove_clicks, files):
+    """'+ Add file' shows the picker (files already listed are left out);
+    choosing a file appends it to the list and hides the picker; a row's ✕
+    removes that file.  (One callback, because these outputs feed each other.)"""
+    files = list(files or [])
+    hidden, nu = {"display": "none"}, dash.no_update
+    trig = dash.callback_context.triggered[0] if dash.callback_context.triggered else None
+    if trig is None:
+        return nu, nu, nu, nu
+    pid = trig["prop_id"]
+    if pid.startswith("btn-further-add"):
+        return nu, {"display": "block"}, _picker_options(files), None
+    if pid.startswith("further-file."):
+        if chosen and chosen not in files:
+            files.append(chosen)
+            return files, hidden, [], None
+        return nu, nu, nu, nu
+    if trig["value"]:                       # a ✕ was clicked (ignore list re-renders)
+        idx = json.loads(pid.rsplit(".", 1)[0])["index"]
+        if 0 <= idx < len(files):
+            files.pop(idx)
+            return files, nu, nu, nu
+    return nu, nu, nu, nu
+
+
+@app.callback(
+    Output("further-list", "children"),
+    Output("further-total", "children"),
+    Input("further-files", "data"),
+)
+def render_further_list(files):
+    files = files or []
+    if not files:
+        return html.Div("No files loaded yet. Click \u201c+ Add file\u201d to load a confirmation file.",
+                        style={"fontSize": "13px", "color": "#888"}), ""
+    rows = []
+    for i, path in enumerate(files):
+        try:
+            desc = _confirmed_summary(path)
+        except Exception as exc:
+            desc = f"could not read: {exc}"
+        rows.append(html.Div([
+            html.Span(f"{i + 1}", style={"fontWeight": "700", "fontSize": "15px", "width": "28px",
+                                         "color": ACCENT, "flex": "none"}),
+            html.Div([
+                html.Div(os.path.basename(path), style={"fontWeight": "600", "fontSize": "13px"}),
+                html.Div(desc, style={"fontSize": "12px"}),
+            ], style={"flex": "1", "minWidth": "0"}),
+            html.Button("✕", id={"type": "further-remove", "index": i}, title="Remove from list",
+                        className="btn btn-outline-secondary btn-sm", style={"marginLeft": "10px"}),
+        ], className="theia-box",
+           style={**BOX_STYLE, "display": "flex", "alignItems": "center", "padding": "6px 10px",
+                  "marginBottom": "6px"}))
+    try:
+        combined = load_further_files(files)
+        ions = ", ".join(sorted(combined["ion"].unique(), key=natural_key))
+        total = (f"Combined: {len(combined)} identifications from {len(files)} file(s), "
+                 f"{combined['spectrum'].nunique()} spectra  ·  ions: {ions}")
+    except Exception as exc:
+        total = f"Could not combine files: {exc}"
+    return rows, total
 
 
 # ===========================================================================
