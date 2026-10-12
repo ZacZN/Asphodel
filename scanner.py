@@ -2169,8 +2169,14 @@ def save_confirmed(_n, store, path, ion_filter, spec_filter, closest, table_filt
     if len(name_ions) > 6:
         name_ions = name_ions[:6] + [f"+{len(name_ions) - 6}more"]
     ion_part = "_".join(re.sub(r"[^A-Za-z0-9+.-]", "", s) for s in name_ions) or "ions"
+    # Harmonic in the file name if the list was filtered by harmonic (in the
+    # hits table's filter row): use the harmonics left in the filtered list
+    harmonics = []
+    if table_filter and "{harmonic}" in table_filter and rows:
+        harmonics = sorted({int(r["harmonic"]) for r in rows if r.get("harmonic") is not None})
+    harm_part = ("_h" + "-".join(map(str, harmonics))) if harmonics else ""
     fname = os.path.join(CONFIRMED_DIR,
-                         f"confirmed_{ion_part}_{stamp}_{os.path.splitext(db)[0]}.csv")
+                         f"confirmed_{ion_part}{harm_part}_{stamp}_{os.path.splitext(db)[0]}.csv")
     n_list = len(rows or [])
     header = {
         "saved": datetime.datetime.now().isoformat(timespec="seconds"),
@@ -2178,6 +2184,7 @@ def save_confirmed(_n, store, path, ion_filter, spec_filter, closest, table_filt
         "filter": _filter_text(ion_filter, spec_filter, closest),
         "table_filter": table_filter or "",
         "table_sort": json.dumps(sort_by or []),
+        "harmonic_filter": ", ".join(map(str, harmonics)) if harmonics else "none",
         "identifications_in_filtered_list": n_list,
         "accepted": len(accepted),
         "unsure": len(unsure),
