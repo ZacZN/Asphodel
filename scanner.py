@@ -1496,7 +1496,7 @@ body.dark .js-plotly-plot { filter: invert(1) hue-rotate(180deg) contrast(1.15);
 app.index_string = app.index_string.replace(
     "{%css%}", "{%css%}\n<style>" + _TABLE_CSS + _DARK_CSS + "</style>")
 # Spectrum graphs that get the bottom-right coordinate readout
-READOUT_GRAPHS = ["preview-graph", "snippet-graph", "refview-graph"]
+READOUT_GRAPHS = ["preview-graph", "snippet-graph", "refview-graph", "sum-graph"]
 TAB_STYLE = {"padding": "8px 16px", "fontWeight": "600"}
 TAB_SEL = {**TAB_STYLE, "borderTop": f"3px solid {ACCENT}"}
 
@@ -2530,9 +2530,11 @@ def show_sum(_, files, align, ion_key, unsure):
     title = f"Sum of {info['n']} spectra ({how})"
 
     fig = go.Figure()
-    fig.add_trace(go.Scattergl(x=ff, y=pp, mode="lines", name="Summed spectrum",
-                               line=dict(shape="hvh", color="black", width=1),
-                               hovertemplate="f = %{x:.1f} Hz<br>P = %{y:.4g}<extra></extra>"))
+    # name "Spectrum" + no Plotly hover, as in the other spectrum plots: the
+    # bottom-right readout shows f and P instead.  Plotly hover on all ~131k
+    # points made every mouse move push hoverData through Dash, which is slow.
+    fig.add_trace(go.Scattergl(x=ff, y=pp, mode="lines", name="Spectrum", hoverinfo="skip",
+                               line=dict(shape="hvh", color="black", width=1)))
     if info["target"] is not None:
         fig.add_vline(x=info["target"], line=dict(color=ACCENT, width=1.5, dash="dash"),
                       annotation_text=f"aligned at {info['target']:.1f} Hz",
@@ -2546,7 +2548,7 @@ def show_sum(_, files, align, ion_key, unsure):
             ylo, yhi = float(np.nanmin(pp[m])), float(np.nanmax(pp[m]))
             fig.update_yaxes(range=[ylo - 0.05 * (yhi - ylo or 1), yhi + 0.12 * (yhi - ylo or 1)])
     fig.update_layout(title=title, xaxis_title="Frequency (Hz)",
-                      yaxis_title="Summed Schottky Power (a.u.)", hovermode="x",
+                      yaxis_title="Summed Schottky Power (a.u.)", hovermode=False,
                       dragmode="pan", template="plotly_white", font=dict(size=14),
                       margin=dict(l=60, r=20, t=50, b=40), showlegend=False)
 
