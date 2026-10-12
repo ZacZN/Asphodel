@@ -1398,12 +1398,17 @@ further_tab = html.Div([
                   "marginBottom": "6px"}),
         html.Small("Each spectrum is added once, however many identifications or files it "
                    "appears in.  Aligned spectra are shifted (linear interpolation) so the "
-                   "chosen peak sits at the median of its positions; with an identified peak, "
+                   "chosen peak sits at the median of its positions, and the plot opens zoomed "
+                   "to ±5 kHz around it; with an identified peak, "
                    "spectra without that ion/harmonic are left out.  Bins not covered by every "
                    "shifted spectrum are dropped.", style=HELP_STYLE),
         html.Div(id="sum-status", style={"fontSize": "13px", "margin": "6px 0"}),
         dcc.Loading(dcc.Graph(id="sum-graph", figure=empty_fig("Load files and click “Sum spectra”"),
-                              config={"scrollZoom": True, "displaylogo": False},
+                              # doubleClick off: a touchpad double-tap (to drag/pan)
+                              # otherwise triggers Plotly's reset/autoscale, which
+                              # redraws all ~131k points and stalls the page.
+                              config={"scrollZoom": True, "displaylogo": False,
+                                      "doubleClick": False},
                               style={"height": "560px"}), type="circle", color=ACCENT),
     ], id="further-content", className="theia-box", style={**BOX_STYLE, "padding": "8px 10px"}),
 ], style={"padding": "14px 18px", "overflowY": "auto", "height": "calc(100vh - 42px)"})
@@ -2386,6 +2391,9 @@ def render_further_list(files):
     return rows, total
 
 
+SUM_ZOOM_HZ = 5000      # half-width of the initial view around the alignment peak
+
+
 def _ion_harm_key(ion, harmonic):
     return f"{ion}|{int(harmonic)}"
 
@@ -2529,6 +2537,14 @@ def show_sum(_, files, align, ion_key, unsure):
         fig.add_vline(x=info["target"], line=dict(color=ACCENT, width=1.5, dash="dash"),
                       annotation_text=f"aligned at {info['target']:.1f} Hz",
                       annotation_font_color=ACCENT)
+    if info["target"] is not None:
+        # initial view: zoom on the peak the spectra were aligned on
+        lo, hi = info["target"] - SUM_ZOOM_HZ, info["target"] + SUM_ZOOM_HZ
+        fig.update_xaxes(range=[lo, hi], autorange=False)
+        m = (ff >= lo) & (ff <= hi)
+        if m.any():
+            ylo, yhi = float(np.nanmin(pp[m])), float(np.nanmax(pp[m]))
+            fig.update_yaxes(range=[ylo - 0.05 * (yhi - ylo or 1), yhi + 0.12 * (yhi - ylo or 1)])
     fig.update_layout(title=title, xaxis_title="Frequency (Hz)",
                       yaxis_title="Summed Schottky Power (a.u.)", hovermode="x",
                       dragmode="pan", template="plotly_white", font=dict(size=14),
