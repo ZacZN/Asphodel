@@ -1362,9 +1362,15 @@ results_tab = html.Div([
 # further processing.  Placeholder until its contents are specified.
 further_tab = html.Div([
     html.H5("Further output", style={"fontWeight": "700"}),
-    html.P("This page will read in the files saved by confirmation mode (confirmed/*.csv) "
-           "for further processing. Contents to be added.",
-           style={"fontSize": "13px", "color": "#888"}),
+    html.Div([
+        html.Div([
+            html.Label("Confirmation file (confirmed/*.csv)", style=LABEL_STYLE),
+            dcc.Dropdown(id="further-file", options=[], placeholder="Select a confirmation file…",
+                         style={"fontSize": "13px", "width": "720px"}),
+        ], style={"marginRight": "10px"}),
+        html.Button("Refresh list", id="btn-further-refresh", className="btn btn-outline-secondary btn-sm"),
+    ], style={"display": "flex", "alignItems": "flex-end", "marginBottom": "10px"}),
+    html.Div(id="further-file-info", style={"fontSize": "13px", "whiteSpace": "pre-wrap"}),
     html.Div(id="further-content"),
 ], style={"padding": "14px 18px", "overflowY": "auto", "height": "calc(100vh - 42px)"})
 
@@ -2181,6 +2187,93 @@ def save_confirmed(_n, store, path, ion_filter, spec_filter, closest, table_filt
         table.to_csv(fh, index=False)
     return (f"Saved {len(table)} identifications ({len(accepted)} accepted, {len(unsure)} unsure) "
             f"to confirmed/{os.path.basename(fname)}")
+
+
+
+# ===========================================================================
+# Further output tab: confirmation-mode files
+# ===========================================================================
+
+def read_confirmed(path):
+    """Read a confirmed/*.csv file -> (header dict, DataFrame).
+
+    The '# key: value' lines at the top become the header dict (run_info and
+    scan_settings are decoded from JSON); the rest is the table.
+    """
+    header = {}
+    with open(path) as fh:
+        for line in fh:
+            if not line.startswith("#"):
+                break
+            key, _, value = line[1:].strip().partition(":")
+            value = value.strip()
+            if key in ("run_info", "scan_settings", "table_sort"):
+                try:
+                    value = json.loads(value)
+                except ValueError:
+                    pass
+            header[key.strip()] = value
+    table = pd.read_csv(path, comment="#")
+    return header, table
+
+
+def list_confirmed():
+    """[(path, header)] for confirmed/*.csv, newest first."""
+    out = []
+    for path in sorted(glob.glob(os.path.join(CONFIRMED_DIR, "*.csv")),
+                       key=os.path.getmtime, reverse=True):
+        try:
+            header = {}
+            with open(path) as fh:
+                for line in fh:
+                    if not line.startswith("#"):
+                        break
+                    k, _, v = line[1:].strip().partition(":")
+                    if k in ("saved", "filter", "accepted", "unsure"):
+                        header[k] = v.strip()
+            out.append((path, header))
+        except OSError:
+            continue
+    return out
+
+
+@app.callback(
+    Output("further-file", "options"),
+    Output("further-file", "value"),
+    Input("btn-further-refresh", "n_clicks"),
+    Input("tabs", "value"),
+    State("further-file", "value"),
+)
+def refresh_further_files(_n, tab, current):
+    files = list_confirmed()
+    opts = [{"label": f"{os.path.basename(p)}  ·  {h.get('accepted', '?')} accepted, "
+                      f"{h.get('unsure', '0')} unsure  ·  saved {h.get('saved', '?')}",
+             "value": p} for p, h in files]
+    paths = [p for p, _ in files]
+    return opts, (current if current in paths else None)
+
+
+@app.callback(
+    Output("further-file-info", "children"),
+    Input("further-file", "value"),
+)
+def show_further_file(path):
+    if not path or not os.path.exists(path):
+        return ""
+    try:
+        header, table = read_confirmed(path)
+    except Exception as exc:
+        return f"Could not read {os.path.basename(path)}: {exc}"
+    run = header.get("run_info") if isinstance(header.get("run_info"), dict) else {}
+    n_acc = int((table["decision"] == "accepted").sum()) if "decision" in table else len(table)
+    n_uns = int((table["decision"] == "unsure").sum()) if "decision" in table else 0
+    ions = ", ".join(sorted(table["ion"].unique(), key=natural_key)) if "ion" in table else "?"
+    return (f"Loaded {len(table)} identifications ({n_acc} accepted, {n_uns} unsure) "
+            f"from {table['spectrum'].nunique() if 'spectrum' in table else '?'} spectra\n"
+            f"Ions: {ions}\n"
+            f"Filter: {header.get('filter', '?')}\n"
+            f"Scan: {os.path.basename(str(header.get('database', '?')))}"
+            f"{' · ' + run['label'] if run.get('label') else ''}  ·  saved {header.get('saved', '?')}")
 
 
 
