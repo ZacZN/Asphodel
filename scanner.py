@@ -1386,7 +1386,7 @@ further_tab = html.Div([
                                     {"label": "Identified peak", "value": "identified"}],
                            inputStyle={"marginRight": "4px"},
                            labelStyle={"marginRight": "14px", "fontSize": "13px"}),
-            dcc.Dropdown(id="sum-ion", options=[], placeholder="Ion / harmonic to align on…",
+            dcc.Dropdown(id="sum-ion", options=[], placeholder="Ion / harmonic…",
                          clearable=False, style={"fontSize": "13px", "width": "240px",
                                                  "marginRight": "14px"}),
             dcc.Checklist(id="sum-unsure", value=["on"],
@@ -1398,8 +1398,8 @@ further_tab = html.Div([
                   "marginBottom": "6px"}),
         html.Small("Each spectrum is added once, however many identifications or files it "
                    "appears in.  Aligned spectra are shifted (linear interpolation) so the "
-                   "chosen peak sits at the median of its positions, and the plot opens zoomed "
-                   "to ±5 kHz around it; with an identified peak, "
+                   "chosen peak sits at the median of its positions; the plot opens zoomed to "
+                   "±5 kHz around the ion/harmonic chosen in the dropdown; with an identified peak, "
                    "spectra without that ion/harmonic are left out.  Bins not covered by every "
                    "shifted spectrum are dropped.", style=HELP_STYLE),
         html.Div(id="sum-status", style={"fontSize": "13px", "margin": "6px 0"}),
@@ -2440,22 +2440,30 @@ def sum_spectra(files, align, ion_key=None, include_unsure=True):
     if not len(t):
         raise ValueError("No identifications left to sum.")
 
+    # (dir, spectrum) -> peak_freq of the chosen ion/harmonic; used to align
+    # ('identified') and to place the initial zoom (both aligned modes)
+    ion_pos = {}
+    if align != "none" and ion_key:
+        ion, harm = ion_key.rsplit("|", 1)
+        sel = t[(t["ion"] == ion) & (t["harmonic"] == int(harm))].copy()
+        if len(sel):
+            # several matches of that ion/harmonic in one spectrum: prefer the
+            # one flagged closest_for_ion, otherwise the smallest |delta|
+            closest = sel.get("closest_for_ion", pd.Series(False, index=sel.index))
+            sel["_rank"] = (~closest.astype(str).str.lower().isin(["true", "1"])).astype(int)
+            sel["_ad"] = sel["delta_hz"].abs()
+            sel = sel.sort_values(["_rank", "_ad"]).drop_duplicates(["spectra_dir", "spectrum"])
+            ion_pos = dict(zip(zip(sel["spectra_dir"], sel["spectrum"]),
+                               sel["peak_freq"].astype(float)))
+
     peak_pos = {}                         # (dir, spectrum) -> frequency to align on
     if align == "identified":
         if not ion_key:
             raise ValueError("Choose the ion / harmonic to align on.")
-        ion, harm = ion_key.rsplit("|", 1)
-        sel = t[(t["ion"] == ion) & (t["harmonic"] == int(harm))].copy()
-        if not len(sel):
+        if not ion_pos:
             raise ValueError(f"{ion} h={harm} is not in the loaded files.")
-        # several matches of that ion/harmonic in one spectrum: prefer the one
-        # flagged closest_for_ion, otherwise the smallest |delta|
-        closest = sel.get("closest_for_ion", pd.Series(False, index=sel.index))
-        sel["_rank"] = (~closest.astype(str).str.lower().isin(["true", "1"])).astype(int)
-        sel["_ad"] = sel["delta_hz"].abs()
-        sel = sel.sort_values(["_rank", "_ad"]).drop_duplicates(["spectra_dir", "spectrum"])
-        keys = list(zip(sel["spectra_dir"], sel["spectrum"]))
-        peak_pos = dict(zip(keys, sel["peak_freq"].astype(float)))
+        keys = list(ion_pos)
+        peak_pos = dict(ion_pos)
     else:
         keys = list(dict.fromkeys(zip(t["spectra_dir"], t["spectrum"])))
     keys.sort(key=lambda k: (k[0], natural_key(k[1])))
@@ -2490,7 +2498,15 @@ def sum_spectra(files, align, ion_key=None, include_unsure=True):
         covered &= np.isfinite(y)
         total += np.nan_to_num(y)
     total[~covered] = np.nan
-    info = dict(n=len(spectra), n_requested=n_requested, failed=failed, target=target,
+    # initial zoom: where the chosen ion ends up after shifting (median over
+    # the summed spectra that contain it); falls back to the alignment target
+    zoom, zoom_on_ion = target, False
+    if target is not None:
+        moved = [ion_pos[k] + s for (k, _, _), s in zip(spectra, shifts) if k in ion_pos]
+        if moved:
+            zoom, zoom_on_ion = float(np.median(moved)), True
+    info = dict(n=len(spectra), n_requested=n_requested, failed=failed, target=target, zoom=zoom,
+                zoom_on_ion=zoom_on_ion,
                 shifts=np.array(shifts), names=[k[1] for k, _, _ in spectra],
                 n_dirs=len({k[0] for k, _, _ in spectra}))
     return grid[covered], total[covered], info
@@ -2499,7 +2515,7 @@ def sum_spectra(files, align, ion_key=None, include_unsure=True):
 @app.callback(Output("sum-ion", "style"), Input("sum-align", "value"))
 def toggle_sum_ion(align):
     return {"fontSize": "13px", "width": "240px", "marginRight": "14px",
-            "display": "block" if align == "identified" else "none"}
+            "display": "none" if align == "none" else "block"}
 
 
 @app.callback(
@@ -2539,9 +2555,9 @@ def show_sum(_, files, align, ion_key, unsure):
         fig.add_vline(x=info["target"], line=dict(color=ACCENT, width=1.5, dash="dash"),
                       annotation_text=f"aligned at {info['target']:.1f} Hz",
                       annotation_font_color=ACCENT)
-    if info["target"] is not None:
-        # initial view: zoom on the peak the spectra were aligned on
-        lo, hi = info["target"] - SUM_ZOOM_HZ, info["target"] + SUM_ZOOM_HZ
+    if info["zoom"] is not None:
+        # initial view: zoom on the chosen ion from the list
+        lo, hi = info["zoom"] - SUM_ZOOM_HZ, info["zoom"] + SUM_ZOOM_HZ
         fig.update_xaxes(range=[lo, hi], autorange=False)
         m = (ff >= lo) & (ff <= hi)
         if m.any():
@@ -2560,6 +2576,10 @@ def show_sum(_, files, align, ion_key, unsure):
     if info["target"] is not None and len(sh):
         parts.append(f"shifts {sh.min():+.1f} to {sh.max():+.1f} Hz "
                      f"(median |shift| {np.median(np.abs(sh)):.1f} Hz)")
+    if align == "strongest" and ion_key:
+        zi, zh = ion_key.rsplit("|", 1)
+        parts.append(f"view centred on {zi} h={zh}" if info["zoom_on_ion"] else
+                     f"{zi} h={zh} not in the summed spectra, view centred on the strongest peak")
     if info["n_dirs"] > 1:
         parts.append(f"from {info['n_dirs']} spectra directories")
     status = [html.Span("  ·  ".join(parts))]
