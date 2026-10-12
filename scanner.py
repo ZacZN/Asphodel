@@ -1359,7 +1359,7 @@ results_tab = html.Div([
 
 
 # Further output: reads files saved by confirmation mode (confirmed/*.csv) for
-# further processing.  Placeholder until its contents are specified.
+# further processing: a numbered file list and spectrum summing.
 further_tab = html.Div([
     html.H5("Further output", style={"fontWeight": "700"}),
     # Numbered list of loaded confirmation files (any number); "+ Add file"
@@ -1375,7 +1375,37 @@ further_tab = html.Div([
     ], style={"display": "flex", "alignItems": "center", "margin": "8px 0 10px 0"}),
     html.Div(id="further-total", style={"fontSize": "13px", "fontWeight": "600", "marginBottom": "8px"}),
     dcc.Store(id="further-files", data=[]),
-    html.Div(id="further-content"),
+    html.Div([
+        # Sum the spectra referenced by the loaded files, optionally aligned.
+        html.Div([
+            html.Span("Sum spectra", style={"fontWeight": "700", "marginRight": "18px"}),
+            html.Span("Align on:", style={**LABEL_STYLE, "marginRight": "8px"}),
+            dcc.RadioItems(id="sum-align", value="none", inline=True,
+                           options=[{"label": "Not aligned", "value": "none"},
+                                    {"label": "Strongest peak", "value": "strongest"},
+                                    {"label": "Identified peak", "value": "identified"}],
+                           inputStyle={"marginRight": "4px"},
+                           labelStyle={"marginRight": "14px", "fontSize": "13px"}),
+            dcc.Dropdown(id="sum-ion", options=[], placeholder="Ion / harmonic to align on…",
+                         clearable=False, style={"fontSize": "13px", "width": "240px",
+                                                 "marginRight": "14px"}),
+            dcc.Checklist(id="sum-unsure", value=["on"],
+                          options=[{"label": " include unsure", "value": "on"}],
+                          style={"fontSize": "13px", "marginRight": "14px"}),
+            html.Button("Sum spectra", id="btn-sum", className="btn btn-sm",
+                        style={"backgroundColor": ACCENT, "color": "white"}),
+        ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap", "rowGap": "6px",
+                  "marginBottom": "6px"}),
+        html.Small("Each spectrum is added once, however many identifications or files it "
+                   "appears in.  Aligned spectra are shifted (linear interpolation) so the "
+                   "chosen peak sits at the median of its positions; with an identified peak, "
+                   "spectra without that ion/harmonic are left out.  Bins not covered by every "
+                   "shifted spectrum are dropped.", style=HELP_STYLE),
+        html.Div(id="sum-status", style={"fontSize": "13px", "margin": "6px 0"}),
+        dcc.Loading(dcc.Graph(id="sum-graph", figure=empty_fig("Load files and click “Sum spectra”"),
+                              config={"scrollZoom": True, "displaylogo": False},
+                              style={"height": "560px"}), type="circle", color=ACCENT),
+    ], id="further-content", className="theia-box", style={**BOX_STYLE, "padding": "8px 10px"}),
 ], style={"padding": "14px 18px", "overflowY": "auto", "height": "calc(100vh - 42px)"})
 
 
@@ -2354,6 +2384,173 @@ def render_further_list(files):
     except Exception as exc:
         total = f"Could not combine files: {exc}"
     return rows, total
+
+
+def _ion_harm_key(ion, harmonic):
+    return f"{ion}|{int(harmonic)}"
+
+
+@app.callback(
+    Output("sum-ion", "options"),
+    Output("sum-ion", "value"),
+    Input("further-files", "data"),
+    State("sum-ion", "value"),
+)
+def sum_ion_options(files, current):
+    """Ion/harmonic choices for 'Identified peak' alignment (most common first)."""
+    try:
+        t = load_further_files(files or [])
+    except Exception:
+        t = pd.DataFrame()
+    if not len(t):
+        return [], None
+    counts = (t.groupby(["ion", "harmonic"])["spectrum"].nunique()
+                .reset_index().sort_values("spectrum", ascending=False))
+    opts = [{"label": f"{r.ion}  h={int(r.harmonic)}  ({r.spectrum} spectra)",
+             "value": _ion_harm_key(r.ion, r.harmonic)} for r in counts.itertuples()]
+    values = [o["value"] for o in opts]
+    return opts, current if current in values else values[0]
+
+
+def sum_spectra(files, align, ion_key=None, include_unsure=True):
+    """Sum the spectra referenced by the confirmation files.
+
+    align: 'none' | 'strongest' | 'identified'.  Returns (freq, summed power,
+    info dict).  The first spectrum's frequency axis is the common grid; each
+    spectrum is shifted by (target - its peak position) and linearly
+    interpolated onto that grid, target = median of the peak positions.
+    """
+    frames = []
+    for path in files:
+        header, t = read_confirmed(path)
+        scan = header.get("scan_settings") if isinstance(header.get("scan_settings"), dict) else {}
+        t["spectra_dir"] = scan.get("spectra_dir", "")
+        frames.append(t)
+    t = pd.concat(frames, ignore_index=True)
+    if not include_unsure and "decision" in t:
+        t = t[t["decision"] != "unsure"]
+    if not len(t):
+        raise ValueError("No identifications left to sum.")
+
+    peak_pos = {}                         # (dir, spectrum) -> frequency to align on
+    if align == "identified":
+        if not ion_key:
+            raise ValueError("Choose the ion / harmonic to align on.")
+        ion, harm = ion_key.rsplit("|", 1)
+        sel = t[(t["ion"] == ion) & (t["harmonic"] == int(harm))].copy()
+        if not len(sel):
+            raise ValueError(f"{ion} h={harm} is not in the loaded files.")
+        # several matches of that ion/harmonic in one spectrum: prefer the one
+        # flagged closest_for_ion, otherwise the smallest |delta|
+        closest = sel.get("closest_for_ion", pd.Series(False, index=sel.index))
+        sel["_rank"] = (~closest.astype(str).str.lower().isin(["true", "1"])).astype(int)
+        sel["_ad"] = sel["delta_hz"].abs()
+        sel = sel.sort_values(["_rank", "_ad"]).drop_duplicates(["spectra_dir", "spectrum"])
+        keys = list(zip(sel["spectra_dir"], sel["spectrum"]))
+        peak_pos = dict(zip(keys, sel["peak_freq"].astype(float)))
+    else:
+        keys = list(dict.fromkeys(zip(t["spectra_dir"], t["spectrum"])))
+    keys.sort(key=lambda k: (k[0], natural_key(k[1])))
+    n_requested = len(t.drop_duplicates(["spectra_dir", "spectrum"]))
+
+    spectra, failed = [], []
+    for d, name in keys:
+        try:
+            ff, pp = load_spectrum(d, name)
+        except Exception as exc:
+            failed.append(f"{name}: {exc}")
+            continue
+        if align == "strongest":
+            peak_pos[(d, name)] = float(ff[int(np.nanargmax(pp))])
+        spectra.append(((d, name), ff, pp))
+    if not spectra:
+        raise ValueError("No spectra could be loaded" + (f" ({failed[0]})" if failed else "."))
+
+    grid = spectra[0][1]
+    target = float(np.median([peak_pos[k] for k, _, _ in spectra])) if align != "none" else None
+    total = np.zeros_like(grid)
+    covered = np.ones(grid.shape, dtype=bool)
+    shifts = []
+    for k, ff, pp in spectra:
+        shift = (target - peak_pos[k]) if target is not None else 0.0
+        shifts.append(shift)
+        x = ff + shift
+        if shift == 0.0 and len(ff) == len(grid) and np.array_equal(ff, grid):
+            y = pp
+        else:
+            y = np.interp(grid, x, pp, left=np.nan, right=np.nan)
+        covered &= np.isfinite(y)
+        total += np.nan_to_num(y)
+    total[~covered] = np.nan
+    info = dict(n=len(spectra), n_requested=n_requested, failed=failed, target=target,
+                shifts=np.array(shifts), names=[k[1] for k, _, _ in spectra],
+                n_dirs=len({k[0] for k, _, _ in spectra}))
+    return grid[covered], total[covered], info
+
+
+@app.callback(Output("sum-ion", "style"), Input("sum-align", "value"))
+def toggle_sum_ion(align):
+    return {"fontSize": "13px", "width": "240px", "marginRight": "14px",
+            "display": "block" if align == "identified" else "none"}
+
+
+@app.callback(
+    Output("sum-graph", "figure"),
+    Output("sum-status", "children"),
+    Input("btn-sum", "n_clicks"),
+    State("further-files", "data"),
+    State("sum-align", "value"),
+    State("sum-ion", "value"),
+    State("sum-unsure", "value"),
+    prevent_initial_call=True,
+)
+def show_sum(_, files, align, ion_key, unsure):
+    if not files:
+        return empty_fig("No confirmation files loaded"), "Load at least one file first."
+    try:
+        ff, pp, info = sum_spectra(files, align, ion_key, bool(unsure))
+    except Exception as exc:
+        return empty_fig(str(exc)), html.Span(f"Error: {exc}", style={"color": "#c0392b"})
+
+    if align == "identified":
+        ion, harm = ion_key.rsplit("|", 1)
+        how = f"aligned on {ion} h={harm}"
+    elif align == "strongest":
+        how = "aligned on the strongest peak"
+    else:
+        how = "not aligned"
+    title = f"Sum of {info['n']} spectra ({how})"
+
+    fig = go.Figure()
+    fig.add_trace(go.Scattergl(x=ff, y=pp, mode="lines", name="Summed spectrum",
+                               line=dict(shape="hvh", color="black", width=1),
+                               hovertemplate="f = %{x:.1f} Hz<br>P = %{y:.4g}<extra></extra>"))
+    if info["target"] is not None:
+        fig.add_vline(x=info["target"], line=dict(color=ACCENT, width=1.5, dash="dash"),
+                      annotation_text=f"aligned at {info['target']:.1f} Hz",
+                      annotation_font_color=ACCENT)
+    fig.update_layout(title=title, xaxis_title="Frequency (Hz)",
+                      yaxis_title="Summed Schottky Power (a.u.)", hovermode="x",
+                      dragmode="pan", template="plotly_white", font=dict(size=14),
+                      margin=dict(l=60, r=20, t=50, b=40), showlegend=False)
+
+    sh = info["shifts"]
+    parts = [f"Summed {info['n']} spectra ({how})"]
+    if align == "identified":
+        parts.append(f"{info['n_requested'] - info['n'] - len(info['failed'])} spectra without "
+                     f"that ion/harmonic left out")
+    if info["target"] is not None and len(sh):
+        parts.append(f"shifts {sh.min():+.1f} to {sh.max():+.1f} Hz "
+                     f"(median |shift| {np.median(np.abs(sh)):.1f} Hz)")
+    if info["n_dirs"] > 1:
+        parts.append(f"from {info['n_dirs']} spectra directories")
+    status = [html.Span("  ·  ".join(parts))]
+    if info["failed"]:
+        status.append(html.Div(f"Could not load {len(info['failed'])}: "
+                               + "; ".join(info["failed"][:3])
+                               + (" …" if len(info["failed"]) > 3 else ""),
+                               style={"color": "#c0392b"}))
+    return fig, status
 
 
 # ===========================================================================
