@@ -8,13 +8,17 @@ on Linux you may need `sudo apt install python3-tk`).
 
 Run:   python levelschemer.py [scheme.json]
 
+A figure holds one or more schemes (e.g. neighbouring nuclei) drawn side by
+side on a common energy scale. Each scheme can be shifted in energy and has
+its own title.
+
 Mouse controls in the preview
-  Left-click            select a level / transition
+  Left-click            select a level / transition / scheme title
   Drag a level line     shift where it is drawn (its energy is unchanged)
   Drag an arrow         move it sideways
   Drag any label        reposition it
   Right-drag level->level   create a transition between them
-  Double-click empty    add a new level at that energy / column
+  Double-click empty    add a new level at that energy / scheme / column
 Keys: Delete = delete selection, Ctrl+Z / Ctrl+Y = undo / redo, Ctrl+S = save
 """
 
@@ -39,6 +43,7 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 APP_NAME = "LevelSchemer"
 HIGHLIGHT = "#f57d15"
+FILE_VERSION = 2
 
 DEFAULT_STYLE = {
     # figure
@@ -48,6 +53,8 @@ DEFAULT_STYLE = {
     # fonts
     "font_family": "serif", "mathtext_fontset": "stix", "usetex": False,
     "font_size": 9.0, "gamma_font_size": 8.5,
+    # schemes
+    "scheme_gap": 1.0, "scheme_title_pos": "below", "scheme_title_size": 10.0,
     # levels
     "column_width": 1.0, "column_gap": 0.8, "level_lw": 1.0, "level_color": "black",
     "energy_fmt": "{:.0f}", "energy_italic": True,
@@ -55,9 +62,10 @@ DEFAULT_STYLE = {
     "auto_spin_format": True,
     # transitions
     "arrow_max_width": 5.0, "arrow_min_width": 0.8, "head_length": 6.0, "head_extra": 4.0,
+    "intensity_norm": "per scheme",
     "gamma_label_side": "left", "gamma_label_rotation": "0", "gamma_label_pad": 3.0,
     # annotations
-    "title": "", "title_size": 12.0, "column_titles": "",
+    "title": "", "title_size": 12.0,
     "offsets": {},
 }
 
@@ -106,23 +114,41 @@ def format_lifetime(s, style):
 
 
 def column_x0(col, style):
+    """Left edge of a column, relative to the left edge of its scheme."""
     return int(col) * (float(style["column_width"]) + float(style["column_gap"]))
 
 
-def level_y(level):
-    return float(level["energy"]) + float(level.get("y_shift") or 0.0)
+def scheme_ncol(scheme):
+    return max([int(l.get("column", 0)) for l in scheme.get("levels", [])] + [0]) + 1
 
 
-def level_xspan(level, style):
-    x0 = column_x0(level.get("column", 0), style)
+def scheme_layout(doc, style):
+    """[(scheme, x_left, width), ...] for the schemes placed left to right."""
+    cw, cg = float(style["column_width"]), float(style["column_gap"])
+    out, x = [], 0.0
+    for s in doc.get("schemes", []):
+        n = scheme_ncol(s)
+        w = n * cw + (n - 1) * cg
+        out.append((s, x, w))
+        x += w + float(style["scheme_gap"])
+    return out
+
+
+def level_y(level, shift=0.0):
+    """Drawn height: energy + the scheme's shift + the level's drawing nudge."""
+    return float(level["energy"]) + float(shift or 0.0) + float(level.get("y_shift") or 0.0)
+
+
+def level_xspan(level, style, base=0.0):
+    x0 = base + column_x0(level.get("column", 0), style)
     w = float(style["column_width"])
     return x0 + w * float(level.get("x0", 0.0)), x0 + w * float(level.get("x1", 1.0))
 
 
-def render(fig, scheme, style, hits=None, selected=None, limits=None, highlight="#f57d15"):
-    """Draw a level scheme into `fig`. Returns the axes.
+def render(fig, doc, style, hits=None, selected=None, limits=None, highlight="#f57d15"):
+    """Draw one or more level schemes, side by side, into `fig`. Returns the axes.
 
-    scheme: {"levels": [...], "transitions": [...]}
+    doc: {"schemes": [{"title", "shift", "column_titles", "levels", "transitions"}, ...]}
     hits/selected/limits/highlight are only used by the interactive editor.
     """
     fig.clf()
@@ -132,15 +158,7 @@ def render(fig, scheme, style, hits=None, selected=None, limits=None, highlight=
     ax = fig.add_axes([ml, mb, max(0.05, 1 - ml - mr), max(0.05, 1 - mb - mt)])
     ax.set_axis_off()
 
-    levels = {l["id"]: l for l in scheme.get("levels", [])}
-    if not levels:
-        ax.set_xlim(0, 1)
-        ax.set_ylim(0, 1)
-        if hits is not None:
-            ax.text(0.5, 0.5, "Double-click here to add a level", ha="center",
-                    va="center", color="0.6", transform=ax.transAxes)
-        return ax
-
+    layout = scheme_layout(doc, style)
     fs = float(style["font_size"])
     gfs = float(style["gamma_font_size"])
     cw = float(style["column_width"])
@@ -157,140 +175,177 @@ def render(fig, scheme, style, hits=None, selected=None, limits=None, highlight=
     def is_sel(kind, id_):
         return selected is not None and tuple(selected) == (kind, id_)
 
-    # --- limits -------------------------------------------------------------
-    ys = [level_y(l) for l in levels.values()]
-    ymin, ymax = min(ys), max(ys)
-    ncol = max(int(l.get("column", 0)) for l in levels.values()) + 1
-    xmin, xmax = 0.0, column_x0(ncol - 1, style) + cw
+    # --- limits (common energy scale for all schemes) ------------------------
+    ys = [level_y(l, s.get("shift")) for s, _, _ in layout for l in s.get("levels", [])]
+    xmax = (layout[-1][1] + layout[-1][2]) if layout else 1.0
     if limits:
         ax.set_xlim(*limits[0])
         ax.set_ylim(*limits[1])
-    else:
-        span = max(ymax - ymin, 100.0)
-        m = float(style["y_margin"]) * span
-        ax.set_xlim(xmin, xmax)
+    elif ys:
+        ymin, ymax = min(ys), max(ys)
+        m = float(style["y_margin"]) * max(ymax - ymin, 100.0)
+        ax.set_xlim(0.0, xmax)
         ax.set_ylim(ymin - m, ymax + m)
+    else:
+        ax.set_xlim(0.0, xmax)
+        ax.set_ylim(0.0, 1000.0)
+    if not ys and hits is not None:
+        ax.text(0.5, 0.5, "Double-click here to add a level", ha="center",
+                va="center", color="0.6", transform=ax.transAxes)
 
-    # --- levels -------------------------------------------------------------
-    for l in scheme["levels"]:
-        x0, x1 = level_xspan(l, style)
-        y = level_y(l)
-        sel = is_sel("level", l["id"])
-        col = highlight if sel else (l.get("color") or style["level_color"])
-        lw = float(l.get("lw") or style["level_lw"])
-        ls = (0, (4, 2)) if l.get("tentative") else "-"
-        ax.plot([x0, x1], [y, y], color=col, lw=lw, ls=ls, solid_capstyle="butt",
-                clip_on=False, zorder=2)
-        reg("level", l["id"], "line", ("seg", (x0, y, x1, y), lw / 2 + 3))
-
-        spin = format_spin(l.get("spin", ""), style["auto_spin_format"])
-        if spin and style["spin_side"] != "none":
-            left = style["spin_side"] == "left"
-            dx, dy = offs(l, "spin")
-            t = ax.annotate(spin, (x0 if left else x1, y),
-                            xytext=((-pad if left else pad) + dx, dy),
-                            textcoords="offset points", ha="right" if left else "left",
-                            va="center", fontsize=fs, color=col, annotation_clip=False)
-            reg("level", l["id"], "spin", ("text", t))
-
-        elab = l.get("energy_label") or fmt_energy(float(l["energy"]), style)
-        if elab and style["energy_side"] != "none":
-            left = style["energy_side"] == "left"
-            dx, dy = offs(l, "energy")
-            t = ax.annotate(elab, (x0 if left else x1, y),
-                            xytext=((-pad if left else pad) + dx, dy),
-                            textcoords="offset points", ha="right" if left else "left",
-                            va="center", fontsize=fs, color=col,
-                            fontstyle="italic" if style["energy_italic"] else "normal",
-                            annotation_clip=False)
-            reg("level", l["id"], "energy", ("text", t))
-
-        life = format_lifetime(l.get("lifetime", ""), style)
-        if life:
-            dx, dy = offs(l, "life")
-            t = ax.annotate(life, (x1, y), xytext=(-1 + dx, lw / 2 + 1.5 + dy),
-                            textcoords="offset points", ha="right", va="bottom",
-                            fontsize=fs, color=col, annotation_clip=False)
-            reg("level", l["id"], "life", ("text", t))
-
-    # --- transitions --------------------------------------------------------
-    trans = scheme.get("transitions", [])
-    imax = max([float(t.get("intensity") or 0) for t in trans] + [1e-12])
     wmin, wmax = float(style["arrow_min_width"]), float(style["arrow_max_width"])
     hl = float(style["head_length"])
     gpad = float(style["gamma_label_pad"])
-    for t in trans:
-        a, b = levels.get(t["from"]), levels.get(t["to"])
-        if a is None or b is None:
+    all_i = [float(t.get("intensity") or 0) for s, _, _ in layout for t in s.get("transitions", [])]
+    global_imax = max(all_i + [1e-12])
+
+    for s, base, _w in layout:
+        shift = float(s.get("shift") or 0.0)
+        levels = {l["id"]: l for l in s.get("levels", [])}
+
+        # --- levels ---------------------------------------------------------
+        for l in s.get("levels", []):
+            x0, x1 = level_xspan(l, style, base)
+            y = level_y(l, shift)
+            sel = is_sel("level", l["id"])
+            col = highlight if sel else (l.get("color") or style["level_color"])
+            lw = float(l.get("lw") or style["level_lw"])
+            ls = (0, (4, 2)) if l.get("tentative") else "-"
+            ax.plot([x0, x1], [y, y], color=col, lw=lw, ls=ls, solid_capstyle="butt",
+                    clip_on=False, zorder=2)
+            reg("level", l["id"], "line", ("seg", (x0, y, x1, y), lw / 2 + 3))
+
+            spin = format_spin(l.get("spin", ""), style["auto_spin_format"])
+            if spin and style["spin_side"] != "none":
+                left = style["spin_side"] == "left"
+                dx, dy = offs(l, "spin")
+                t = ax.annotate(spin, (x0 if left else x1, y),
+                                xytext=((-pad if left else pad) + dx, dy),
+                                textcoords="offset points", ha="right" if left else "left",
+                                va="center", fontsize=fs, color=col, annotation_clip=False)
+                reg("level", l["id"], "spin", ("text", t))
+
+            elab = l.get("energy_label") or fmt_energy(float(l["energy"]), style)
+            if elab and style["energy_side"] != "none":
+                left = style["energy_side"] == "left"
+                dx, dy = offs(l, "energy")
+                t = ax.annotate(elab, (x0 if left else x1, y),
+                                xytext=((-pad if left else pad) + dx, dy),
+                                textcoords="offset points", ha="right" if left else "left",
+                                va="center", fontsize=fs, color=col,
+                                fontstyle="italic" if style["energy_italic"] else "normal",
+                                annotation_clip=False)
+                reg("level", l["id"], "energy", ("text", t))
+
+            life = format_lifetime(l.get("lifetime", ""), style)
+            if life:
+                dx, dy = offs(l, "life")
+                t = ax.annotate(life, (x1, y), xytext=(-1 + dx, lw / 2 + 1.5 + dy),
+                                textcoords="offset points", ha="right", va="bottom",
+                                fontsize=fs, color=col, annotation_clip=False)
+                reg("level", l["id"], "life", ("text", t))
+
+        # --- transitions ----------------------------------------------------
+        trans = s.get("transitions", [])
+        if style.get("intensity_norm") == "global":
+            imax = global_imax
+        else:
+            imax = max([float(t.get("intensity") or 0) for t in trans] + [1e-12])
+        for t in trans:
+            a, b = levels.get(t["from"]), levels.get(t["to"])
+            if a is None or b is None:
+                continue
+            ca, cb = int(a.get("column", 0)), int(b.get("column", 0))
+            xa = base + column_x0(ca, style) + cw * float(t.get("x", 0.5))
+            if ca == cb:
+                xb = xa
+            else:
+                xt = t.get("x_to")
+                xb = base + column_x0(cb, style) + cw * float(t.get("x", 0.5) if xt is None else xt)
+            ya, yb = level_y(a, shift), level_y(b, shift)
+            inten = float(t.get("intensity") or 0)
+            tw = wmin + (wmax - wmin) * max(inten, 0) / imax
+            hw = tw + float(style["head_extra"])
+            sel = is_sel("trans", t["id"])
+            col = highlight if sel else (t.get("color") or "black")
+            if t.get("tentative"):
+                # dashed shaft (stops at the head) + solid head with an invisible tail
+                ax.add_patch(FancyArrowPatch((xa, ya), (xb, yb), arrowstyle="-", mutation_scale=1,
+                                             shrinkA=0, shrinkB=hl * 0.9, lw=max(0.6 * tw, 0.6),
+                                             ls=(0, (3, 2)), color=col, clip_on=False, zorder=3))
+                ast = ArrowStyle("Simple", head_length=hl, head_width=hw, tail_width=0.0)
+            else:
+                ast = ArrowStyle("Simple", head_length=hl, head_width=hw, tail_width=tw)
+            ax.add_patch(FancyArrowPatch((xa, ya), (xb, yb), arrowstyle=ast, mutation_scale=1,
+                                         shrinkA=0, shrinkB=0, lw=0, fc=col, ec="none",
+                                         clip_on=False, zorder=3))
+            reg("trans", t["id"], "arrow", ("seg", (xa, ya, xb, yb), hw / 2 + 2))
+
+            label = t.get("label") or fmt_energy(abs(float(a["energy"]) - float(b["energy"])), style)
+            side = t.get("label_side") or "default"
+            if side == "default":
+                side = style["gamma_label_side"]
+            if side != "none" and label:
+                left = side == "left"
+                dx, dy = offs(t, "label")
+                txt = ax.annotate(label, ((xa + xb) / 2, (ya + yb) / 2),
+                                  xytext=((-1 if left else 1) * (tw / 2 + gpad) + dx, dy),
+                                  textcoords="offset points", ha="right" if left else "left",
+                                  va="center", rotation=float(style["gamma_label_rotation"] or 0),
+                                  fontsize=gfs, color=col, annotation_clip=False)
+                reg("trans", t["id"], "label", ("text", txt))
+
+    # --- titles: column titles, then scheme titles, then figure title --------
+    ylo, yhi = ax.get_ylim()
+    sts = float(style["scheme_title_size"])
+    below = 0.0
+    any_cols = False
+    for s, base, _w in layout:
+        raw = (s.get("column_titles") or "").strip()
+        sel = is_sel("scheme", s["id"])
+        for c, txt in enumerate([p.strip() for p in raw.split("|")] if raw else []):
+            if txt:
+                any_cols = True
+                dx, dy = offs(s, "col%d" % c)
+                tt = ax.annotate(txt, (base + column_x0(c, style) + cw / 2, ylo),
+                                 xytext=(dx, dy), textcoords="offset points", ha="center",
+                                 va="top", fontsize=fs, color=highlight if sel else "black",
+                                 annotation_clip=False)
+                reg("scheme", s["id"], "col%d" % c, ("text", tt))
+    if any_cols:
+        below += fs * 1.6
+    pos = style.get("scheme_title_pos", "below")
+    any_titles = False
+    for s, base, w in layout:
+        if not s.get("title") or pos == "none":
             continue
-        ca, cb = int(a.get("column", 0)), int(b.get("column", 0))
-        xa = column_x0(ca, style) + cw * float(t.get("x", 0.5))
-        if ca == cb:
-            xb = xa
+        any_titles = True
+        sel = is_sel("scheme", s["id"])
+        dx, dy = offs(s, "title")
+        if pos == "above":
+            tt = ax.annotate(s["title"], (base + w / 2, yhi), xytext=(dx, fs * 1.4 + dy),
+                             textcoords="offset points", ha="center", va="bottom",
+                             fontsize=sts, color=highlight if sel else "black",
+                             annotation_clip=False)
         else:
-            xt = t.get("x_to")
-            xb = column_x0(cb, style) + cw * float(t.get("x", 0.5) if xt is None else xt)
-        ya, yb = level_y(a), level_y(b)
-        inten = float(t.get("intensity") or 0)
-        tw = wmin + (wmax - wmin) * max(inten, 0) / imax
-        hw = tw + float(style["head_extra"])
-        sel = is_sel("trans", t["id"])
-        col = highlight if sel else (t.get("color") or "black")
-        if t.get("tentative"):
-            # dashed shaft (stops at the head) + solid head with an invisible tail
-            ax.add_patch(FancyArrowPatch((xa, ya), (xb, yb), arrowstyle="-", mutation_scale=1,
-                                         shrinkA=0, shrinkB=hl * 0.9, lw=max(0.6 * tw, 0.6),
-                                         ls=(0, (3, 2)), color=col, clip_on=False, zorder=3))
-            ast = ArrowStyle("Simple", head_length=hl, head_width=hw, tail_width=0.0)
-            patch = FancyArrowPatch((xa, ya), (xb, yb), arrowstyle=ast, mutation_scale=1,
-                                    shrinkA=0, shrinkB=0, lw=0, fc=col, ec="none",
-                                    clip_on=False, zorder=3)
-        else:
-            ast = ArrowStyle("Simple", head_length=hl, head_width=hw, tail_width=tw)
-            patch = FancyArrowPatch((xa, ya), (xb, yb), arrowstyle=ast, mutation_scale=1,
-                                    shrinkA=0, shrinkB=0, lw=0, fc=col, ec="none",
-                                    clip_on=False, zorder=3)
-        ax.add_patch(patch)
-        reg("trans", t["id"], "arrow", ("seg", (xa, ya, xb, yb), hw / 2 + 2))
-
-        label = t.get("label") or fmt_energy(abs(float(a["energy"]) - float(b["energy"])), style)
-        side = t.get("label_side") or "default"
-        if side == "default":
-            side = style["gamma_label_side"]
-        if side != "none" and label:
-            left = side == "left"
-            dx, dy = offs(t, "label")
-            txt = ax.annotate(label, ((xa + xb) / 2, (ya + yb) / 2),
-                              xytext=((-1 if left else 1) * (tw / 2 + gpad) + dx, dy),
-                              textcoords="offset points", ha="right" if left else "left",
-                              va="center", rotation=float(style["gamma_label_rotation"] or 0),
-                              fontsize=gfs, color=col, annotation_clip=False)
-            reg("trans", t["id"], "label", ("text", txt))
-
-    # --- titles -------------------------------------------------------------
-    ylo = ax.get_ylim()[0]
-    xlo, xhi = ax.get_xlim()
-    raw = (style.get("column_titles") or "").strip()
-    titles = [s.strip() for s in raw.split("|")] if raw else []
-    for c, s in enumerate(titles):
-        if s:
-            dx, dy = offs(style, "col%d" % c)
-            tt = ax.annotate(s, (column_x0(c, style) + cw / 2, ylo), xytext=(dx, dy),
+            tt = ax.annotate(s["title"], (base + w / 2, ylo), xytext=(dx, dy - below),
                              textcoords="offset points", ha="center", va="top",
-                             fontsize=fs, annotation_clip=False)
-            reg("style", 0, "col%d" % c, ("text", tt))
+                             fontsize=sts, color=highlight if sel else "black",
+                             annotation_clip=False)
+        reg("scheme", s["id"], "title", ("text", tt))
+    if any_titles and pos == "below":
+        below += sts * 1.7
     if style.get("title"):
         dx, dy = offs(style, "title")
-        tt = ax.annotate(style["title"], ((xmin + xmax) / 2, ylo),
-                         xytext=(dx, dy - (fs * 1.8 if titles else 0)),
+        tt = ax.annotate(style["title"], (xmax / 2, ylo), xytext=(dx, dy - below),
                          textcoords="offset points", ha="center", va="top",
                          fontsize=float(style["title_size"]), annotation_clip=False)
         reg("style", 0, "title", ("text", tt))
     return ax
 
 
-EXPORTED_FUNCTIONS = [style_rc, fmt_energy, format_spin, format_lifetime,
-                      column_x0, level_y, level_xspan, render]
+EXPORTED_FUNCTIONS = [style_rc, fmt_energy, format_spin, format_lifetime, column_x0,
+                      scheme_ncol, scheme_layout, level_y, level_xspan, render]
 
 
 # =============================================================================
@@ -309,7 +364,16 @@ def new_transition(id_, from_id, to_id, x=0.5):
             "tentative": False, "offsets": {}}
 
 
-def example_scheme():
+def new_scheme(id_, title=""):
+    return {"id": id_, "title": title, "shift": 0.0, "column_titles": "",
+            "offsets": {}, "levels": [], "transitions": []}
+
+
+def empty_doc():
+    return {"schemes": [new_scheme(1)]}
+
+
+def example_doc():
     """The reference scheme: 13/2+ isomer with a 23/2- isomer above it."""
     L = [new_level(1, 1556), new_level(2, 2278), new_level(3, 2506), new_level(4, 3316)]
     L[0].update(spin="13/2+", lifetime="1.09(4) ms", lw=3.0)
@@ -322,52 +386,88 @@ def example_scheme():
     T[1]["intensity"] = 100
     T[2].update(intensity=8, label="227")
     T[3]["intensity"] = 8
-    return {"levels": L, "transitions": T}
+    s = new_scheme(1)
+    s.update(levels=L, transitions=T)
+    return {"schemes": [s]}
 
 
 def merged_style(style):
     s = copy.deepcopy(DEFAULT_STYLE)
     s.update(style or {})
+    s.pop("column_titles", None)          # moved into each scheme in file v2
     if not isinstance(s.get("offsets"), dict):
         s["offsets"] = {}
     return s
 
 
-def normalise_scheme(scheme):
-    out = {"levels": [], "transitions": []}
-    for l in scheme.get("levels", []):
+def _norm_scheme(raw, sid):
+    s = new_scheme(sid)
+    s.update({k: v for k, v in raw.items() if k not in ("levels", "transitions")})
+    s["id"] = sid
+    for l in raw.get("levels", []):
         d = new_level(l["id"], l["energy"])
         d.update(l)
-        out["levels"].append(d)
-    for t in scheme.get("transitions", []):
+        s["levels"].append(d)
+    for t in raw.get("transitions", []):
         d = new_transition(t["id"], t["from"], t["to"])
         d.update(t)
-        out["transitions"].append(d)
-    return out
+        s["transitions"].append(d)
+    return s
 
 
-def save_figure(scheme, style, path):
+def normalise_doc(d):
+    """Accept v2 files ({"schemes": [...]}) and v1 files (one scheme at top level)."""
+    if "schemes" in d:
+        schemes = [_norm_scheme(s, i + 1) for i, s in enumerate(d["schemes"])]
+    else:
+        old = (d.get("style") or {})
+        s = _norm_scheme({"levels": d.get("levels", []), "transitions": d.get("transitions", []),
+                          "column_titles": old.get("column_titles", "")}, 1)
+        offs = old.get("offsets") or {}
+        s["offsets"] = {k: v for k, v in offs.items() if k.startswith("col")}
+        schemes = [s]
+    if not schemes:
+        schemes = [new_scheme(1)]
+    # make level / transition ids unique across the whole document
+    nl = nt = 0
+    for s in schemes:
+        remap = {}
+        for l in s["levels"]:
+            nl += 1
+            remap[l["id"]] = nl
+            l["id"] = nl
+        for t in s["transitions"]:
+            nt += 1
+            t["id"] = nt
+            t["from"] = remap.get(t["from"], -1)
+            t["to"] = remap.get(t["to"], -1)
+    return {"schemes": schemes}
+
+
+def save_figure(doc, style, path):
     with matplotlib.rc_context(style_rc(style)):
         fig = Figure(figsize=(float(style["fig_width"]), float(style["fig_height"])))
         FigureCanvasAgg(fig)
-        render(fig, scheme, style)
+        render(fig, doc, style)
         fig.savefig(path, dpi=int(style["dpi"]),
                     bbox_inches="tight" if style["tight_bbox"] else None,
                     pad_inches=0.03, facecolor="white")
 
 
 SCRIPT_HEADER = '''#!/usr/bin/env python3
-"""Level scheme exported from LevelSchemer on {date}.
+"""Level scheme(s) exported from LevelSchemer on {date}.
 
-Edit SCHEME / STYLE below and re-run to regenerate {out}.
-Offsets are label nudges in points; x / x0 / x1 are fractions of a column width.
+Edit DOC / STYLE below and re-run to regenerate {out}.
+Each entry in DOC["schemes"] is drawn side by side on a common energy scale
+(shifted by its "shift" in keV). Offsets are label nudges in points;
+x / x0 / x1 are fractions of a column width.
 """
 import re
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import FancyArrowPatch, ArrowStyle
 
-SCHEME = {scheme}
+DOC = {doc}
 
 STYLE = {style}
 
@@ -378,18 +478,18 @@ SCRIPT_FOOTER = '''
 if __name__ == "__main__":
     plt.rcParams.update(style_rc(STYLE))
     fig = plt.figure(figsize=(STYLE["fig_width"], STYLE["fig_height"]))
-    render(fig, SCHEME, STYLE)
+    render(fig, DOC, STYLE)
     fig.savefig("{out}", dpi=STYLE["dpi"],
                 bbox_inches="tight" if STYLE["tight_bbox"] else None, pad_inches=0.03)
     plt.show()
 '''
 
 
-def build_script(scheme, style, out_name="level_scheme.pdf"):
+def build_script(doc, style, out_name="level_scheme.pdf"):
     src = "\n\n".join(inspect.getsource(f) for f in EXPORTED_FUNCTIONS)
     head = SCRIPT_HEADER.format(
         date=datetime.date.today().isoformat(), out=out_name,
-        scheme=pprint.pformat(scheme, sort_dicts=False, width=100),
+        doc=pprint.pformat(doc, sort_dicts=False, width=100),
         style=pprint.pformat(style, sort_dicts=False, width=100))
     return head + src + SCRIPT_FOOTER.format(out=out_name)
 
@@ -552,6 +652,12 @@ class PropertyForm(ttk.Frame):
             self._commit(key)
 
 
+SCHEME_FIELDS = [
+    ("title", "Title, e.g. $^{94}$Pd", "str"),
+    ("shift", "Energy shift (keV)", "float"),
+    ("column_titles", "Column titles (a | b | c)", "str"),
+]
+
 LEVEL_FIELDS = [
     ("energy", "Energy (keV)", "float"),
     ("spin", "Spin/parity, e.g. (23/2-)", "str"),
@@ -595,6 +701,10 @@ STYLE_FIELDS = [
     ("font_size", "Label size (pt)", "float"),
     ("gamma_font_size", "γ-label size (pt)", "float"),
     ("usetex", "Use LaTeX (needs TeX install)", "bool"),
+    (None, "Schemes", "header"),
+    ("scheme_gap", "Gap between schemes", "float"),
+    ("scheme_title_pos", "Scheme titles", "choice", ["below", "above", "none"]),
+    ("scheme_title_size", "Scheme title size (pt)", "float"),
     (None, "Levels", "header"),
     ("column_width", "Column width", "float"),
     ("column_gap", "Gap between columns", "float"),
@@ -611,37 +721,51 @@ STYLE_FIELDS = [
     ("arrow_min_width", "Min arrow width (pt)", "float"),
     ("head_length", "Head length (pt)", "float"),
     ("head_extra", "Head extra width (pt)", "float"),
+    ("intensity_norm", "Width scaling", "choice", ["per scheme", "global"]),
     ("gamma_label_side", "Label side", "choice", ["left", "right", "none"]),
     ("gamma_label_rotation", "Label rotation", "choice", ["0", "90"]),
     ("gamma_label_pad", "Label gap (pt)", "float"),
     (None, "Annotations", "header"),
-    ("title", "Title, e.g. $^{94}$Pd", "str"),
+    ("title", "Figure title (under everything)", "str"),
     ("title_size", "Title size (pt)", "float"),
-    ("column_titles", "Column titles (a | b | c)", "str"),
 ]
 
 HELP_TEXT = """\
+Schemes
+  • A figure holds one or more schemes (e.g. neighbouring nuclei) side by side on a
+    common energy scale. Pick the active scheme in the selector at the top left;
+    the Levels and Transitions tabs always show the active scheme.
+  • Schemes tab: add, duplicate, delete and reorder (◀ ▶) schemes, and set each
+    scheme's title (e.g. $^{94}$Pd), energy shift and column titles.
+  • Energy shift (keV) moves the whole scheme up or down on the common scale, e.g.
+    to align a chosen level across schemes. Energy labels still show the
+    energies you typed.
+  • Clicking anything in the preview makes its scheme the active one.
+
 Building a scheme
   • Levels tab: add levels and type the energy, spin (e.g. (23/2-)) and lifetime
     (e.g. 5.89(18) us). Parities are superscripted and 'us' becomes μs automatically.
-    LaTeX mathtext works in any label, e.g. $^{94}$Pd.
-  • Transitions tab: pick From/To levels. Eγ is computed from the level energies
-    unless you type a label. Arrow width scales with intensity.
-  • Style tab: figure size, fonts, arrow widths, label placement.
+    LaTeX mathtext works in any label.
+  • Transitions tab: pick From/To levels (within the active scheme). Eγ is computed
+    from the level energies unless you type a label. Arrow width scales with
+    intensity (per scheme, or across all schemes: Style ▸ Width scaling).
+  • Style tab: figure size, fonts, gaps, arrow widths, label placement.
 
 Mouse (preview)
   • Click: select. Drag a level line up/down to separate crowded levels
     (only where it's drawn changes, not the energy).
-  • Drag an arrow sideways to move it; drag any label to nudge it.
-  • Right-drag from one level to another to create a transition.
-  • Double-click empty space to add a level there.
+  • Drag an arrow sideways to move it; drag any label (including scheme titles)
+    to nudge it.
+  • Right-drag from one level to another in the same scheme to create a transition.
+  • Double-click empty space to add a level to the scheme under the mouse.
   • 'Reset labels' puts the selected item's labels back.
 
 Output
   • File ▸ Export figure: PDF / SVG / EPS / PNG at the size set in the Style tab.
   • File ▸ Export Python script: a standalone matplotlib script that reproduces
-    the figure, for tweaking by hand or including in your analysis repo.
-  • Save / Open store the scheme as JSON.
+    the figure.
+  • Save / Open store all schemes in one JSON file (older single-scheme files open
+    as one scheme).
 
 Keys: Delete, Ctrl+Z / Ctrl+Y, Ctrl+S, Ctrl+O, Ctrl+N
 """
@@ -652,9 +776,12 @@ Keys: Delete, Ctrl+Z / Ctrl+Y, Ctrl+S, Ctrl+O, Ctrl+N
 # =============================================================================
 
 class App:
+    TAB_SCHEMES, TAB_LEVELS, TAB_TRANS, TAB_STYLE = range(4)
+
     def __init__(self, root, path=None):
         self.root = root
-        self.scheme = {"levels": [], "transitions": []}
+        self.doc = empty_doc()
+        self.active = self.doc["schemes"][0]["id"]
         self.style = merged_style({})
         self.selected = None
         self.undo_stack, self.redo_stack = [], []
@@ -695,6 +822,7 @@ class App:
         e.add_command(label="Undo", accelerator="Ctrl+Z", command=self.undo)
         e.add_command(label="Redo", accelerator="Ctrl+Y", command=self.redo)
         e.add_separator()
+        e.add_command(label="Add scheme", command=self.add_scheme)
         e.add_command(label="Add level", command=self.add_level)
         e.add_command(label="Add transition", command=self.add_transition)
         e.add_command(label="Delete selected", accelerator="Del", command=self.delete_selected)
@@ -706,13 +834,45 @@ class App:
         m.add_cascade(label="Help", menu=h)
         self.root.config(menu=m)
 
+    def _buttons(self, master, items):
+        bf = ttk.Frame(master)
+        bf.pack(fill="x", padx=4)
+        for txt, cmd in items:
+            ttk.Button(bf, text=txt, command=cmd,
+                       width=3 if len(txt) == 1 else None).pack(side="left", padx=1, pady=3)
+
     def _build_layout(self):
         pw = ttk.PanedWindow(self.root, orient="horizontal")
         pw.pack(fill="both", expand=True)
 
         left = ttk.Frame(pw, width=380)
+        top = ttk.Frame(left)
+        top.pack(fill="x", padx=6, pady=(6, 0))
+        ttk.Label(top, text="Active scheme:").pack(side="left")
+        self.scheme_var = tk.StringVar()
+        self.scheme_combo = ttk.Combobox(top, textvariable=self.scheme_var, state="readonly")
+        self.scheme_combo.pack(side="left", fill="x", expand=True, padx=(4, 2))
+        self.scheme_combo.bind("<<ComboboxSelected>>", self._on_scheme_combo)
+        ttk.Button(top, text="+", width=3, command=self.add_scheme).pack(side="left")
+
         self.nb = ttk.Notebook(left)
         self.nb.pack(fill="both", expand=True, padx=4, pady=4)
+
+        # Schemes tab
+        sc = ttk.Frame(self.nb)
+        self.nb.add(sc, text="Schemes")
+        self.sc_tree = self._make_tree(sc, [("pos", "#", 30), ("title", "Title", 150),
+                                            ("shift", "Shift", 60), ("n", "Levels", 55)], height=6)
+        self.sc_tree.bind("<<TreeviewSelect>>", self._on_scheme_tree)
+        self._buttons(sc, (("Add", self.add_scheme), ("Duplicate", self.duplicate_scheme),
+                           ("Delete", self.delete_scheme), ("◀", lambda: self.move_scheme(-1)),
+                           ("▶", lambda: self.move_scheme(1))))
+        self.sc_form = PropertyForm(sc, SCHEME_FIELDS, self.on_item_change)
+        self.sc_form.pack(fill="x", pady=4)
+        ttk.Label(sc, foreground="#666666", wraplength=340, justify="left", text=(
+            "All schemes share one energy scale. The shift moves a whole scheme up or "
+            "down (e.g. to align a reference level); labels keep the energies you typed."
+        )).pack(fill="x", padx=8, pady=4)
 
         # Levels tab
         lt = ttk.Frame(self.nb)
@@ -720,11 +880,8 @@ class App:
         self.lv_tree = self._make_tree(lt, [("E", "Energy", 70), ("spin", "Spin", 80),
                                             ("life", "Lifetime", 90), ("col", "Col", 35)])
         self.lv_tree.bind("<<TreeviewSelect>>", lambda e: self._tree_select("level", self.lv_tree))
-        bf = ttk.Frame(lt)
-        bf.pack(fill="x", padx=4)
-        for txt, cmd in (("Add", self.add_level), ("Duplicate", self.duplicate_selected),
-                         ("Delete", self.delete_selected), ("Reset labels", self.reset_labels)):
-            ttk.Button(bf, text=txt, command=cmd).pack(side="left", padx=1, pady=3)
+        self._buttons(lt, (("Add", self.add_level), ("Duplicate", self.duplicate_selected),
+                           ("Delete", self.delete_selected), ("Reset labels", self.reset_labels)))
         self.lv_form = PropertyForm(lt, LEVEL_FIELDS, self.on_item_change)
         self.lv_form.pack(fill="x", pady=4)
 
@@ -734,11 +891,8 @@ class App:
         self.tr_tree = self._make_tree(tt, [("E", "Eγ", 60), ("from", "From", 80),
                                             ("to", "To", 80), ("I", "I", 50)])
         self.tr_tree.bind("<<TreeviewSelect>>", lambda e: self._tree_select("trans", self.tr_tree))
-        bf = ttk.Frame(tt)
-        bf.pack(fill="x", padx=4)
-        for txt, cmd in (("Add", self.add_transition), ("Duplicate", self.duplicate_selected),
-                         ("Delete", self.delete_selected), ("Reset labels", self.reset_labels)):
-            ttk.Button(bf, text=txt, command=cmd).pack(side="left", padx=1, pady=3)
+        self._buttons(tt, (("Add", self.add_transition), ("Duplicate", self.duplicate_selected),
+                           ("Delete", self.delete_selected), ("Reset labels", self.reset_labels)))
         self.tr_form = PropertyForm(tt, TRANS_FIELDS, self.on_item_change)
         self.tr_form.pack(fill="x", pady=4)
 
@@ -747,6 +901,7 @@ class App:
         self.nb.add(sf, text="Style")
         self.st_form = PropertyForm(sf.inner, STYLE_FIELDS, self.on_style_change)
         self.st_form.pack(fill="x", pady=4)
+        self.nb.select(self.TAB_LEVELS)
         pw.add(left, weight=0)
 
         # Preview
@@ -768,11 +923,11 @@ class App:
         ttk.Label(self.root, textvariable=self.status_var, anchor="w", relief="sunken",
                   padding=(6, 2)).pack(fill="x", side="bottom")
 
-    def _make_tree(self, master, cols):
+    def _make_tree(self, master, cols, height=8):
         fr = ttk.Frame(master)
         fr.pack(fill="both", expand=True, padx=4, pady=(4, 0))
         tree = ttk.Treeview(fr, columns=[c[0] for c in cols], show="headings",
-                            height=8, selectmode="browse")
+                            height=height, selectmode="browse")
         for key, head, w in cols:
             tree.heading(key, text=head)
             tree.column(key, width=w, anchor="w")
@@ -816,17 +971,49 @@ class App:
             self.redraw()
 
     # ------------------------------------------------------------ model utils
+    def schemes(self):
+        return self.doc["schemes"]
+
+    def scheme(self, sid):
+        return next((s for s in self.schemes() if s["id"] == sid), None)
+
+    def cur(self):
+        s = self.scheme(self.active)
+        if s is None:
+            s = self.schemes()[0]
+            self.active = s["id"]
+        return s
+
+    def all_levels(self):
+        return [l for s in self.schemes() for l in s["levels"]]
+
+    def all_trans(self):
+        return [t for s in self.schemes() for t in s["transitions"]]
+
     def level(self, id_):
-        return next((l for l in self.scheme["levels"] if l["id"] == id_), None)
+        return next((l for l in self.all_levels() if l["id"] == id_), None)
 
     def trans(self, id_):
-        return next((t for t in self.scheme["transitions"] if t["id"] == id_), None)
+        return next((t for t in self.all_trans() if t["id"] == id_), None)
+
+    def owner(self, kind, id_):
+        """The scheme containing a level / transition (or the scheme itself)."""
+        if kind == "scheme":
+            return self.scheme(id_)
+        key = "levels" if kind == "level" else "transitions"
+        return next((s for s in self.schemes() if any(o["id"] == id_ for o in s[key])), None)
 
     def selected_obj(self):
         if not self.selected:
             return None
         kind, id_ = self.selected
-        return self.level(id_) if kind == "level" else self.trans(id_)
+        if kind == "level":
+            return self.level(id_)
+        if kind == "trans":
+            return self.trans(id_)
+        if kind == "scheme":
+            return self.scheme(id_)
+        return None
 
     @staticmethod
     def next_id(items):
@@ -835,9 +1022,16 @@ class App:
     def level_name(self, l):
         return "{:g}  {}".format(float(l["energy"]), l.get("spin", "")).strip() + "  #%d" % l["id"]
 
+    def scheme_name(self, s):
+        i = self.schemes().index(s) + 1
+        return "%d: %s" % (i, s.get("title") or "(untitled)")
+
+    def layout(self):
+        return scheme_layout(self.doc, self.style)
+
     # ------------------------------------------------------------- undo/redo
     def snapshot(self):
-        return json.dumps({"scheme": self.scheme, "style": self.style})
+        return json.dumps({"doc": self.doc, "style": self.style, "active": self.active})
 
     def push_undo(self):
         self.undo_stack.append(self.snapshot())
@@ -848,7 +1042,7 @@ class App:
 
     def _restore(self, snap):
         d = json.loads(snap)
-        self.scheme, self.style = d["scheme"], d["style"]
+        self.doc, self.style, self.active = d["doc"], d["style"], d["active"]
         if not self.selected_obj():
             self.selected = None
         self._layout_canvas()
@@ -877,16 +1071,29 @@ class App:
     def refresh_trees(self):
         self._syncing = True
         try:
+            cur = self.cur()
+            names = [self.scheme_name(s) for s in self.schemes()]
+            self.scheme_combo.configure(values=names)
+            self.scheme_var.set(self.scheme_name(cur))
+
+            sc = self.sc_tree
+            sc.delete(*sc.get_children())
+            for i, s in enumerate(self.schemes()):
+                sc.insert("", "end", iid=str(s["id"]), values=(
+                    i + 1, s.get("title") or "(untitled)",
+                    "{:g}".format(float(s.get("shift") or 0)), len(s["levels"])))
+            sc.selection_set(str(cur["id"]))
+
             lv = self.lv_tree
             lv.delete(*lv.get_children())
-            for l in sorted(self.scheme["levels"],
+            for l in sorted(cur["levels"],
                             key=lambda l: (l.get("column", 0), -float(l["energy"]))):
                 lv.insert("", "end", iid=str(l["id"]), values=(
                     "{:g}".format(float(l["energy"])), l.get("spin", ""),
                     l.get("lifetime", ""), l.get("column", 0)))
             tr = self.tr_tree
             tr.delete(*tr.get_children())
-            for t in self.scheme["transitions"]:
+            for t in cur["transitions"]:
                 a, b = self.level(t["from"]), self.level(t["to"])
                 if a and b:
                     e = t.get("label") or fmt_energy(abs(float(a["energy"]) - float(b["energy"])), self.style)
@@ -907,10 +1114,12 @@ class App:
         self._syncing = False
 
     def load_forms(self):
+        cur = self.cur()
         pairs = [(l["id"], self.level_name(l))
-                 for l in sorted(self.scheme["levels"], key=lambda l: -float(l["energy"]))]
+                 for l in sorted(cur["levels"], key=lambda l: -float(l["energy"]))]
         self.tr_form.set_level_choices(pairs)
         kind = self.selected[0] if self.selected else None
+        self.sc_form.load(cur)
         self.lv_form.load(self.selected_obj() if kind == "level" else None)
         self.tr_form.load(self.selected_obj() if kind == "trans" else None)
         self.st_form.load(self.style)
@@ -919,7 +1128,7 @@ class App:
         matplotlib.rcParams.update(style_rc(self.style))
         self.hits = []
         try:
-            self.ax = render(self.fig, self.scheme, self.style, hits=self.hits,
+            self.ax = render(self.fig, self.doc, self.style, hits=self.hits,
                              selected=self.selected, limits=limits, highlight=HIGHLIGHT)
             self.canvas.draw()
         except Exception as exc:  # e.g. bad mathtext or missing LaTeX
@@ -935,11 +1144,36 @@ class App:
     # ------------------------------------------------------------- selection
     def select(self, sel, from_canvas=False):
         self.selected = tuple(sel) if sel else None
+        if self.selected:
+            s = self.owner(*self.selected)
+            if s is not None:
+                self.active = s["id"]
         if from_canvas and self.selected:
-            self.nb.select(0 if self.selected[0] == "level" else 1)
+            self.nb.select({"scheme": self.TAB_SCHEMES, "level": self.TAB_LEVELS,
+                            "trans": self.TAB_TRANS}.get(self.selected[0], self.TAB_LEVELS))
         self.refresh_trees()
         self.load_forms()
         self.redraw()
+
+    def set_active(self, sid):
+        if sid == self.active:
+            return
+        self.active = sid
+        if self.selected and (self.owner(*self.selected) or {}).get("id") != sid:
+            self.selected = None
+        self.refresh_all()
+
+    def _on_scheme_combo(self, event):
+        i = self.scheme_combo.current()
+        if 0 <= i < len(self.schemes()):
+            self.set_active(self.schemes()[i]["id"])
+
+    def _on_scheme_tree(self, event):
+        if self._syncing:
+            return
+        s = self.sc_tree.selection()
+        if s:
+            self.set_active(int(s[0]))
 
     def _tree_select(self, kind, tree):
         if self._syncing:
@@ -968,25 +1202,90 @@ class App:
             self.refresh_trees()
         self.redraw()
 
-    def add_level(self, energy=None, column=None):
-        lv = self.scheme["levels"]
-        cur = self.selected_obj() if self.selected and self.selected[0] == "level" else None
+    # schemes
+    def add_scheme(self):
+        self.push_undo()
+        s = new_scheme(self.next_id(self.schemes()))
+        self.schemes().append(s)
+        self.active = s["id"]
+        self.selected = None
+        self.nb.select(self.TAB_SCHEMES)
+        self.refresh_all()
+        self.status("Added scheme %d. Give it a title, then add levels to it." % len(self.schemes()))
+
+    def duplicate_scheme(self):
+        src = self.cur()
+        self.push_undo()
+        s = copy.deepcopy(src)
+        s["id"] = self.next_id(self.schemes())
+        s["title"] = ((src.get("title") or "") + " (copy)").strip()
+        nl, nt = self.next_id(self.all_levels()), self.next_id(self.all_trans())
+        remap = {}
+        for i, l in enumerate(s["levels"]):
+            remap[l["id"]] = nl + i
+            l["id"] = nl + i
+        for i, t in enumerate(s["transitions"]):
+            t["id"] = nt + i
+            t["from"], t["to"] = remap.get(t["from"], -1), remap.get(t["to"], -1)
+        self.schemes().insert(self.schemes().index(src) + 1, s)
+        self.active = s["id"]
+        self.selected = None
+        self.refresh_all()
+
+    def delete_scheme(self, sid=None):
+        s = self.scheme(sid) if sid is not None else self.cur()
+        if len(self.schemes()) == 1:
+            messagebox.showinfo(APP_NAME, "A figure needs at least one scheme.")
+            return
+        if s["levels"] and not messagebox.askyesno(
+                APP_NAME, "Delete scheme '%s' and its %d level(s)?"
+                % (s.get("title") or "(untitled)", len(s["levels"]))):
+            return
+        self.push_undo()
+        i = self.schemes().index(s)
+        self.schemes().remove(s)
+        self.active = self.schemes()[max(0, i - 1)]["id"]
+        self.selected = None
+        self.refresh_all()
+        self.status("Deleted scheme.")
+
+    def move_scheme(self, step):
+        s = self.cur()
+        L = self.schemes()
+        i = L.index(s)
+        j = i + step
+        if not 0 <= j < len(L):
+            return
+        self.push_undo()
+        L[i], L[j] = L[j], L[i]
+        self.refresh_all()
+
+    # levels / transitions
+    def add_level(self, energy=None, column=None, scheme_id=None):
+        if scheme_id is not None:
+            self.active = scheme_id
+        sch = self.cur()
+        lv = sch["levels"]
+        sel = self.selected_obj() if self.selected and self.selected[0] == "level" else None
+        if sel is not None and sel not in lv:
+            sel = None
         if column is None:
-            column = cur.get("column", 0) if cur else 0
+            column = sel.get("column", 0) if sel else 0
         if energy is None:
             same = [float(l["energy"]) for l in lv if l.get("column", 0) == column]
             energy = (max(same) + 500.0) if same else 0.0
         self.push_undo()
-        l = new_level(self.next_id(lv), energy, column)
+        l = new_level(self.next_id(self.all_levels()), energy, column)
         lv.append(l)
         self.select(("level", l["id"]), from_canvas=True)
-        self.status("Added level at %g keV. Set its spin and lifetime in the form." % energy)
+        self.status("Added level at %g keV to %s. Set its spin and lifetime in the form."
+                    % (energy, self.scheme_name(sch)))
 
-    def _auto_x(self, a, b):
+    def _auto_x(self, sch, a, b):
         col = a.get("column", 0)
         lo, hi = sorted((level_y(a), level_y(b)))
         used = []
-        for t in self.scheme["transitions"]:
+        for t in sch["transitions"]:
             ta, tb = self.level(t["from"]), self.level(t["to"])
             if not ta or not tb or ta.get("column", 0) != col:
                 continue
@@ -999,12 +1298,17 @@ class App:
         return 0.5
 
     def add_transition(self, from_id=None, to_id=None, x=None):
-        lv = self.scheme["levels"]
+        if from_id is not None:
+            self.active = self.owner("level", from_id)["id"]
+        sch = self.cur()
+        lv = sch["levels"]
         if len(lv) < 2:
-            messagebox.showinfo(APP_NAME, "Add at least two levels first.")
+            messagebox.showinfo(APP_NAME, "Add at least two levels to this scheme first.")
             return
         if from_id is None:
             cur = self.selected_obj() if self.selected and self.selected[0] == "level" else None
+            if cur is not None and cur not in lv:
+                cur = None
             a = cur or max(lv, key=lambda l: float(l["energy"]))
             lower = [l for l in lv if float(l["energy"]) < float(a["energy"])]
             same = [l for l in lower if l.get("column", 0) == a.get("column", 0)]
@@ -1016,9 +1320,9 @@ class App:
             from_id, to_id = a["id"], b["id"]
         a, b = self.level(from_id), self.level(to_id)
         self.push_undo()
-        t = new_transition(self.next_id(self.scheme["transitions"]), from_id, to_id,
-                           self._auto_x(a, b) if x is None else x)
-        self.scheme["transitions"].append(t)
+        t = new_transition(self.next_id(self.all_trans()), from_id, to_id,
+                           self._auto_x(sch, a, b) if x is None else x)
+        sch["transitions"].append(t)
         self.select(("trans", t["id"]), from_canvas=True)
         self.status("Added %s transition. Edit it in the Transitions tab."
                     % fmt_energy(abs(float(a["energy"]) - float(b["energy"])), self.style))
@@ -1027,32 +1331,40 @@ class App:
         obj = self.selected_obj()
         if not obj:
             return
+        kind = self.selected[0]
+        if kind == "scheme":
+            return self.duplicate_scheme()
+        sch = self.owner(kind, obj["id"])
         self.push_undo()
         new = copy.deepcopy(obj)
-        if self.selected[0] == "level":
-            new["id"] = self.next_id(self.scheme["levels"])
+        if kind == "level":
+            new["id"] = self.next_id(self.all_levels())
             new["energy"] = float(new["energy"]) + 100.0
-            self.scheme["levels"].append(new)
+            sch["levels"].append(new)
         else:
-            new["id"] = self.next_id(self.scheme["transitions"])
+            new["id"] = self.next_id(self.all_trans())
             new["x"] = min(float(new.get("x", 0.5)) + 0.12, 1.0)
-            self.scheme["transitions"].append(new)
-        self.select((self.selected[0], new["id"]))
+            sch["transitions"].append(new)
+        self.select((kind, new["id"]))
 
     def delete_selected(self):
         obj = self.selected_obj()
         if not obj:
             return
+        kind = self.selected[0]
+        if kind == "scheme":
+            return self.delete_scheme(obj["id"])
+        sch = self.owner(kind, obj["id"])
         self.push_undo()
-        if self.selected[0] == "level":
-            self.scheme["levels"].remove(obj)
-            before = len(self.scheme["transitions"])
-            self.scheme["transitions"] = [t for t in self.scheme["transitions"]
-                                          if obj["id"] not in (t["from"], t["to"])]
-            n = before - len(self.scheme["transitions"])
+        if kind == "level":
+            sch["levels"].remove(obj)
+            before = len(sch["transitions"])
+            sch["transitions"] = [t for t in sch["transitions"]
+                                  if obj["id"] not in (t["from"], t["to"])]
+            n = before - len(sch["transitions"])
             self.status("Deleted level%s." % (" and %d transition(s)" % n if n else ""))
         else:
-            self.scheme["transitions"].remove(obj)
+            sch["transitions"].remove(obj)
             self.status("Deleted transition.")
         self.select(None)
 
@@ -1068,7 +1380,7 @@ class App:
 
     def reset_all_labels(self):
         self.push_undo()
-        for o in self.scheme["levels"] + self.scheme["transitions"]:
+        for o in self.all_levels() + self.all_trans() + self.schemes():
             o["offsets"] = {}
         self.style["offsets"] = {}
         self.refresh_all()
@@ -1109,7 +1421,18 @@ class App:
             return self.level(id_)
         if kind == "trans":
             return self.trans(id_)
+        if kind == "scheme":
+            return self.scheme(id_)
         return self.style
+
+    def scheme_at(self, x):
+        """(scheme, x_left) whose block (incl. half the gaps around it) contains x."""
+        lay = self.layout()
+        half = float(self.style["scheme_gap"]) / 2
+        for s, base, w in lay:
+            if x < base + w + half:
+                return s, base
+        return lay[-1][0], lay[-1][1]
 
     def on_press(self, ev):
         if self.ax is None:
@@ -1119,15 +1442,18 @@ class App:
             if ev.dblclick:
                 if hit is None:
                     x, y = self.ax.transData.inverted().transform((ev.x, ev.y))
+                    s, base = self.scheme_at(x)
                     step = float(self.style["column_width"]) + float(self.style["column_gap"])
-                    self.add_level(energy=float(round(y)), column=max(0, int(x // step)))
+                    col = int(min(max(0, (x - base) // step), scheme_ncol(s) - 1))
+                    e = float(round(y - float(s.get("shift") or 0)))
+                    self.add_level(energy=e, column=col, scheme_id=s["id"])
                 return
             if hit is None:
                 if self.selected:
                     self.select(None)
                 return
             kind, id_, part, _ = hit
-            if kind in ("level", "trans") and self.selected != (kind, id_):
+            if kind in ("level", "trans", "scheme") and self.selected != (kind, id_):
                 self.select((kind, id_), from_canvas=True)
             obj = self._container(kind, id_)
             if part == "line":
@@ -1145,8 +1471,9 @@ class App:
         elif ev.button == 3 and hit and hit[0] == "level":
             x, y = self.ax.transData.inverted().transform((ev.x, ev.y))
             a = self.level(hit[1])
-            self.link = {"from": hit[1], "x": x, "y": level_y(a)}
-            self.link["line"], = self.ax.plot([x, x], [level_y(a), y], color=HIGHLIGHT,
+            ya = level_y(a, self.owner("level", hit[1]).get("shift"))
+            self.link = {"from": hit[1], "x": x, "y": ya}
+            self.link["line"], = self.ax.plot([x, x], [ya, y], color=HIGHLIGHT,
                                              lw=1.5, ls="--", clip_on=False)
             self.canvas.draw_idle()
             self.status("Release on the destination level to create a transition.")
@@ -1188,8 +1515,14 @@ class App:
             link, self.link = self.link, None
             hit = self.hit_test(ev.x, ev.y)
             if hit and hit[0] == "level" and hit[1] != link["from"]:
+                sa, sb = self.owner("level", link["from"]), self.owner("level", hit[1])
+                if sa is not sb:
+                    self.status("Transitions must connect levels within the same scheme.")
+                    self.redraw()
+                    return
                 a = self.level(link["from"])
-                x0 = column_x0(a.get("column", 0), self.style)
+                base = next(b for s, b, _ in self.layout() if s is sa)
+                x0 = base + column_x0(a.get("column", 0), self.style)
                 frac = (link["x"] - x0) / float(self.style["column_width"])
                 self.add_transition(link["from"], hit[1], round(min(1, max(0, frac)), 3))
             else:
@@ -1214,12 +1547,16 @@ class App:
             return self.save()
         return True
 
+    def _set_doc(self, doc, style):
+        self.doc, self.style = doc, style
+        self.active = doc["schemes"][0]["id"]
+        self.selected = None
+
     def new_file(self):
         if not self._confirm_discard():
             return
-        self.scheme = {"levels": [], "transitions": []}
-        self.style = merged_style({})
-        self.path, self.dirty, self.selected = None, False, None
+        self._set_doc(empty_doc(), merged_style({}))
+        self.path, self.dirty = None, False
         self.undo_stack.clear()
         self.redo_stack.clear()
         self._layout_canvas()
@@ -1228,8 +1565,8 @@ class App:
 
     def load_example(self):
         self.push_undo()
-        self.scheme = example_scheme()
-        self.selected = None
+        self.doc = example_doc()
+        self.active, self.selected = 1, None
         self.refresh_all()
 
     def open_dialog(self):
@@ -1243,28 +1580,29 @@ class App:
         try:
             with open(path, encoding="utf-8") as fh:
                 d = json.load(fh)
-            self.scheme = normalise_scheme(d)
-            self.style = merged_style(d.get("style"))
+            doc = normalise_doc(d)
+            style = merged_style(d.get("style"))
         except Exception as exc:
             messagebox.showerror(APP_NAME, "Could not open %s:\n%s" % (path, exc))
             return
-        self.path, self.dirty, self.selected = path, False, None
+        self._set_doc(doc, style)
+        self.path, self.dirty = path, False
         self.undo_stack.clear()
         self.redo_stack.clear()
         self._layout_canvas()
         self.refresh_all()
         self.update_title()
-        self.status("Opened %s" % path)
+        self.status("Opened %s (%d scheme%s)" % (path, len(doc["schemes"]),
+                                                 "" if len(doc["schemes"]) == 1 else "s"))
 
     def save(self):
         if not self.path:
             return self.save_as()
         try:
             with open(self.path, "w", encoding="utf-8") as fh:
-                json.dump({"format": "levelschemer", "version": 1,
-                           "levels": self.scheme["levels"],
-                           "transitions": self.scheme["transitions"],
-                           "style": self.style}, fh, indent=1, ensure_ascii=False)
+                json.dump({"format": "levelschemer", "version": FILE_VERSION,
+                           "schemes": self.doc["schemes"], "style": self.style},
+                          fh, indent=1, ensure_ascii=False)
         except Exception as exc:
             messagebox.showerror(APP_NAME, "Could not save:\n%s" % exc)
             return False
@@ -1291,7 +1629,7 @@ class App:
         if not p:
             return
         try:
-            save_figure(self.scheme, self.style, p)
+            save_figure(self.doc, self.style, p)
         except Exception as exc:
             messagebox.showerror(APP_NAME, "Export failed:\n%s" % exc)
             return
@@ -1307,7 +1645,7 @@ class App:
             return
         try:
             with open(p, "w", encoding="utf-8") as fh:
-                fh.write(build_script(self.scheme, self.style, self._stem() + ".pdf"))
+                fh.write(build_script(self.doc, self.style, self._stem() + ".pdf"))
         except Exception as exc:
             messagebox.showerror(APP_NAME, "Could not write script:\n%s" % exc)
             return
@@ -1316,7 +1654,7 @@ class App:
     def show_help(self):
         w = tk.Toplevel(self.root)
         w.title("Quick guide")
-        txt = tk.Text(w, width=86, height=30, wrap="word", padx=10, pady=10)
+        txt = tk.Text(w, width=86, height=34, wrap="word", padx=10, pady=10)
         txt.insert("1.0", HELP_TEXT)
         txt.configure(state="disabled")
         txt.pack(fill="both", expand=True)
@@ -1328,7 +1666,7 @@ class App:
 
 def main():
     root = tk.Tk()
-    root.geometry("1150x760")
+    root.geometry("1150x780")
     App(root, sys.argv[1] if len(sys.argv) > 1 else None)
     root.mainloop()
 
