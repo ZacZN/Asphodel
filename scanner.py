@@ -1559,6 +1559,7 @@ body.dark .dash-input-container { background: #000 !important; }
 body.dark .dash-input-stepper { background: #1c1c1c !important; color: #f0f0f0 !important; border-color: #6a6a6a !important; }
 body.dark .btn-outline-secondary { color: #f0f0f0 !important; border-color: #9a9a9a !important; }
 body.dark .btn-outline-secondary:hover { background: #2e2e2e !important; }
+body.dark #btn-settings { background: #1c1c1c !important; }
 body.dark .btn-outline-danger { color: #ff9c94 !important; border-color: #e0574c !important; }
 /* tabs */
 body.dark .tab { background: #141414 !important; color: #d6d6d6 !important; border-color: #4a4a4a !important; }
@@ -1610,13 +1611,24 @@ TAB_STYLE = {"padding": "8px 16px", "fontWeight": "600"}
 TAB_SEL = {**TAB_STYLE, "borderTop": f"3px solid {ACCENT}"}
 
 app.layout = html.Div([
-    # Dark-mode tick box: sits at the right-hand end of the tab bar, so it is
-    # visible on both pages
-    dcc.Checklist(id="dark-mode", options=[{"label": " Dark mode", "value": "on"}],
-                  value=CFG.get("dark_mode", []), inputStyle={"marginRight": "5px"},
-                  style={"position": "absolute", "top": "11px", "right": "18px", "zIndex": "10",
-                         "fontSize": "13px", "fontWeight": "600"}),
+    # Settings button at the right-hand end of the tab bar (visible on every
+    # page); opens a small popup menu holding display options such as dark
+    # mode.  Opening/closing is done in the browser (clientside callback
+    # below): the button toggles it, clicking anywhere outside closes it.
+    html.Button("\u2699 Settings", id="btn-settings", className="btn btn-outline-secondary btn-sm",
+                style={"position": "absolute", "top": "7px", "right": "14px", "zIndex": "20",
+                       "fontWeight": "600"}),
+    html.Div([
+        html.Div("Settings", style={"fontWeight": "700", "fontSize": "14px", "marginBottom": "8px"}),
+        dcc.Checklist(id="dark-mode", options=[{"label": " Dark mode", "value": "on"}],
+                      value=CFG.get("dark_mode", []), inputStyle={"marginRight": "6px"},
+                      style={"fontSize": "13px"}),
+    ], id="settings-menu", className="theia-box theia-menu",
+       style={**BOX_STYLE, "display": "none", "position": "absolute", "top": "42px",
+              "right": "14px", "zIndex": "30", "minWidth": "200px", "background": "white",
+              "boxShadow": "0 4px 14px rgba(0,0,0,0.18)"}),
     html.Div(id="_dark-mode-hook", style={"display": "none"}),
+    html.Div(id="_settings-menu-hook", style={"display": "none"}),
     dcc.Tabs(id="tabs", value="scan", children=[
         dcc.Tab(label="Scan", value="scan", style=TAB_STYLE, selected_style=TAB_SEL, children=[
             html.Div([sidebar, scan_main], style={"display": "flex"}),
@@ -1625,7 +1637,7 @@ app.layout = html.Div([
                 children=[results_tab]),
         dcc.Tab(label="Further output", value="further", style=TAB_STYLE, selected_style=TAB_SEL,
                 children=[further_tab]),
-    # Tab bar stops short of the right edge to leave room for the dark-mode box
+    # Tab bar stops short of the right edge to leave room for the settings button
     ], style={"height": "42px", "width": "calc(100% - 130px)"}),
     # Polls the background scan; only enabled while a scan is running
     dcc.Interval(id="poll", interval=700, disabled=True),
@@ -2705,8 +2717,38 @@ def show_sum(_, files, align, ion_key, unsure):
 
 
 # ===========================================================================
-# Callbacks — dark mode (both pages)
+# Callbacks — settings popup menu and dark mode (all pages)
 # ===========================================================================
+
+app.clientside_callback(
+    """
+    function(n) {
+        var menu = document.getElementById('settings-menu');
+        var btn = document.getElementById('btn-settings');
+        if (!menu || !btn) return window.dash_clientside.no_update;
+        if (!window._theiaMenuListener) {
+            // close when clicking anywhere outside the menu and the button
+            window._theiaMenuListener = true;
+            document.addEventListener('mousedown', function(evt) {
+                var m = document.getElementById('settings-menu');
+                var b = document.getElementById('btn-settings');
+                if (m && m.style.display !== 'none' && !m.contains(evt.target)
+                        && !(b && b.contains(evt.target))) {
+                    m.style.display = 'none';
+                }
+            });
+            document.addEventListener('keydown', function(evt) {
+                var m = document.getElementById('settings-menu');
+                if (evt.key === 'Escape' && m) m.style.display = 'none';
+            });
+        }
+        if (n) menu.style.display = (menu.style.display === 'none') ? 'block' : 'none';
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("_settings-menu-hook", "children"),
+    Input("btn-settings", "n_clicks"),
+)
 
 app.clientside_callback(
     """
