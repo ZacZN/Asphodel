@@ -43,7 +43,7 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 APP_NAME = "LevelSchemer"
 HIGHLIGHT = "#f57d15"
-FILE_VERSION = 2
+FILE_VERSION = 3
 
 DEFAULT_STYLE = {
     # figure
@@ -111,6 +111,51 @@ def format_lifetime(s, style):
         return ""
     mu = r"$\mu$" if style.get("usetex") else "\u03bc"
     return re.sub(r"(\d|\))\s*us\b", lambda m: m.group(1) + " " + mu + "s", s.strip())
+
+
+def element_z(symbol):
+    """Proton number for an element symbol ('pd' -> 46), or None if unknown."""
+    names = ("H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn Fe Co Ni "
+             "Cu Zn Ga Ge As Se Br Kr Rb Sr Y Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb Te I Xe "
+             "Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu Hf Ta W Re Os Ir Pt Au Hg "
+             "Tl Pb Bi Po At Rn Fr Ra Ac Th Pa U Np Pu Am Cm Bk Cf Es Fm Md No Lr Rf Db Sg "
+             "Bh Hs Mt Ds Rg Cn Nh Fl Mc Lv Ts Og").split()
+    s = (symbol or "").strip().capitalize()
+    return names.index(s) + 1 if s in names else None
+
+
+def scheme_title(s):
+    """Build the mathtext title of a scheme from its nuclide fields.
+
+    Fields: mass (A), isomer ('m', 'm1'...), symbol, show_z, show_n, charge ('46+'),
+    note (plain text after the name). A non-empty 'title' overrides everything.
+    """
+    if (s.get("title") or "").strip():
+        return s["title"]
+    sym = (s.get("symbol") or "").strip()
+    sym = sym[:1].upper() + sym[1:].lower()
+    a = str(s.get("mass") if s.get("mass") is not None else "").strip()
+    iso = (s.get("isomer") or "").strip()
+    z = element_z(sym)
+    pre_sup = a + (r"\mathrm{%s}" % iso if iso else "")
+    pre_sub = str(z) if (s.get("show_z") and z) else ""
+    k = len(a + iso) - len(pre_sub)
+    if pre_sub and k > 0:            # right-align Z under a longer mass/isomer label
+        pre_sub = r"\phantom{\mathrm{%s}}%s" % ((a + iso)[:k], pre_sub)
+    n = ""
+    if s.get("show_n") and z and a.isdigit() and int(a) >= z:
+        n = str(int(a) - z)
+    charge = re.sub(r"([+\-])", r"{\1}", (s.get("charge") or "").replace(" ", ""))
+    out = ""
+    if pre_sup or pre_sub:
+        out += "${}" + ("^{%s}" % pre_sup if pre_sup else "") + ("_{%s}" % pre_sub if pre_sub else "") + "$"
+    out += sym
+    if charge or n:
+        out += "${}" + ("^{%s}" % charge if charge else "") + ("_{%s}" % n if n else "") + "$"
+    note = (s.get("note") or "").strip()
+    if note:
+        out += (" " if out else "") + note
+    return out
 
 
 def column_x0(col, style):
@@ -317,18 +362,19 @@ def render(fig, doc, style, hits=None, selected=None, limits=None, highlight="#f
     pos = style.get("scheme_title_pos", "below")
     any_titles = False
     for s, base, w in layout:
-        if not s.get("title") or pos == "none":
+        title = scheme_title(s)
+        if not title or pos == "none":
             continue
         any_titles = True
         sel = is_sel("scheme", s["id"])
         dx, dy = offs(s, "title")
         if pos == "above":
-            tt = ax.annotate(s["title"], (base + w / 2, yhi), xytext=(dx, fs * 1.4 + dy),
+            tt = ax.annotate(title, (base + w / 2, yhi), xytext=(dx, fs * 1.4 + dy),
                              textcoords="offset points", ha="center", va="bottom",
                              fontsize=sts, color=highlight if sel else "black",
                              annotation_clip=False)
         else:
-            tt = ax.annotate(s["title"], (base + w / 2, ylo), xytext=(dx, dy - below),
+            tt = ax.annotate(title, (base + w / 2, ylo), xytext=(dx, dy - below),
                              textcoords="offset points", ha="center", va="top",
                              fontsize=sts, color=highlight if sel else "black",
                              annotation_clip=False)
@@ -344,7 +390,8 @@ def render(fig, doc, style, hits=None, selected=None, limits=None, highlight="#f
     return ax
 
 
-EXPORTED_FUNCTIONS = [style_rc, fmt_energy, format_spin, format_lifetime, column_x0,
+EXPORTED_FUNCTIONS = [style_rc, fmt_energy, format_spin, format_lifetime,
+                      element_z, scheme_title, column_x0,
                       scheme_ncol, scheme_layout, level_y, level_xspan, render]
 
 
@@ -365,8 +412,42 @@ def new_transition(id_, from_id, to_id, x=0.5):
 
 
 def new_scheme(id_, title=""):
-    return {"id": id_, "title": title, "shift": 0.0, "column_titles": "",
-            "offsets": {}, "levels": [], "transitions": []}
+    return {"id": id_, "mass": None, "isomer": "", "symbol": "", "show_z": False,
+            "show_n": False, "charge": "", "note": "", "title": title,
+            "shift": 0.0, "column_titles": "", "offsets": {}, "levels": [], "transitions": []}
+
+
+_OLD_TITLE_RE = re.compile(
+    r"^\s*\$\s*(?:\{\})?\^\{?\s*(\d+)\s*(?:\\mathrm\{(\w+)\}|([a-z]\d?))?\s*\}?\s*\$"   # $^{94m}$
+    r"\s*([A-Za-z]{1,2})"                                                        # Ru
+    r"(?:\s*\$\s*(?:\{\})?\^\{?\s*(\d+\s*[+-])\s*\}?\s*\$)?"                      # $^{46+}$
+    r"\s*(.*?)\s*$")                                                             # note
+
+
+def split_title(title):
+    """Convert an old mathtext title like '$^{96}$Pd (Exp.)' into nuclide fields.
+
+    Returns a dict of fields, or {"title": title} when it isn't recognisable.
+    """
+    m = _OLD_TITLE_RE.match(title or "")
+    if not m or element_z(m.group(4)) is None or "$" in m.group(6):
+        return {"title": title or ""}
+    return {"mass": int(m.group(1)), "isomer": m.group(2) or m.group(3) or "",
+            "symbol": m.group(4).capitalize(), "charge": (m.group(5) or "").replace(" ", ""),
+            "note": m.group(6), "title": ""}
+
+
+def scheme_label(s):
+    """Plain-text name for lists and the scheme selector, e.g. '94mRu (Exp.)'."""
+    if (s.get("title") or "").strip():
+        return s["title"]
+    parts = "%s%s%s" % (s.get("mass") if s.get("mass") is not None else "",
+                        s.get("isomer") or "", (s.get("symbol") or "").capitalize())
+    if s.get("charge"):
+        parts += " " + s["charge"]
+    if s.get("note"):
+        parts += " " + s["note"]
+    return parts.strip()
 
 
 def empty_doc():
@@ -404,6 +485,8 @@ def _norm_scheme(raw, sid):
     s = new_scheme(sid)
     s.update({k: v for k, v in raw.items() if k not in ("levels", "transitions")})
     s["id"] = sid
+    if "symbol" not in raw:                      # file v1/v2: title was typed as mathtext
+        s.update(split_title(raw.get("title", "")))
     for l in raw.get("levels", []):
         d = new_level(l["id"], l["energy"])
         d.update(l)
@@ -531,7 +614,8 @@ class ScrollFrame(ttk.Frame):
 class PropertyForm(ttk.Frame):
     """Label/editor grid bound to a dict. Field spec: (key, label, kind[, options]).
 
-    kinds: float, optfloat, int, str, bool, choice, level, color, header
+    kinds: float, optfloat, int, optint, str, bool, choice, level, color, header,
+           computed (read-only text; options = function(target) -> str)
     """
 
     def __init__(self, master, fields, on_change):
@@ -552,7 +636,10 @@ class PropertyForm(ttk.Frame):
                 continue
             self.fields[key] = (kind, opts)
             ttk.Label(self, text=label).grid(row=row, column=0, sticky="w", padx=(6, 4), pady=1)
-            if kind == "bool":
+            if kind == "computed":
+                var = tk.StringVar()
+                w = ttk.Label(self, textvariable=var, foreground="#666666")
+            elif kind == "bool":
                 var = tk.BooleanVar()
                 w = ttk.Checkbutton(self, variable=var, command=lambda k=key: self._commit(k))
             elif kind in ("choice", "level"):
@@ -590,10 +677,12 @@ class PropertyForm(ttk.Frame):
         self.target = target
         self._loading = True
         try:
-            for k, (kind, _) in self.fields.items():
+            for k, (kind, opts) in self.fields.items():
                 v = None if target is None else target.get(k)
                 var = self.vars[k]
-                if kind == "bool":
+                if kind == "computed":
+                    var.set(opts(target))
+                elif kind == "bool":
                     var.set(bool(v))
                 elif kind == "level":
                     var.set(self.level_rev.get(v, ""))
@@ -614,6 +703,8 @@ class PropertyForm(ttk.Frame):
             return None if raw == "" else float(raw)
         if kind == "int":
             return int(float(raw))
+        if kind == "optint":
+            return None if raw == "" else int(raw)
         if kind == "bool":
             return bool(raw)
         if kind == "level":
@@ -628,6 +719,8 @@ class PropertyForm(ttk.Frame):
         if self._loading or self.target is None:
             return
         kind, _ = self.fields[key]
+        if kind == "computed":
+            return
         try:
             val = self._parse(kind, self.vars[key].get())
         except (ValueError, KeyError):
@@ -652,8 +745,32 @@ class PropertyForm(ttk.Frame):
             self._commit(key)
 
 
+def _zn_info(s):
+    if s is None:
+        return ""
+    if (s.get("title") or "").strip():
+        return "Override title is set, so these fields are ignored"
+    z = element_z(s.get("symbol"))
+    if not (s.get("symbol") or "").strip():
+        return "Enter an element symbol"
+    if z is None:
+        return "Unknown element symbol"
+    a = s.get("mass")
+    return "Z = %d" % z + (", N = %d" % (a - z) if isinstance(a, int) and a >= z else "")
+
+
 SCHEME_FIELDS = [
-    ("title", "Title, e.g. $^{94}$Pd", "str"),
+    (None, "Nuclide title", "header"),
+    ("mass", "Mass number A", "optint"),
+    ("isomer", "Isomer label (m, m1, m2 …)", "str"),
+    ("symbol", "Element symbol, e.g. Pd", "str"),
+    ("zn", "", "computed", _zn_info),
+    ("show_z", "Show Z (subscript before)", "bool"),
+    ("show_n", "Show N (subscript after)", "bool"),
+    ("charge", "Charge state, e.g. 46+", "str"),
+    ("note", "Note after name, e.g. (Exp.)", "str"),
+    ("title", "Override title (optional)", "str"),
+    (None, "Placement", "header"),
     ("shift", "Energy shift (keV)", "float"),
     ("column_titles", "Column titles (a | b | c)", "str"),
 ]
@@ -736,7 +853,12 @@ Schemes
     common energy scale. Pick the active scheme in the selector at the top left;
     the Levels and Transitions tabs always show the active scheme.
   • Schemes tab: add, duplicate, delete and reorder (◀ ▶) schemes, and set each
-    scheme's title (e.g. $^{94}$Pd), energy shift and column titles.
+    scheme's title, energy shift and column titles.
+  • Titles are built from fields: mass number A, isomer label (m, m1 …), element
+    symbol, optional Z / N subscripts (worked out from the symbol and A), charge
+    state (e.g. 46+) and a note (e.g. (Exp.)). A=94, isomer=m, symbol=Ru gives ⁹⁴ᵐRu.
+    For anything else (e.g. 'Shell model') type an Override title, which replaces
+    the built one; it accepts plain text or mathtext.
   • Energy shift (keV) moves the whole scheme up or down on the common scale, e.g.
     to align a chosen level across schemes. Energy labels still show the
     energies you typed.
@@ -862,7 +984,7 @@ class App:
         sc = ttk.Frame(self.nb)
         self.nb.add(sc, text="Schemes")
         self.sc_tree = self._make_tree(sc, [("pos", "#", 30), ("title", "Title", 150),
-                                            ("shift", "Shift", 60), ("n", "Levels", 55)], height=6)
+                                            ("shift", "Shift", 60), ("n", "Levels", 55)], height=4)
         self.sc_tree.bind("<<TreeviewSelect>>", self._on_scheme_tree)
         self._buttons(sc, (("Add", self.add_scheme), ("Duplicate", self.duplicate_scheme),
                            ("Delete", self.delete_scheme), ("◀", lambda: self.move_scheme(-1)),
@@ -870,8 +992,9 @@ class App:
         self.sc_form = PropertyForm(sc, SCHEME_FIELDS, self.on_item_change)
         self.sc_form.pack(fill="x", pady=4)
         ttk.Label(sc, foreground="#666666", wraplength=340, justify="left", text=(
-            "All schemes share one energy scale. The shift moves a whole scheme up or "
-            "down (e.g. to align a reference level); labels keep the energies you typed."
+            "Fill in A and the element symbol and the title is typeset for you; "
+            "Z and N are worked out automatically. The shift moves the whole scheme "
+            "on the shared energy scale (labels keep the energies you typed)."
         )).pack(fill="x", padx=8, pady=4)
 
         # Levels tab
@@ -1024,7 +1147,7 @@ class App:
 
     def scheme_name(self, s):
         i = self.schemes().index(s) + 1
-        return "%d: %s" % (i, s.get("title") or "(untitled)")
+        return "%d: %s" % (i, scheme_label(s) or "(untitled)")
 
     def layout(self):
         return scheme_layout(self.doc, self.style)
@@ -1080,7 +1203,7 @@ class App:
             sc.delete(*sc.get_children())
             for i, s in enumerate(self.schemes()):
                 sc.insert("", "end", iid=str(s["id"]), values=(
-                    i + 1, s.get("title") or "(untitled)",
+                    i + 1, scheme_label(s) or "(untitled)",
                     "{:g}".format(float(s.get("shift") or 0)), len(s["levels"])))
             sc.selection_set(str(cur["id"]))
 
@@ -1187,6 +1310,11 @@ class App:
 
     # --------------------------------------------------------------- editing
     def on_item_change(self, target, key, val):
+        if key == "symbol":
+            val = val.strip().capitalize()
+            if target.get(key) == val:
+                self.load_forms()
+                return
         self.push_undo()
         target[key] = val
         self.refresh_trees()
@@ -1218,7 +1346,6 @@ class App:
         self.push_undo()
         s = copy.deepcopy(src)
         s["id"] = self.next_id(self.schemes())
-        s["title"] = ((src.get("title") or "") + " (copy)").strip()
         nl, nt = self.next_id(self.all_levels()), self.next_id(self.all_trans())
         remap = {}
         for i, l in enumerate(s["levels"]):
@@ -1239,7 +1366,7 @@ class App:
             return
         if s["levels"] and not messagebox.askyesno(
                 APP_NAME, "Delete scheme '%s' and its %d level(s)?"
-                % (s.get("title") or "(untitled)", len(s["levels"]))):
+                % (scheme_label(s) or "(untitled)", len(s["levels"]))):
             return
         self.push_undo()
         i = self.schemes().index(s)
