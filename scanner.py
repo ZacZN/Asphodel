@@ -978,6 +978,9 @@ def empty_fig(msg=""):
     return fig
 
 
+EXCLUDED_TRACE = "Excluded (half-life cut)"
+
+
 def add_sim_lines(fig, sims, ion_db, matches, y0, y1, highlight_ion=None,
                   excluded=None, show_excluded=True):
     """Draw simulated ion frequencies as vertical dashed lines with tooltips.
@@ -1005,14 +1008,17 @@ def add_sim_lines(fig, sims, ion_db, matches, y0, y1, highlight_ion=None,
         (is_m & ~is_hi & ~is_ex, "Simulated (identified)", dict(color="#555555", width=1.5, dash="dash")),
         (is_hi, highlight_ion or "", dict(color=ACCENT, width=3, dash="solid")),
     ]
-    if show_excluded:
-        groups.append((is_ex, "Excluded (half-life cut)", dict(color="#c8c8c8", width=1, dash="dot")))
+    # the excluded trace is always added (hidden if not show_excluded) so the
+    # snippet's toggle can show/hide it in the browser without a redraw
+    groups.append((is_ex, EXCLUDED_TRACE, dict(color="#c8c8c8", width=1, dash="dot")))
     for mask, name, style in groups:
         if mask.any():
             X, Y, H = _vlines(sims["f_sim"].to_numpy()[mask], y0, y1,
                               np.array(labels, dtype=object)[mask])
             fig.add_trace(go.Scattergl(x=X, y=Y, mode="lines", name=name, line=style,
-                                       hoverinfo="text", hovertext=H, connectgaps=False))
+                                       hoverinfo="text", hovertext=H, connectgaps=False,
+                                       visible=True if (name != EXCLUDED_TRACE or show_excluded)
+                                       else False))
 
 
 def spectrum_figure(ff, pp, peaks, base, sig, s, r, title, xrange=None, highlight_ion=None):
@@ -1646,6 +1652,7 @@ app.layout = html.Div([
     *[html.Div(id=f"_readout-hook-{gid}", style={"display": "none"}) for gid in READOUT_GRAPHS],
     html.Div(id="_snippet-resize-hook", style={"display": "none"}),
     html.Div(id="_snippet-width-saved", style={"display": "none"}),
+    html.Div(id="_snippet-excluded-hook", style={"display": "none"}),
 ], style={"position": "relative"})
 
 # ---------------------------------------------------------------------------
@@ -2062,7 +2069,7 @@ def snippet_step(_p, _n, _a, _r, _u, typed, rows, current):
     Output("snippet-graph", "figure"),
     Input("snippet-idx", "data"),
     Input("snippet-width", "value"),
-    Input("snippet-show-excluded", "value"),
+    State("snippet-show-excluded", "value"),
     State("hits-table", "derived_virtual_data"),
     State("db-select", "value"),
 )
@@ -2714,6 +2721,25 @@ def show_sum(_, files, align, ion_key, unsure):
                                + (" …" if len(info["failed"]) > 3 else ""),
                                style={"color": "#c0392b"}))
     return fig, status
+
+
+# Snippet: show/hide the half-life-excluded lines in the browser, so the
+# current zoom/pan is kept (the next snippet drawn uses the same setting)
+app.clientside_callback(
+    """
+    function(value) {
+        var gd = document.querySelector('#snippet-graph .js-plotly-plot');
+        if (!gd || !gd.data) return window.dash_clientside.no_update;
+        var idx = [];
+        gd.data.forEach(function(t, i) { if (t.name === '%s') idx.push(i); });
+        if (idx.length) Plotly.restyle(gd, {visible: (value && value.length) ? true : false}, idx);
+        return window.dash_clientside.no_update;
+    }
+    """ % EXCLUDED_TRACE,
+    Output("_snippet-excluded-hook", "children"),
+    Input("snippet-show-excluded", "value"),
+    prevent_initial_call=True,
+)
 
 
 # ===========================================================================
