@@ -654,7 +654,7 @@ Keys: Delete, Ctrl+Z / Ctrl+Y, Ctrl+S, Ctrl+O, Ctrl+N
 class App:
     def __init__(self, root, path=None):
         self.root = root
-        self.scheme = example_scheme()
+        self.scheme = {"levels": [], "transitions": []}
         self.style = merged_style({})
         self.selected = None
         self.undo_stack, self.redo_stack = [], []
