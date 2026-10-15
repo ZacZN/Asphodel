@@ -177,6 +177,59 @@ def build_hover_label(ion_name: str, row: "pd.Series") -> str:
     return "<br>".join(lines)
 
 
+# NUBASE half-life units -> seconds
+HL_UNITS = {"ys": 1e-24, "zs": 1e-21, "as": 1e-18, "fs": 1e-15, "ps": 1e-12, "ns": 1e-9,
+            "us": 1e-6, "ms": 1e-3, "s": 1.0, "m": 60.0, "h": 3600.0, "d": 86400.0,
+            "y": 3.15576e7, "ky": 3.15576e10, "My": 3.15576e13, "Gy": 3.15576e16,
+            "Ty": 3.15576e19, "Py": 3.15576e22, "Ey": 3.15576e25, "Zy": 3.15576e28,
+            "Yy": 3.15576e31}
+# units offered for the half-life cut in the GUI
+HL_CUT_UNITS = ["ns", "us", "ms", "s", "m", "h", "d", "y"]
+
+
+def half_life_seconds(t, unit):
+    """NUBASE half-life (T, T_unit) -> seconds.  'stbl' -> inf.  Estimates
+    ('#') and limits ('>', '<', '~') use the number given.  Unknown (blank,
+    'p-unst', or an unrecognised unit) -> NaN."""
+    t = "" if t is None or (isinstance(t, float) and np.isnan(t)) else str(t).strip()
+    if t.startswith("stbl"):
+        return np.inf
+    num = re.sub(r"[#<>~=\s]", "", t)
+    unit = "" if unit is None or (isinstance(unit, float) and np.isnan(unit)) else str(unit).strip()
+    try:
+        return float(num) * HL_UNITS[unit]
+    except (ValueError, KeyError):
+        return np.nan
+
+
+def hl_allowed(ion_db, s):
+    """Bool array over ion_db rows: True = the ion may be identified.
+
+    Ions whose half-life is below the cut (min_half_life x unit) are excluded;
+    ions with an unknown half-life are excluded only if exclude_unknown_hl.
+    Their simulated lines are still drawn, in a separate style."""
+    thr = float(s.get("min_half_life") or 0)
+    if thr <= 0 or "half_life_s" not in ion_db:
+        return np.ones(len(ion_db), dtype=bool)
+    thr *= HL_UNITS.get(s.get("min_half_life_unit") or "s", 1.0)
+    hl = ion_db["half_life_s"].to_numpy(dtype=float)
+    known = ~np.isnan(hl)
+    ok = np.zeros(len(hl), dtype=bool)
+    ok[known] = hl[known] >= thr
+    if not s.get("exclude_unknown_hl"):
+        ok[~known] = True
+    return ok
+
+
+def hl_cut_text(s):
+    """Short description of the half-life cut, '' if off."""
+    thr = float(s.get("min_half_life") or 0)
+    if thr <= 0:
+        return ""
+    return (f"T\u00bd < {thr:g} {s.get('min_half_life_unit') or 's'}"
+            + (" or unknown" if s.get("exclude_unknown_hl") else ""))
+
+
 @lru_cache(maxsize=8)
 def build_ion_database(z_lims, n_lims, el1, el2, ref_name, mq_width):
     """Bare, H-, He- and Li-like ions inside the selection, restricted to the
@@ -201,6 +254,7 @@ def build_ion_database(z_lims, n_lims, el1, el2, ref_name, mq_width):
     db = db[(db["m/q"] >= mq_ref - mq_width) & (db["m/q"] <= mq_ref + mq_width)].copy()
     db["ion"] = db.index.astype(str)
     db["ion_base"] = db["ion"].map(ion_base_name)
+    db["half_life_s"] = [half_life_seconds(t, u) for t, u in zip(db["T"], db["T_unit"])]
     db["hover"] = [build_hover_label(name, row) for name, (_, row) in zip(db["ion"], db.iterrows())]
     return db.reset_index(drop=True), float(mq_ref)
 
@@ -480,6 +534,7 @@ def analyse_spectrum(ff, pp, s, predicted_ref):
         ref_used, status = None, "not_found"
 
     ion_db, ref_mq = build_ion_database(*s["ion_key"])
+    allowed = hl_allowed(ion_db, s)
     sims = matches = None
     if ref_used is not None:
         sims = simulate_frequencies(ion_db, ref_mq, ref_used, s["ref_harmonic"], s["gamma_t"],
@@ -487,9 +542,12 @@ def analyse_spectrum(ff, pp, s, predicted_ref):
                                     s["corr_a"], s["corr_b"], s["corr_c"])
         lo, hi = ff.min() - s["match_tol_hz"], ff.max() + s["match_tol_hz"]
         sims = sims[(sims["f_sim"] >= lo) & (sims["f_sim"] <= hi)].reset_index(drop=True)
-        matches = match_peaks(peaks, sims, ion_db, s["match_tol_hz"])
+        # ions excluded by the half-life cut are simulated (and drawn) but
+        # never used for identification
+        sims_id = sims[allowed[sims["ion_row"].to_numpy()]].reset_index(drop=True)
+        matches = match_peaks(peaks, sims_id, ion_db, s["match_tol_hz"])
     return dict(peaks=peaks, base=base, sig=sig, ref=ref, ref_used=ref_used, status=status,
-                sims=sims, matches=matches, ion_db=ion_db)
+                sims=sims, matches=matches, ion_db=ion_db, excluded=~allowed)
 
 
 # ===========================================================================
@@ -542,6 +600,9 @@ DEFAULTS = dict(
     shoulder_scale_hz  = 10,
     k_shoulder         = 5.0,
     match_tol_hz       = 100,
+    min_half_life      = 0,      # 0 = no half-life cut
+    min_half_life_unit = "ms",
+    exclude_unknown_hl = [],
     snippet_half_width = 5000,   # Results tab, not a scan setting
     dark_mode          = [],     # display only, not a scan setting
 )
@@ -635,6 +696,11 @@ def parse_settings(raw):
     s["shoulder_scale_hz"] = _f(raw.get("shoulder_scale_hz"), "Shoulder scale", 0)
     s["k_shoulder"] = _f(raw.get("k_shoulder"), "Shoulder threshold", 0)
     s["match_tol_hz"] = _f(raw.get("match_tol_hz"), "Match window")
+    s["min_half_life"] = _f(raw.get("min_half_life"), "Min half-life", 0)
+    s["min_half_life_unit"] = raw.get("min_half_life_unit") or "ms"
+    if s["min_half_life_unit"] not in HL_UNITS:
+        raise ValueError(f"Half-life unit '{s['min_half_life_unit']}' not recognised")
+    s["exclude_unknown_hl"] = bool(raw.get("exclude_unknown_hl"))
     s["ion_key"] = (tuple(s["z_lims"]), tuple(s["n_lims"]), tuple(s["el1"]),
                     tuple(s["el2"]), s["ref_name"], s["mq_width"])
     return s
@@ -912,11 +978,14 @@ def empty_fig(msg=""):
     return fig
 
 
-def add_sim_lines(fig, sims, ion_db, matches, y0, y1, highlight_ion=None):
+def add_sim_lines(fig, sims, ion_db, matches, y0, y1, highlight_ion=None,
+                  excluded=None, show_excluded=True):
     """Draw simulated ion frequencies as vertical dashed lines with tooltips.
 
     Grey: no peak matched; dark grey: identified (a peak within the match
-    window); orange: `highlight_ion`.  `matches` needs columns ion, harmonic.
+    window); orange: `highlight_ion`; light dotted: excluded from
+    identification by the half-life cut (`excluded`, bool per ion_db row;
+    hidden if not show_excluded).  `matches` needs columns ion, harmonic.
     """
     if sims is None or not len(sims):
         return
@@ -928,11 +997,17 @@ def add_sim_lines(fig, sims, ion_db, matches, y0, y1, highlight_ion=None):
     matched = set() if matches is None else set(zip(matches["ion"], matches["harmonic"]))
     is_m = np.array([(n, h) in matched for n, h in zip(names, sims["harmonic"])])
     is_hi = np.array([highlight_ion is not None and n == highlight_ion for n in names])
-    for mask, name, style in [
-        (~is_m & ~is_hi, "Simulated (no peak)", dict(color="#bbbbbb", width=1, dash="dash")),
-        (is_m & ~is_hi, "Simulated (identified)", dict(color="#555555", width=1.5, dash="dash")),
+    is_ex = (np.zeros(len(names), dtype=bool) if excluded is None
+             else np.asarray(excluded, dtype=bool)[sims["ion_row"].to_numpy()])
+    is_ex &= ~is_hi
+    groups = [
+        (~is_m & ~is_hi & ~is_ex, "Simulated (no peak)", dict(color="#bbbbbb", width=1, dash="dash")),
+        (is_m & ~is_hi & ~is_ex, "Simulated (identified)", dict(color="#555555", width=1.5, dash="dash")),
         (is_hi, highlight_ion or "", dict(color=ACCENT, width=3, dash="solid")),
-    ]:
+    ]
+    if show_excluded:
+        groups.append((is_ex, "Excluded (half-life cut)", dict(color="#c8c8c8", width=1, dash="dot")))
+    for mask, name, style in groups:
         if mask.any():
             X, Y, H = _vlines(sims["f_sim"].to_numpy()[mask], y0, y1,
                               np.array(labels, dtype=object)[mask])
@@ -955,7 +1030,8 @@ def spectrum_figure(ff, pp, peaks, base, sig, s, r, title, xrange=None, highligh
 
     # simulated ions
     add_sim_lines(fig, r.get("sims"), r.get("ion_db"), r.get("matches"),
-                  ymin - pad, ymax + pad, highlight_ion)
+                  ymin - pad, ymax + pad, highlight_ion,
+                  excluded=r.get("excluded"), show_excluded=r.get("show_excluded", True))
 
     # reference window + found reference
     pred = r.get("predicted")
@@ -1055,6 +1131,31 @@ def radio(label, key, options):
     ], style=INPUT_STYLE)
 
 
+def hl_cut_inputs():
+    """Half-life cut: number + unit dropdown on one row."""
+    SETTING_FIELDS["min_half_life"] = ("s-min_half_life", "value")
+    SETTING_FIELDS["min_half_life_unit"] = ("s-min_half_life_unit", "value")
+    try:
+        val = float(CFG["min_half_life"])
+    except (TypeError, ValueError):
+        val = 0.0
+    unit = CFG["min_half_life_unit"] if CFG["min_half_life_unit"] in HL_UNITS else "ms"
+    return html.Div([
+        html.Label("Exclude ions with half-life below  [0 = off]", style=LABEL_STYLE),
+        html.Div([
+            dcc.Input(id="s-min_half_life", type="number", step="any", min=0, value=val,
+                      debounce=True, className="form-control form-control-sm",
+                      style={"flex": "1", "fontSize": "13px", "marginRight": "6px"}),
+            dcc.Dropdown(id="s-min_half_life_unit", value=unit, clearable=False,
+                         options=[{"label": u, "value": u} for u in HL_CUT_UNITS],
+                         style={"width": "80px", "fontSize": "13px"}),
+        ], style={"display": "flex", "alignItems": "center"}),
+        html.Small("NUBASE ground-state / isomer half-life (neutral atom). Excluded ions are "
+                   "not identified, but their simulated lines are still drawn (dotted)",
+                   style=HELP_STYLE),
+    ], style=INPUT_STYLE)
+
+
 def section(title):
     return [html.Hr(style={"margin": "10px 0"}), html.P(title, style=SECTION_STYLE)]
 
@@ -1121,6 +1222,9 @@ sidebar = html.Div([
     *section("Identification"),
     inp("Match window ± x (Hz)", "match_tol_hz", True,
         help="Any peak within ±x of a simulated ion is identified as it"),
+    hl_cut_inputs(),
+    check("Also exclude ions with unknown half-life", "exclude_unknown_hl",
+          help="Blank or 'p-unst' in NUBASE"),
     html.Div(style={"height": "30px"}),
 ], className="theia-sidebar",
    style={"width": "300px", "minWidth": "300px", "padding": "14px 18px", "background": "#f9f9f9",
@@ -1311,7 +1415,12 @@ results_tab = html.Div([
                           className="form-control form-control-sm",
                           style={"width": "140px", "marginRight": "16px"}),
                 html.Button("Confirmation mode", id="btn-confirm-mode",
-                            className="btn btn-outline-secondary btn-sm"),
+                            className="btn btn-outline-secondary btn-sm",
+                            style={"marginRight": "16px"}),
+                dcc.Checklist(id="snippet-show-excluded", value=["on"],
+                              options=[{"label": " Show ions excluded by half-life cut",
+                                        "value": "on"}],
+                              style={"fontSize": "13px"}),
             ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap"}),
             html.Small("Steps through every identification in the table above, in table order; "
                        "the filters and table sorting decide which peaks are shown",
@@ -1685,7 +1794,9 @@ def do_preview(_, fname, *values):
                if r["ref_used"] is not None else "NOT FOUND in search window")
     info = (f"{fname}:  {n_max} maxima + {n_sh} shoulders  |  reference {ref_txt}  |  "
             f"{0 if m is None else len(m)} identifications on {n_id_peaks} peaks  |  "
-            f"median σ = {np.median(r['sig']):.3g}  |  noise cutoff = {cut_txt}  |  {dt:.2f} s")
+            + (f"{int(r['excluded'].sum())} of {len(r['excluded'])} ions excluded "
+               f"({hl_cut_text(s)})  |  " if hl_cut_text(s) else "")
+            + f"median σ = {np.median(r['sig']):.3g}  |  noise cutoff = {cut_txt}  |  {dt:.2f} s")
     fig = spectrum_figure(ff, pp, peaks, r["base"], r["sig"], s, r, title=fname)
     rows = [] if m is None else _fmt_records(m.sort_values("peak_freq"))
     return fig, rows, info, ""
@@ -1939,10 +2050,11 @@ def snippet_step(_p, _n, _a, _r, _u, typed, rows, current):
     Output("snippet-graph", "figure"),
     Input("snippet-idx", "data"),
     Input("snippet-width", "value"),
+    Input("snippet-show-excluded", "value"),
     State("hits-table", "derived_virtual_data"),
     State("db-select", "value"),
 )
-def show_snippet(idx, half_width, rows, path):
+def show_snippet(idx, half_width, show_excluded, rows, path):
     if not rows or not path or idx is None or idx >= len(rows):
         return empty_fig("No identifications to show")
     row = rows[int(idx)]
@@ -1966,7 +2078,8 @@ def show_snippet(idx, half_width, rows, path):
         # there when you pan or zoom out
         sims = sims[(sims["f_sim"] >= ff.min()) & (sims["f_sim"] <= ff.max())].reset_index(drop=True)
         r = dict(sims=sims, ion_db=ion_db, matches=hits, ref_used=float(row["ref_found"]),
-                 status="found", predicted=None)
+                 status="found", predicted=None, excluded=~hl_allowed(ion_db, s),
+                 show_excluded=bool(show_excluded))
         fig = spectrum_figure(ff, pp, peaks, None, None, s, r,
                               title=f"{row['spectrum']}  –  {row['ion']} (h={row['harmonic']}), "
                                     f"Δ = {row['delta_hz']:+.1f} Hz",
@@ -2731,7 +2844,8 @@ def refview_plot(seq, half_width, path):
                            (int(row["spectrum_id"]),))
             ylo, yhi = float(np.nanmin(pp)), float(np.nanmax(pp))
             pad = 0.05 * (yhi - ylo or 1)
-            add_sim_lines(fig, sims, ion_db, ids, ylo - pad, yhi + pad)
+            add_sim_lines(fig, sims, ion_db, ids, ylo - pad, yhi + pad,
+                          excluded=~hl_allowed(ion_db, s_db))
             n_id = len(set(zip(ids["ion"], ids["harmonic"])))
             info += (f"\n{len(sims)} simulated lines from this reference "
                      f"({n_id} identified: dark dashed; no peak: light dashed)")
