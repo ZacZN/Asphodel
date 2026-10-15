@@ -64,6 +64,7 @@ DEFAULT_STYLE = {
     "arrow_max_width": 5.0, "arrow_min_width": 0.8, "head_length": 6.0, "head_extra": 4.0,
     "intensity_norm": "per scheme",
     "gamma_label_side": "left", "gamma_label_rotation": "0", "gamma_label_pad": 3.0,
+    "show_bwu": True,
     # annotations
     "title": "", "title_size": 12.0,
     "offsets": {},
@@ -111,6 +112,24 @@ def format_lifetime(s, style):
         return ""
     mu = r"$\mu$" if style.get("usetex") else "\u03bc"
     return re.sub(r"(\d|\))\s*us\b", lambda m: m.group(1) + " " + mu + "s", s.strip())
+
+
+def format_bwu(multipolarity, value):
+    """('E2', '4.5(3)') -> 'B(E2) = 4.5(3) W.u.'; '2.1(+5-4)' becomes 2.1 with
+    superscript +5 / subscript -4. Returns '' when no value is given."""
+    v = (value or "").strip()
+    if not v:
+        return ""
+    m = re.match(r"^(.*?)\(\s*\+\s*(\d+)\s*[-−]\s*(\d+)\s*\)\s*$", v)
+    if m:
+        v = m.group(1).strip() + r"$^{+%s}_{-%s}$" % (m.group(2), m.group(3))
+    rel = "="
+    m = re.match(r"^(<=|>=|[<>≤≥~≈])\s*(.*)$", v)
+    if m:                                   # limits / approximate: B(E2) > 12 W.u.
+        rel = {"<=": "≤", ">=": "≥", "~": "≈"}.get(m.group(1), m.group(1))
+        v = m.group(2)
+    mp = (multipolarity or "").strip()
+    return ("B(%s) %s " % (mp, rel) if mp else ("" if rel == "=" else rel + " ")) + v + " W.u."
 
 
 def element_z(symbol):
@@ -340,6 +359,18 @@ def render(fig, doc, style, hits=None, selected=None, limits=None, highlight="#f
                                   fontsize=gfs, color=col, annotation_clip=False)
                 reg("trans", t["id"], "label", ("text", txt))
 
+            bl = format_bwu(t.get("multipolarity"), t.get("bwu")) if style.get("show_bwu", True) else ""
+            if bl:
+                # opposite side of the arrow from the Eγ label
+                left = side == "right"
+                dx, dy = offs(t, "bwu")
+                txt = ax.annotate(bl, ((xa + xb) / 2, (ya + yb) / 2),
+                                  xytext=((-1 if left else 1) * (tw / 2 + gpad) + dx, dy),
+                                  textcoords="offset points", ha="right" if left else "left",
+                                  va="center", rotation=float(style["gamma_label_rotation"] or 0),
+                                  fontsize=gfs, color=col, annotation_clip=False)
+                reg("trans", t["id"], "bwu", ("text", txt))
+
     # --- titles: column titles, then scheme titles, then figure title --------
     ylo, yhi = ax.get_ylim()
     sts = float(style["scheme_title_size"])
@@ -391,7 +422,7 @@ def render(fig, doc, style, hits=None, selected=None, limits=None, highlight="#f
 
 
 EXPORTED_FUNCTIONS = [style_rc, fmt_energy, format_spin, format_lifetime,
-                      element_z, scheme_title, column_x0,
+                      format_bwu, element_z, scheme_title, column_x0,
                       scheme_ncol, scheme_layout, level_y, level_xspan, render]
 
 
@@ -408,7 +439,7 @@ def new_level(id_, energy, column=0):
 def new_transition(id_, from_id, to_id, x=0.5):
     return {"id": id_, "from": from_id, "to": to_id, "label": "", "intensity": 10.0,
             "x": x, "x_to": None, "label_side": "default", "color": "",
-            "tentative": False, "offsets": {}}
+            "tentative": False, "multipolarity": "", "bwu": "", "offsets": {}}
 
 
 def new_scheme(id_, title=""):
@@ -794,6 +825,8 @@ TRANS_FIELDS = [
     ("to", "To level", "level"),
     ("label", "Label (blank = auto Eγ)", "str"),
     ("intensity", "Intensity (sets width)", "float"),
+    ("multipolarity", "Multipolarity, e.g. E2", "str"),
+    ("bwu", "B(σλ) in W.u., e.g. 4.5(3)", "str"),
     ("x", "x position (0-1 of column)", "float"),
     ("x_to", "x at destination column", "optfloat"),
     ("label_side", "Label side", "choice", ["default", "left", "right", "none"]),
@@ -842,6 +875,7 @@ STYLE_FIELDS = [
     ("gamma_label_side", "Label side", "choice", ["left", "right", "none"]),
     ("gamma_label_rotation", "Label rotation", "choice", ["0", "90"]),
     ("gamma_label_pad", "Label gap (pt)", "float"),
+    ("show_bwu", "Show B(σλ) labels", "bool"),
     (None, "Annotations", "header"),
     ("title", "Figure title (under everything)", "str"),
     ("title_size", "Title size (pt)", "float"),
@@ -871,6 +905,10 @@ Building a scheme
   • Transitions tab: pick From/To levels (within the active scheme). Eγ is computed
     from the level energies unless you type a label. Arrow width scales with
     intensity (per scheme, or across all schemes: Style ▸ Width scaling).
+  • Transition strengths: enter a Multipolarity (E2, M1 …) and B(σλ) in W.u.
+    (e.g. 4.5(3), >12 or 2.1(+5-4) for asymmetric errors). It is drawn as
+    'B(E2) = 4.5(3) W.u.' on the opposite side of the arrow from Eγ, can be
+    dragged, and can be hidden for the whole figure with Style ▸ Show B(σλ) labels.
   • Style tab: figure size, fonts, gaps, arrow widths, label placement.
 
 Mouse (preview)
