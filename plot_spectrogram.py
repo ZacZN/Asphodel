@@ -678,7 +678,7 @@ async function runSim() {
     // just save the toggle and clear the lines
     fetch('/simulate', {method: 'POST', headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify(Object.assign({save_only: true}, raw))});
-    _renderSim(); _simStatus('');
+    _renderSim(); _renderFull(); _simStatus('');
     return;
   }
   _simStatus('Simulating…');
@@ -689,9 +689,10 @@ async function runSim() {
     });
     var d = await r.json();
     if (seq !== _simSeq) return;
-    if (!r.ok) { SIM = null; _renderSim(); _simStatus('✗ ' + (d.error || 'error'), 'err'); return; }
+    if (!r.ok) { SIM = null; _renderSim(); _renderFull(); _simStatus('✗ ' + (d.error || 'error'), 'err'); return; }
     SIM = d;
     _renderSim();
+    _renderFull();
     _simStatus('✓ ref ' + d.ref_name + ' h' + d.ref_harmonic + ' = ' +
                d.ref_freq.toLocaleString('en-GB', {maximumFractionDigits: 1}) + ' Hz · ' +
                d.lines.length + ' lines in file range', 'ok');
@@ -726,6 +727,84 @@ function _renderSim() {
     y: groups.map(function(g) { return g.y; }),
     hovertext: groups.map(function(g) { return g.h; })
   }, SIM_TRACES);
+}
+
+// ── Whole-spectrum 1-D plot (all frames, whole loaded range) with sim lines ──
+var FULL = null;   // {y, n} summed power, aligned with F_1D
+
+async function _fetchFull() {
+  try {
+    var r = await fetch('/spectrum1d');          // no tmin/tmax → all frames
+    var d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'error');
+    FULL = d;
+    _renderFull();
+  } catch (e) { console.log('[full1d] ' + e.message); }
+}
+
+function _renderFull() {
+  if (!FULL) return;
+  var useDb = document.getElementById('dbCheck').checked;
+  var y = useDb ? FULL.y.map(function(v) { return v > 0 ? 10 * Math.log10(v) : NaN; }) : FULL.y;
+  var lo = Infinity, hi = -Infinity;
+  for (var i = 0; i < y.length; i++) {
+    var v = y[i];
+    if (!isFinite(v)) continue;
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+  }
+  if (!isFinite(lo)) { lo = 0; hi = 1; }
+  var pad = (hi - lo) * 0.05 || 1;
+  lo -= pad; hi += pad;
+  var pLabel = useDb ? 'Summed power (dB)' : 'Summed power (linear)';
+
+  // vertical simulated lines over the whole loaded range (sliders ignored)
+  // lines are drawn with 2 points each (clean dashes); an invisible marker
+  // trace along each line carries the tooltips
+  var groups = [{x: [], y: []}, {x: [], y: []}, {x: [], y: []}];
+  var hov = {x: [], y: [], h: []};
+  var show = document.getElementById('sim_show').checked;
+  if (show && SIM) {
+    var showEx = document.getElementById('sim_show_excluded').checked, N = 20;
+    SIM.lines.forEach(function(l) {
+      if (l.excluded && !l.is_ref && !showEx) return;
+      var g = groups[l.is_ref ? 2 : (l.excluded ? 1 : 0)];
+      g.x.push(l.f, l.f, null); g.y.push(lo, hi, null);
+      for (var k = 0; k < N; k++) {
+        hov.x.push(l.f); hov.y.push(lo + (hi - lo) * k / (N - 1)); hov.h.push(l.label);
+      }
+    });
+  }
+  var styles = [
+    {name: 'Simulated',          line: {color: 'rgba(229,231,235,0.7)', width: 1, dash: 'dash'}},
+    {name: 'Simulated (T½ cut)', line: {color: 'rgba(156,163,175,0.5)', width: 1, dash: 'dot'}},
+    {name: 'Reference',          line: {color: 'rgba(255,255,255,0.95)', width: 1.5}}
+  ];
+  var traces = [{
+    type: 'scattergl', mode: 'lines', x: F_1D, y: y, name: pLabel, showlegend: false,
+    line: {color: 'rgba(56,189,248,0.95)', width: 1},
+    hovertemplate: 'Freq: %{x:,.1f} Hz<br>' + pLabel + ': %{y:.4g}<extra></extra>'
+  }];
+  groups.forEach(function(g, i) {
+    traces.push({type: 'scatter', mode: 'lines', x: g.x, y: g.y, hoverinfo: 'skip',
+                 connectgaps: false, showlegend: false,
+                 name: styles[i].name, line: styles[i].line});
+  });
+  traces.push({type: 'scatter', mode: 'markers', x: hov.x, y: hov.y, hovertext: hov.h,
+               hoverinfo: 'text', showlegend: false, name: 'Simulated',
+               marker: {size: 8, opacity: 0}});
+  Plotly.react('fullPlot', traces, {
+    template: {},
+    title: {text: 'Whole spectrum: all ' + FULL.n + ' frames, full loaded range',
+            x: 0.5, xanchor: 'center', font: {size: 13, color: '#e5e7eb'}},
+    xaxis: {title: {text: 'Frequency (Hz)'}, tickformat: ',d',
+            range: [F_1D[0], F_1D[F_1D.length - 1]],
+            color: '#9ca3af', gridcolor: '#374151', zerolinecolor: '#374151'},
+    yaxis: {title: {text: pLabel}, range: [lo, hi],
+            color: '#9ca3af', gridcolor: '#374151', zerolinecolor: '#374151'},
+    paper_bgcolor: '#111827', plot_bgcolor: '#1f2937', font: {color: '#e5e7eb'},
+    hovermode: 'closest', margin: {l: 90, r: 20, t: 40, b: 50}, height: 380
+  }, {responsive: true});
 }
 """
 
@@ -1125,6 +1204,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
   <div id="heatDiv"><div id="heatPlot"></div></div>
   <div id="surfDiv">{plot_div}</div>
 </div>
+<div id="fullDiv" style="margin-top:8px;"><div id="fullPlot"></div></div>
 <script>
 {loader_js}
 {SIM_JS}
@@ -1241,10 +1321,10 @@ function _initHeatmap() {{
     xaxis2: {{ overlaying: 'x', side: 'top', title: {{ text: '', standoff: 4 }},
                showgrid: false, zeroline: false,
                color: 'rgb(56,189,248)', tickfont: {{ size: 10 }} }},
-    xaxis: {{ title: 'Time (s)',
+    xaxis: {{ title: {{ text: 'Time (s)' }},
               range: [+document.getElementById('tMin').value, +document.getElementById('tMax').value],
               color: '#9ca3af', gridcolor: '#374151', zerolinecolor: '#374151' }},
-    yaxis: {{ title: 'Frequency (Hz)', tickformat: ',d', autorange: 'reversed',
+    yaxis: {{ title: {{ text: 'Frequency (Hz)' }}, tickformat: ',d', autorange: 'reversed',
               range: [+document.getElementById('fMax').value, +document.getElementById('fMin').value],
               color: '#9ca3af', gridcolor: '#374151', zerolinecolor: '#374151' }},
     paper_bgcolor: '#111827', plot_bgcolor: '#1f2937',
@@ -1582,6 +1662,7 @@ function updateSurface() {{
   _rescaleToWindow(rebinned.Z, rebinned.t);
   // Time sliders were reset → re-sum the 1-D spectrum
   _fetchSpec1d();
+  _renderFull();
   saveSession();
 }}
 
@@ -1680,6 +1761,7 @@ var _lastT1d = [null, null];
 _syncDecayControls();
 _initHeatmap();
 _fetchSpec1d();
+_fetchFull();
 // Align colorscale max across both plots using full data range
 (function() {{
   var n = Math.max(1, Math.round(+document.getElementById('nAvg').value || 1));
