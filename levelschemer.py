@@ -38,6 +38,7 @@ matplotlib.use("TkAgg")
 import matplotlib.colors as mcolors
 from matplotlib.figure import Figure
 from matplotlib.patches import FancyArrowPatch, ArrowStyle
+from matplotlib.transforms import Affine2D, ScaledTranslation
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 
@@ -60,7 +61,8 @@ DEFAULT_STYLE = {
     "energy_italic": True,
     "spin_side": "left", "energy_side": "right", "label_pad": 4.0,
     "auto_spin_format": True,
-    "stack_close_levels": True, "label_min_sep": 11.0, "stack_width": 0.6, "stack_gap": 3.0,
+    "fan_close_levels": True, "label_min_sep": 11.0, "level_min_gap": 4.0,
+    "connector_stub": 4.0, "connector_diag": 8.0,
     # transitions
     "arrow_max_width": 5.0, "arrow_min_width": 0.8, "head_length": 6.0, "head_extra": 4.0,
     "intensity_norm": "per scheme",
@@ -124,37 +126,71 @@ def format_lifetime(s, style):
     return re.sub(r"(\d|\))\s*us\b", lambda m: m.group(1) + " " + mu + "s", s.strip())
 
 
-def stack_close_levels(items, min_sep, label_h, gap):
-    """Decide which levels in one column are stacked on the level below them.
+def spread_positions(ys, sep, extra=None):
+    """Spread 1-D label positions so neighbours are at least `sep` apart.
+
+    extra[i] is additional room needed above label i (e.g. a lifetime printed
+    over the energy). Labels that would collide are merged into groups; each group
+    is laid out at that spacing and centred on its members' wanted positions.
+    Returns the new positions in the input order.
+    """
+    n = len(ys)
+    extra = list(extra) if extra else [0.0] * n
+    order = sorted(range(n), key=lambda i: ys[i])
+
+    def place(g):
+        offs, o = [], 0.0
+        for k, j in enumerate(g):
+            if k:
+                o += sep + extra[g[k - 1]]
+            offs.append(o)
+        c = sum(ys[j] - offs[k] for k, j in enumerate(g)) / len(g)
+        return [c + o for o in offs]
+
+    groups = []
+    for i in order:
+        groups.append([i])
+        while len(groups) > 1:
+            g1, g2 = groups[-2], groups[-1]
+            if place(g2)[0] - (place(g1)[-1] + extra[g1[-1]]) < sep:
+                groups[-2:] = [g1 + g2]
+            else:
+                break
+    out = list(ys)
+    for g in groups:
+        for j, p in zip(g, place(g)):
+            out[j] = p
+    return out
+
+
+def fan_close_levels(items, min_sep, min_gap, life_h=0.0):
+    """Handle levels in one column that are too close for their labels.
 
     items: [(id, y_pts, has_lifetime), ...] with y in printed points.
-    A level closer than `min_sep` to an ordinary level below it (whose spin/energy
-    sit beside the line) becomes the 1st step of a stack; a level too close to a
-    stacked level (whose labels sit on top of its line) becomes the next step.
-    Each step is raised just enough to clear the labels underneath it.
-    Returns {id: (step k >= 1, raise in points, id of the cluster's base level)}.
+    Each level closer than `min_sep` to the one below is nudged up (if needed) so
+    the drawn lines are at least `min_gap` apart; levels above are not moved.
+    Labels of those levels (and any neighbours they push) are then fanned out to
+    `min_sep` spacing, with `life_h` extra room above a level that has a lifetime.
+    Returns (raise_pts {id: dy}, label_offset_pts {id: dy from the drawn line}).
     """
-    out = {}
-    prev = None                              # (drawn y, step, has_lifetime, base id)
+    raised, drawn, close = {}, [], set()
+    prev = None                              # (id, true y, drawn y)
     for id_, y, life in sorted(items, key=lambda it: it[1]):
-        if prev is None:
-            prev = (y, 0, life, id_)
-            continue
-        q0, k0, life0, base = prev
-        if k0 == 0:                          # below: ordinary level, labels at the sides
-            close = y - q0 < min_sep
-            need = label_h + 2.5 if life0 else gap     # its lifetime sits on top of it
-        else:                                # below: stacked level, labels on top
-            top = label_h * (2 if life0 else 1)
-            close = y - q0 < top + min_sep / 2.0
-            need = top + 2.5
-        if close:
-            q = max(y, q0 + need)
-            out[id_] = (k0 + 1, q - y, base)
-            prev = (q, k0 + 1, life, base)
-        else:
-            prev = (y, 0, life, id_)
-    return out
+        q = y
+        if prev is not None and y - prev[1] < min_sep:
+            close.update((prev[0], id_))
+            q = max(y, prev[2] + min_gap)
+        if q != y:
+            raised[id_] = q - y
+        drawn.append((id_, q, life))
+        prev = (id_, y, q)
+    pos = spread_positions([q for _, q, _ in drawn], min_sep,
+                           [life_h if (life and id_ in close) else 0.0 for id_, _, life in drawn])
+    labels = {}
+    for (id_, q, _), p in zip(drawn, pos):
+        if id_ in close or abs(p - q) > 0.25:
+            labels[id_] = p - q
+    return raised, labels
 
 
 def format_bwu(multipolarity, value):
@@ -306,57 +342,60 @@ def render(fig, doc, style, hits=None, selected=None, limits=None, highlight="#f
     all_i = [float(t.get("intensity") or 0) for s, _, _ in layout for t in s.get("transitions", [])]
     global_imax = max(all_i + [1e-12])
 
-    # points per energy unit on the printed figure (for stacking close levels)
+    # points per energy unit on the printed figure (for fanning out close levels)
     fig_h = fig.get_size_inches()[1] * 72.0 * max(0.05, 1 - mb - mt)
     ylo0, yhi0 = ax.get_ylim()
     pts_per_kev = fig_h / max(yhi0 - ylo0, 1e-9)
-    fig_w = fig.get_size_inches()[0] * 72.0 * max(0.05, 1 - ml - mr)
-    xlo0, xhi0 = ax.get_xlim()
-    pts_per_x = fig_w / max(xhi0 - xlo0, 1e-9)
-    label_h = fs * 1.15
+    stub, diag = float(style["connector_stub"]), float(style["connector_diag"])
+    lowest_label = None                  # lowest fanned label (points), to keep titles clear
 
     for s, base, _w in layout:
         shift = float(s.get("shift") or 0.0)
         levels = {l["id"]: l for l in s.get("levels", [])}
 
-        # --- stack levels that are too close (per column) ---------------------
-        # stacked[id] = (k, raise_pts, base_id): k-th level above base_id in a cluster
-        stacked = {}
-        if style.get("stack_close_levels", True):
+        # --- nudge close levels apart and fan out their labels (per column) ---
+        raised, fanned = {}, {}
+        if style.get("fan_close_levels", True):
             cols = {}
             for l in s.get("levels", []):
                 cols.setdefault(int(l.get("column", 0)), []).append(
                     (l["id"], level_y(l, shift) * pts_per_kev, bool(l.get("lifetime"))))
             for items in cols.values():
-                stacked.update(stack_close_levels(items, float(style["label_min_sep"]),
-                                                  label_h, float(style["stack_gap"])))
-        ydraw = {i: level_y(levels[i], shift) + v[1] / pts_per_kev for i, v in stacked.items()}
+                r, f = fan_close_levels(items, float(style["label_min_sep"]),
+                                        float(style["level_min_gap"]), 1.05 * fs)
+                raised.update(r)
+                fanned.update(f)
+        ydraw = {i: level_y(levels[i], shift) + dy / pts_per_kev for i, dy in raised.items()}
+        for i, dy in fanned.items():
+            yl = ydraw.get(i, level_y(levels[i], shift)) * pts_per_kev + dy
+            lowest_label = yl if lowest_label is None else min(lowest_label, yl)
 
-        def on_top(text, l, part, anchor, ha, lift, col, **kw):
+        def side_label(text, l, part, left, anchor, col, **kw):
+            """Spin/energy label beside the line, or fanned out with a dashed connector:
+            horizontal stub at the level, diagonal, horizontal stub into the label."""
+            sgn = -1 if left else 1
             dx, dy = offs(l, part)
-            t = ax.annotate(text, anchor, xytext=((1 if ha == "left" else -1) + dx, lift + dy),
-                            textcoords="offset points", ha=ha, va="bottom", fontsize=fs,
+            if l["id"] in fanned:
+                dyl = fanned[l["id"]] + dy
+                xs = [0, sgn * stub, sgn * (stub + diag) + dx, sgn * (2 * stub + diag) + dx]
+                ys = [0, 0, dyl, dyl]
+                tr = (Affine2D().scale(1 / 72.0) + fig.dpi_scale_trans
+                      + ScaledTranslation(anchor[0], anchor[1], ax.transData))
+                ax.plot(xs, ys, transform=tr, color=col, lw=0.6, ls=(0, (2, 1.5)),
+                        clip_on=False, zorder=2)
+                xt = sgn * (2 * stub + diag + pad) + dx
+            else:
+                dyl, xt = dy, sgn * pad + dx
+            t = ax.annotate(text, anchor, xytext=(xt, dyl), textcoords="offset points",
+                            ha="right" if left else "left", va="center", fontsize=fs,
                             color=col, annotation_clip=False, **kw)
             reg("level", l["id"], part, ("text", t))
+            return xt, dyl
 
         # --- levels ---------------------------------------------------------
         for l in s.get("levels", []):
             x0, x1 = level_xspan(l, style, base)
             y = ydraw.get(l["id"], level_y(l, shift))
-            st = stacked.get(l["id"])
-            spin = format_spin(l.get("spin", ""), style["auto_spin_format"])
-            elab = l.get("energy_label") or energy_text(l)
-            if st:                                   # shorter, centred on its cluster's base
-                bx0, bx1 = level_xspan(levels[st[2]], style, base)
-                if l.get("stack_width") not in (None, ""):     # per-level override, used as-is
-                    frac = max(0.02, float(l["stack_width"]))
-                else:
-                    frac = float(style["stack_width"]) ** st[0]
-                    # but never too short for its spin + energy text (rough width estimate)
-                    nchar = sum(len(re.sub(r"[$^{}]", "", txt)) for txt in (spin, elab))
-                    frac = min(1.0, max(frac, (0.55 * fs * nchar + 8) / max((bx1 - bx0) * pts_per_x, 1e-9)))
-                xc, half = (bx0 + bx1) / 2, (bx1 - bx0) * frac / 2
-                x0, x1 = xc - half, xc + half
             sel = is_sel("level", l["id"])
             col = highlight if sel else (l.get("color") or style["level_color"])
             lw = float(l.get("lw") or style["level_lw"])
@@ -364,44 +403,33 @@ def render(fig, doc, style, hits=None, selected=None, limits=None, highlight="#f
             ax.plot([x0, x1], [y, y], color=col, lw=lw, ls=ls, solid_capstyle="butt",
                     clip_on=False, zorder=2)
             reg("level", l["id"], "line", ("seg", (x0, y, x1, y), lw / 2 + 3))
-            eit = {"fontstyle": "italic" if style["energy_italic"] else "normal"}
-            life = format_lifetime(l.get("lifetime", ""), style)
 
-            if st:
-                # labels sit on top of the line: spin at the left end, energy at the right,
-                # lifetime above the energy
-                lift = lw / 2 + 1.0
-                if spin and style["spin_side"] != "none":
-                    on_top(spin, l, "spin", (x0, y), "left", lift, col)
-                if elab and style["energy_side"] != "none":
-                    on_top(elab, l, "energy", (x1, y), "right", lift, col, **eit)
-                if life:
-                    on_top(life, l, "life", (x1, y), "right", lift + label_h, col)
-                continue
-
+            spin = format_spin(l.get("spin", ""), style["auto_spin_format"])
             if spin and style["spin_side"] != "none":
                 left = style["spin_side"] == "left"
-                dx, dy = offs(l, "spin")
-                t = ax.annotate(spin, (x0 if left else x1, y),
-                                xytext=((-pad if left else pad) + dx, dy),
-                                textcoords="offset points", ha="right" if left else "left",
-                                va="center", fontsize=fs, color=col, annotation_clip=False)
-                reg("level", l["id"], "spin", ("text", t))
+                side_label(spin, l, "spin", left, (x0 if left else x1, y), col)
 
+            elab = l.get("energy_label") or energy_text(l)
+            epos = None
             if elab and style["energy_side"] != "none":
                 left = style["energy_side"] == "left"
-                dx, dy = offs(l, "energy")
-                t = ax.annotate(elab, (x0 if left else x1, y),
-                                xytext=((-pad if left else pad) + dx, dy),
-                                textcoords="offset points", ha="right" if left else "left",
-                                va="center", fontsize=fs, color=col, annotation_clip=False, **eit)
-                reg("level", l["id"], "energy", ("text", t))
+                eanchor = (x0 if left else x1, y)
+                epos = (left, eanchor) + side_label(
+                    elab, l, "energy", left, eanchor, col,
+                    fontstyle="italic" if style["energy_italic"] else "normal")
 
+            life = format_lifetime(l.get("lifetime", ""), style)
             if life:
                 dx, dy = offs(l, "life")
-                t = ax.annotate(life, (x1, y), xytext=(-1 + dx, lw / 2 + 1.5 + dy),
-                                textcoords="offset points", ha="right", va="bottom",
-                                fontsize=fs, color=col, annotation_clip=False)
+                if l["id"] in fanned and epos:   # keep it just above the fanned energy label
+                    left, eanchor, xt, dyl = epos
+                    t = ax.annotate(life, eanchor, xytext=(xt + dx, dyl + 0.6 * fs + dy),
+                                    textcoords="offset points", ha="right" if left else "left",
+                                    va="bottom", fontsize=fs, color=col, annotation_clip=False)
+                else:
+                    t = ax.annotate(life, (x1, y), xytext=(-1 + dx, lw / 2 + 1.5 + dy),
+                                    textcoords="offset points", ha="right", va="bottom",
+                                    fontsize=fs, color=col, annotation_clip=False)
                 reg("level", l["id"], "life", ("text", t))
 
         # --- transitions ----------------------------------------------------
@@ -471,6 +499,8 @@ def render(fig, doc, style, hits=None, selected=None, limits=None, highlight="#f
     ylo, yhi = ax.get_ylim()
     sts = float(style["scheme_title_size"])
     below = 0.0
+    if lowest_label is not None:         # fanned labels below the bottom of the axes
+        below = max(0.0, ylo * pts_per_kev - (lowest_label - 0.7 * fs) + 2.0)
     any_cols = False
     for s, base, _w in layout:
         raw = (s.get("column_titles") or "").strip()
@@ -518,7 +548,7 @@ def render(fig, doc, style, hits=None, selected=None, limits=None, highlight="#f
 
 
 EXPORTED_FUNCTIONS = [style_rc, energy_text, gamma_energy_text, format_spin, format_lifetime,
-                      stack_close_levels, format_bwu, element_z, scheme_title, column_x0,
+                      spread_positions, fan_close_levels, format_bwu, element_z, scheme_title, column_x0,
                       scheme_ncol, scheme_layout, level_y, level_xspan, render]
 
 
@@ -530,7 +560,7 @@ def new_level(id_, energy, column=0):
     return {"id": id_, "energy": float(energy), "spin": "", "energy_label": "",
             "lifetime": "", "column": int(column), "x0": 0.0, "x1": 1.0, "lw": None,
             "color": "", "tentative": False, "y_shift": 0.0, "energy_text": "",
-            "stack_width": None, "offsets": {}}
+            "offsets": {}}
 
 
 def new_transition(id_, from_id, to_id, x=0.5):
@@ -606,6 +636,8 @@ def merged_style(style):
     s.pop("column_titles", None)          # moved into each scheme in file v2
     s.pop("energy_fmt", None)             # energies are now shown as typed
     s.pop("energy_decimals", None)
+    for k in ("stack_close_levels", "stack_width", "stack_gap", "spread_labels"):
+        s.pop(k, None)                    # options from earlier close-level layouts
     if not isinstance(s.get("offsets"), dict):
         s["offsets"] = {}
     return s
@@ -679,6 +711,7 @@ import re
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import FancyArrowPatch, ArrowStyle
+from matplotlib.transforms import Affine2D, ScaledTranslation
 
 DOC = {doc}
 
@@ -921,7 +954,6 @@ LEVEL_FIELDS = [
     ("color", "Colour (blank = default)", "color"),
     ("tentative", "Tentative (dashed)", "bool"),
     ("y_shift", "Drawn offset (keV)", "float"),
-    ("stack_width", "Stacked width 0-1 (blank = auto)", "optfloat"),
 ]
 
 TRANS_FIELDS = [
@@ -969,10 +1001,11 @@ STYLE_FIELDS = [
     ("energy_side", "Energy labels", "choice", ["right", "left", "none"]),
     ("label_pad", "Label gap (pt)", "float"),
     ("auto_spin_format", "Auto-superscript parity", "bool"),
-    ("stack_close_levels", "Stack close levels", "bool"),
-    ("label_min_sep", "Closeness threshold (pt)", "float"),
-    ("stack_width", "Stacked line width (fraction)", "float"),
-    ("stack_gap", "Min. raise of stacked line (pt)", "float"),
+    ("fan_close_levels", "Fan out labels of close levels", "bool"),
+    ("label_min_sep", "Closeness threshold / label spacing (pt)", "float"),
+    ("level_min_gap", "Min. gap between close lines (pt)", "float"),
+    ("connector_stub", "Connector horizontal stubs (pt)", "float"),
+    ("connector_diag", "Connector diagonal reach (pt)", "float"),
     (None, "Transitions", "header"),
     ("arrow_max_width", "Max arrow width (pt)", "float"),
     ("arrow_min_width", "Min arrow width (pt)", "float"),
@@ -1019,20 +1052,18 @@ Building a scheme
   • Energy labels show each level energy exactly as you typed it (2186, 2186.3,
     1.642 …). Automatic γ energies use as many decimals as the more precise of
     the two levels.
-  • Stacked levels: a level's 'Stacked width' box (0-1, fraction of the level below)
-    fixes its width exactly; blank = automatic. It only matters when the level is
-    stacked.
   • Style tab: figure size, fonts, gaps, arrow widths, label placement.
 
 Mouse (preview)
   • Click: select. Drag a level line up/down to separate crowded levels
     (only where it's drawn changes, not the energy).
-  • Levels too close for their labels to fit are stacked automatically: the upper
-    level is drawn as a shorter, centred line raised just enough to clear the level
-    below, with its spin (left end), energy (right end) and lifetime sitting on top
-    of the line. Three or more close levels form steps, each shorter than the last.
-    Energy labels keep the true energies. Tune it in Style ▸ Levels (closeness
-    threshold, stacked line width, minimum raise) or switch it off. Labels can still
+  • Levels too close for their labels to fit are handled automatically: the upper
+    level is nudged up just enough to leave a visible gap (levels above it are not
+    moved), and the labels of the close levels are fanned out (lower ones down,
+    upper ones up, groups evenly spaced). Each fanned label is joined to its level by
+    a dashed connector: a horizontal stub at the level, a diagonal, and a horizontal
+    stub into the label; the lifetime stays just above the energy. Energy labels keep
+    the true energies. Tune it in Style ▸ Levels or switch it off; labels can still
     be dragged afterwards.
   • Drag an arrow sideways to move it; drag any label (including scheme titles)
     to nudge it.
