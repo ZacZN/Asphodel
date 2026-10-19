@@ -8,8 +8,18 @@ adjusted in the browser without re-running the script.
 
 Usage
 -----
-  python plot_spectrogram.py                                   # choose the file in the GUI
+  python plot_spectrogram.py                                   # reopen the last session
+  python plot_spectrogram.py --new                             # choose the file in the GUI
   python plot_spectrogram.py <file> [<freq_min> <freq_max>] [--linear] [--time-avg N]
+
+Session memory
+--------------
+  The last loaded file, its frequency crop and the view settings (frequency /
+  time sliders, title, dB, time-avg, 1-D overlay, 3-D camera angle) are saved
+  to .asphodel_prefs.json as you change them. Running with no arguments
+  reopens exactly that view; with nothing saved (or the file gone) it opens
+  the file chooser. --linear / --time-avg on a bare run override the saved
+  values.
 
 Arguments (all optional — the file and frequency range can be chosen in the GUI)
 ---------
@@ -41,10 +51,13 @@ def parse_args():
                         help="Lower frequency bound (default: full range)")
     parser.add_argument("freq_max", nargs="?", type=float, default=None,
                         help="Upper frequency bound (default: full range)")
-    parser.add_argument("--linear", action="store_true",
+    # default=None (not False) so a bare run can tell "not given" from "given"
+    parser.add_argument("--linear", action="store_true", default=None,
                         help="Start in linear-power mode instead of dB (toggleable in browser)")
     parser.add_argument("--time-avg", type=int, metavar="N", default=None,
                         help="Average every N consecutive time frames (reduces time axis by factor N)")
+    parser.add_argument("--new", action="store_true",
+                        help="Ignore the saved session and open the file chooser")
     return parser.parse_args()
 
 
@@ -82,6 +95,10 @@ PREFS_PATH  = os.path.join(_HERE, ".asphodel_prefs.json")
 DECAY_PATH  = os.path.join(_HERE, "decay_fit.py")
 
 
+import threading
+_PREFS_LOCK = threading.RLock()   # serialise read-modify-write of the prefs file
+
+
 def read_prefs():
     import json
     try:
@@ -93,8 +110,29 @@ def read_prefs():
 
 def write_prefs(prefs):
     import json
-    with open(PREFS_PATH, "w", encoding="utf-8") as fh:
+    tmp = PREFS_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
         fh.write(json.dumps(prefs))
+    os.replace(tmp, PREFS_PATH)   # atomic: never leaves a half-written prefs file
+
+
+def _same_crop(a, b):
+    """True if two requested freq bounds (float or None) are the same."""
+    if a is None or b is None:
+        return a is None and b is None
+    return abs(float(a) - float(b)) < 1e-9
+
+
+def saved_view(file_path, fmin_req, fmax_req):
+    """Saved GUI view for this exact file + crop, else {}."""
+    sess = read_prefs().get("session") or {}
+    if (isinstance(sess, dict) and file_path
+            and sess.get("file") == os.path.abspath(file_path)
+            and _same_crop(sess.get("fMin"), fmin_req)
+            and _same_crop(sess.get("fMax"), fmax_req)
+            and isinstance(sess.get("view"), dict)):
+        return sess["view"]
+    return {}
 
 
 def make_title(path, fmin, fmax, linear=False):
@@ -334,6 +372,14 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
     _chk_unweighted = "checked" if _prefs.get("unweighted") else ""
     _chk_bars3d     = "" if _prefs.get("bars3d") == "0" else "checked"   # bars by default
 
+    # Saved view for this file + crop (sliders, title, camera, 1-D overlay)
+    _view = saved_view(file_path, fmin_req, fmax_req)
+    _default_title = title
+    _vt = _view.get("title")
+    if isinstance(_vt, str) and _vt.strip():
+        title = _vt
+    _chk_show1d = "" if _view.get("show1d") is False else "checked"
+
     z_label = "Power (dB)" if log_scale else "Power (linear)"
 
     # Full-resolution arrays for the 1-D summed spectrum (served on demand).
@@ -391,19 +437,6 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
         ),
     )])
 
-    fig.update_layout(
-        title=dict(text=title, x=0.5, xanchor="center", font_size=14),
-        scene=dict(
-            xaxis=dict(title="Time (s)"),
-            yaxis=dict(title="Frequency (Hz)", tickformat=",d",
-                       range=[float(freq.max()), float(freq.min())]),
-            zaxis=dict(title=z_label),
-            camera=dict(eye=dict(x=1.6, y=-1.6, z=0.8)),
-        ),
-        margin=dict(l=0, r=0, t=60, b=0),
-        height=680,
-    )
-
     # Axis bounds and bin sizes for slider step sizes
     f_min, f_max = float(freq.min()), float(freq.max())
     df = float(freq[1] - freq[0]) if len(freq) > 1 else max(f_max - f_min, 1.0)
@@ -412,6 +445,41 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
     t_init_min = float(t_init[0])
     t_init_max = float(t_init[-1])
     dt_init = float(t_init[1] - t_init[0]) if len(t_init) > 1 else max(t_init_max - t_init_min, 1e-6)
+
+    # Restore saved slider positions, clamped to what this data allows
+    def _restore_range(lo_key, hi_key, lo, hi):
+        try:
+            a = min(max(float(_view[lo_key]), lo), hi)
+            b = min(max(float(_view[hi_key]), lo), hi)
+            if a < b:
+                return a, b
+        except (KeyError, TypeError, ValueError):
+            pass
+        return lo, hi
+
+    f_sel_min, f_sel_max = _restore_range("fMin", "fMax", f_min, f_max)
+    t_sel_min, t_sel_max = _restore_range("tMin", "tMax", t_init_min, t_init_max)
+
+    _camera = _view.get("camera") if isinstance(_view.get("camera"), dict) else None
+    if _camera is None:
+        _camera = dict(eye=dict(x=1.6, y=-1.6, z=0.8))
+
+    _scene = dict(
+        xaxis=dict(title="Time (s)"),
+        yaxis=dict(title="Frequency (Hz)", tickformat=",d",
+                   range=[f_sel_max, f_sel_min]),
+        zaxis=dict(title=z_label),
+        camera=_camera,
+    )
+    if (t_sel_min, t_sel_max) != (t_init_min, t_init_max):
+        _scene["xaxis"]["range"] = [t_sel_min, t_sel_max]
+
+    fig.update_layout(
+        title=dict(text=title, x=0.5, xanchor="center", font_size=14),
+        scene=_scene,
+        margin=dict(l=0, r=0, t=60, b=0),
+        height=680,
+    )
 
     # Embed raw (downsampled) data as JSON for JS re-rendering
     z_raw_json = json.dumps(z_ds.tolist())
@@ -422,13 +490,14 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
 
     plot_div = fig.to_html(full_html=False, include_plotlyjs="cdn", div_id="specPlot",
                            config={"responsive": True})
-    title_html = title.replace("&", "&amp;").replace('"', "&quot;")
+    _default_title_js = json.dumps(_default_title).replace("</", "<\\/")
+    title_html = title.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
 
     html = f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
-<title>{title}</title>
+<title>{title_html}</title>
 <style>
   * {{ box-sizing: border-box; }}
   body {{ margin: 0; padding: 8px; background: #111827; color: #e5e7eb;
@@ -492,14 +561,14 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
     <div class="row">
       <label>Min</label>
       <input type="range" id="fMin" min="{f_min}" max="{f_max}"
-             step="{df}" value="{f_min}" oninput="update()">
-      <span id="fMinVal">{f_min:,.0f}</span>
+             step="{df}" value="{f_sel_min}" oninput="update()">
+      <span id="fMinVal">{f_sel_min:,.0f}</span>
     </div>
     <div class="row">
       <label>Max</label>
       <input type="range" id="fMax" min="{f_min}" max="{f_max}"
-             step="{df}" value="{f_max}" oninput="update()">
-      <span id="fMaxVal">{f_max:,.0f}</span>
+             step="{df}" value="{f_sel_max}" oninput="update()">
+      <span id="fMaxVal">{f_sel_max:,.0f}</span>
     </div>
   </div>
   <div class="grp">
@@ -507,14 +576,14 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
     <div class="row">
       <label>Min</label>
       <input type="range" id="tMin" min="{t_init_min}" max="{t_init_max}"
-             step="{dt_init}" value="{t_init_min}" oninput="update()">
-      <span id="tMinVal">{t_init_min:.3f}</span>
+             step="{dt_init}" value="{t_sel_min}" oninput="update()">
+      <span id="tMinVal">{t_sel_min:.3f}</span>
     </div>
     <div class="row">
       <label>Max</label>
       <input type="range" id="tMax" min="{t_init_min}" max="{t_init_max}"
-             step="{dt_init}" value="{t_init_max}" oninput="update()">
-      <span id="tMaxVal">{t_init_max:.3f}</span>
+             step="{dt_init}" value="{t_sel_max}" oninput="update()">
+      <span id="tMaxVal">{t_sel_max:.3f}</span>
     </div>
   </div>
   <div class="opts-row">
@@ -531,7 +600,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
     </div>
     <div class="opt-grp">
       <span>1D overlay</span>
-      <input type="checkbox" id="show1d" checked onchange="_renderSpec1d()">
+      <input type="checkbox" id="show1d" {_chk_show1d} onchange="_renderSpec1d(); saveSession()">
       <label for="show1d">show</label>
     </div>
     <div class="opt-grp">
@@ -612,7 +681,9 @@ const Z_RAW = {z_raw_json};
 const T_RAW = {t_raw_json};
 const F_PLOT = {f_raw_json};  // freq array, low-to-high (2-D heatmap y-axis)
 const F_1D   = {f_1d_json};   // full-resolution freq array for the 1-D spectrum
-const DEFAULT_TITLE = {json.dumps(title)};
+const DEFAULT_TITLE = {_default_title_js};
+var APPLIED_N = {n_avg_init};
+var LAST_CAMERA = {json.dumps(_camera)};
 
 var _heatReady = true;
 
@@ -838,6 +909,60 @@ function savePref(key, value) {{
   }});
 }}
 
+// ── Session memory: the bare `python plot_spectrogram.py` reopens this view ──
+function _sessionState() {{
+  var gd  = document.getElementById('specPlot');
+  var cam = (gd && gd.layout && gd.layout.scene && gd.layout.scene.camera) || LAST_CAMERA;
+  var title = document.getElementById('plotTitle').value;
+  return {{
+    linear: !document.getElementById('dbCheck').checked,
+    nAvg:   APPLIED_N,
+    view: {{
+      fMin:   +document.getElementById('fMin').value,
+      fMax:   +document.getElementById('fMax').value,
+      tMin:   +document.getElementById('tMin').value,
+      tMax:   +document.getElementById('tMax').value,
+      title:  title !== DEFAULT_TITLE ? title : '',
+      show1d: document.getElementById('show1d').checked,
+      camera: cam
+    }}
+  }};
+}}
+
+var _sessTimer = null;
+function saveSession() {{
+  clearTimeout(_sessTimer);
+  _sessTimer = setTimeout(function() {{
+    fetch('/save-session', {{
+      method: 'POST', headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify(_sessionState())
+    }}).catch(function() {{}});
+  }}, 400);
+}}
+
+// Save after 3-D camera drags/zooms. Wait until the scene is fully built,
+// because listeners attached earlier are dropped by plotly.
+function _hookCamera() {{
+  var gd = document.getElementById('specPlot');
+  var ready = gd && gd.on && gd._fullLayout && gd._fullLayout.scene &&
+              gd._fullLayout.scene._scene;
+  if (!ready) {{ setTimeout(_hookCamera, 200); return; }}
+  gd.on('plotly_relayout', function(ev) {{
+    if (ev && ev['scene.camera']) LAST_CAMERA = ev['scene.camera'];
+    saveSession();
+  }});
+  gd.addEventListener('mouseup', saveSession);
+  gd.addEventListener('wheel', saveSession, {{passive: true}});
+}}
+
+// Flush the latest state when the tab is closed
+window.addEventListener('beforeunload', function() {{
+  if (navigator.sendBeacon) {{
+    navigator.sendBeacon('/save-session', new Blob([JSON.stringify(_sessionState())],
+                                                   {{type: 'application/json'}}));
+  }}
+}});
+
 // ── Main update functions ────────────────────────────────────────────────────
 
 async function runDecayFit() {{
@@ -912,6 +1037,7 @@ function updateTitle() {{
   var t = document.getElementById('plotTitle').value;
   Plotly.relayout('specPlot', {{'title.text': t}});
   if (_heatReady) Plotly.relayout('heatPlot', {{'title.text': t}});
+  saveSession();
 }}
 
 // ── 3-D surface: smooth or square bars ──────────────────────────────────────
@@ -978,6 +1104,7 @@ function _renderSurface(rebinned) {{
 function updateSurface() {{
   var n = Math.max(1, Math.round(+document.getElementById('nAvg').value || 1));
   document.getElementById('nAvg').value = n;
+  APPLIED_N = n;
   var useDb = document.getElementById('dbCheck').checked;
   var rebinned = rebin(Z_RAW, T_RAW, n);
   _renderSurface(rebinned);
@@ -991,6 +1118,7 @@ function updateSurface() {{
   _rescaleToWindow(rebinned.Z, rebinned.t);
   // Time sliders were reset → re-sum the 1-D spectrum
   _fetchSpec1d();
+  saveSession();
 }}
 
 function fmt(v, dec) {{
@@ -1066,6 +1194,7 @@ function update() {{
   }} else {{
     _renderSpec1d();
   }}
+  saveSession();
 }}
 var _lastT1d = [null, null];
 
@@ -1080,6 +1209,7 @@ _fetchSpec1d();
   if (document.getElementById('bars3d').checked) _renderSurface(rebinned);
   _rescaleToWindow(rebinned.Z, rebinned.t);
 }})();
+_hookCamera();
 </script>
 </body>
 </html>"""
@@ -1106,12 +1236,25 @@ def load_dataset(path, fmin=None, fmax=None, linear=False, n_avg=1):
     html, state = build_page(freq_s, time, power_s, make_title(path, lo, hi, linear),
                              log_scale=not linear, n_avg=max(1, int(n_avg)),
                              file_path=path, fmin_req=fmin, fmax_req=fmax)
+    _PREFS_LOCK.acquire()
     prefs = read_prefs()
     prefs["lastDir"] = os.path.dirname(path)
+    # Remember this file/crop for a bare re-run; keep the saved view only if
+    # it belongs to this same file and crop
+    prefs["session"] = dict(
+        file=path,
+        fMin=None if fmin is None else float(fmin),
+        fMax=None if fmax is None else float(fmax),
+        linear=bool(linear),
+        nAvg=max(1, int(n_avg)),
+        view=saved_view(path, fmin, fmax),
+    )
     try:
         write_prefs(prefs)
     except Exception:
         pass
+    finally:
+        _PREFS_LOCK.release()
     return html, state
 
 
@@ -1252,6 +1395,26 @@ def serve(html, state):
                 except Exception as exc:
                     self._send(500, {"error": str(exc)})
 
+            elif self.path == "/save-session":
+                # GUI view state for the current file (see saveSession() in the page)
+                try:
+                    body = self._body()
+                    with _PREFS_LOCK:
+                        prefs = read_prefs()
+                        sess = prefs.get("session")
+                        if (isinstance(sess, dict) and STATE.get("npz_path")
+                                and sess.get("file") == STATE["npz_path"]):
+                            if isinstance(body.get("view"), dict):
+                                sess["view"] = body["view"]
+                            if "linear" in body:
+                                sess["linear"] = bool(body["linear"])
+                            if body.get("nAvg") is not None:
+                                sess["nAvg"] = max(1, int(body["nAvg"]))
+                            write_prefs(prefs)
+                    self._send(200, {"status": "saved"})
+                except Exception as exc:
+                    self._send(500, {"error": str(exc)})
+
             elif self.path == "/save-pref":
                 try:
                     body = self._body()
@@ -1261,12 +1424,13 @@ def serve(html, state):
                                         "skipStart", "skipEnd", "bateman", "unweighted",
                                         "parentMin", "parentMax", "bars3d"):
                         raise ValueError(f"unknown pref key: {pref_key!r}")
-                    prefs = read_prefs()
-                    if pref_val == "" or pref_val is None:
-                        prefs.pop(pref_key, None)
-                    else:
-                        prefs[pref_key] = pref_val
-                    write_prefs(prefs)
+                    with _PREFS_LOCK:
+                        prefs = read_prefs()
+                        if pref_val == "" or pref_val is None:
+                            prefs.pop(pref_key, None)
+                        else:
+                            prefs[pref_key] = pref_val
+                        write_prefs(prefs)
                     self._send(200, {"status": "saved"})
                 except Exception as exc:
                     self._send(500, {"error": str(exc)})
@@ -1276,7 +1440,8 @@ def serve(html, state):
         def log_message(self, *args):
             pass  # silence request logs
 
-    _srv = http.server.HTTPServer(("127.0.0.1", port), _Handler)
+    # Threaded so a spare browser connection can never block the page load
+    _srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), _Handler)
     threading.Thread(target=_srv.serve_forever, daemon=True).start()
 
     url = f"http://127.0.0.1:{port}/spectrogram.html"
@@ -1297,22 +1462,37 @@ def serve(html, state):
 def main():
     args = parse_args()
 
-    n_avg = args.time_avg if args.time_avg is not None else 1
-    if n_avg < 1:
+    if args.time_avg is not None and args.time_avg < 1:
         sys.exit("Error: --time-avg N requires N ≥ 1.")
     if (args.freq_min is None) != (args.freq_max is None):
         sys.exit("Error: give both freq_min and freq_max, or neither (full range).")
 
-    if args.file is None:
-        # No file on the command line → open the GUI on the file chooser
-        html, state = build_landing_page(), {}
-    else:
+    if args.file is not None:
         try:
             html, state = load_dataset(args.file, args.freq_min, args.freq_max,
-                                       linear=args.linear, n_avg=n_avg)
+                                       linear=bool(args.linear),
+                                       n_avg=args.time_avg or 1)
         except Exception as exc:
             sys.exit(f"Error: {exc}")
-    serve(html, state)
+        return serve(html, state)
+
+    # Bare run → reopen the last session if there is one
+    sess = {} if args.new else (read_prefs().get("session") or {})
+    if isinstance(sess, dict) and sess.get("file") and os.path.isfile(sess["file"]):
+        linear = bool(sess.get("linear")) if args.linear is None else True
+        n_avg  = int(sess.get("nAvg") or 1) if args.time_avg is None else args.time_avg
+        print(f"Reopening last session: {sess['file']}  (use --new for the file chooser)")
+        try:
+            html, state = load_dataset(sess["file"], sess.get("fMin"), sess.get("fMax"),
+                                       linear=linear, n_avg=n_avg)
+            return serve(html, state)
+        except Exception as exc:
+            print(f"Could not reopen last session ({exc}); opening the file chooser.")
+    elif isinstance(sess, dict) and sess.get("file"):
+        print(f"Last file no longer exists ({sess['file']}); opening the file chooser.")
+
+    # Nothing to reopen → open the GUI on the file chooser
+    serve(build_landing_page(), {})
 
 
 if __name__ == "__main__":
