@@ -395,6 +395,9 @@ def _render_once(fig, doc, style, hits, selected, limits, highlight, extra, grou
 
     # --- limits (common energy scale for all schemes) ------------------------
     ys = [level_y(l, s.get("shift")) for s, _, _ in layout for l in s.get("levels", [])]
+    ys += [float(t["free_energy"]) + float(s.get("shift") or 0) for s, _, _ in layout
+           for t in s.get("transitions", []) if t.get("free_energy") is not None
+           and 0 in (t.get("from"), t.get("to"))]
     xmax = (layout[-1][1] + layout[-1][2]) if layout else 1.0
     if limits:
         ax.set_xlim(*limits[0])
@@ -516,17 +519,33 @@ def _render_once(fig, doc, style, hits, selected, limits, highlight, extra, grou
             imax = max([float(t.get("intensity") or 0) for t in trans] + [1e-12])
         for t in trans:
             a, b = levels.get(t["from"]), levels.get(t["to"])
-            if a is None or b is None:
+            # a 'hanging' transition has one unknown end (id 0): drawn to/from the energy
+            # free_energy, with a '?' (free_text) at that end
+            hang = None
+            if a is None and b is not None and t["from"] == 0:
+                hang = "from"
+            elif b is None and a is not None and t["to"] == 0:
+                hang = "to"
+            elif a is None or b is None:
                 continue
-            ca, cb = int(a.get("column", 0)), int(b.get("column", 0))
-            xa = base + column_x0(ca, style) + cw * float(t.get("x", 0.5))
-            if ca == cb:
-                xb = xa
+            known = b if hang == "from" else a
+            ck = int(known.get("column", 0))
+            if hang:
+                xa = xb = base + column_x0(ck, style) + cw * float(t.get("x", 0.5))
+                yk = ydraw.get(known["id"], level_y(known, shift))
+                fe = t.get("free_energy")
+                yf = (float(fe) + shift) if fe is not None else yk + (100.0 if hang == "from" else -100.0)
+                ya, yb = (yf, yk) if hang == "from" else (yk, yf)
             else:
-                xt = t.get("x_to")
-                xb = base + column_x0(cb, style) + cw * float(t.get("x", 0.5) if xt is None else xt)
-            ya = ydraw.get(a["id"], level_y(a, shift))
-            yb = ydraw.get(b["id"], level_y(b, shift))
+                ca, cb = int(a.get("column", 0)), int(b.get("column", 0))
+                xa = base + column_x0(ca, style) + cw * float(t.get("x", 0.5))
+                if ca == cb:
+                    xb = xa
+                else:
+                    xt = t.get("x_to")
+                    xb = base + column_x0(cb, style) + cw * float(t.get("x", 0.5) if xt is None else xt)
+                ya = ydraw.get(a["id"], level_y(a, shift))
+                yb = ydraw.get(b["id"], level_y(b, shift))
             inten = float(t.get("intensity") or 0)
             tw = wmin + (wmax - wmin) * max(inten, 0) / imax
             hw = tw + float(style["head_extra"])
@@ -545,7 +564,19 @@ def _render_once(fig, doc, style, hits, selected, limits, highlight, extra, grou
                                          clip_on=False, zorder=3))
             reg("trans", t["id"], "arrow", ("seg", (xa, ya, xb, yb), hw / 2 + 2))
 
-            label = t.get("label") or gamma_energy_text(a, b)
+            if hang:
+                # '?' just beyond the arrow head (unknown final state) or tail (unknown initial)
+                fy = yb if hang == "to" else ya
+                up = (fy > (ya if hang == "to" else yb))      # is the free end above the other?
+                dx, dy = offs(t, "free")
+                ft = t.get("free_text")
+                txt = ax.annotate("?" if ft is None else ft, (xa, fy),
+                                  xytext=(dx, (2 if up else -2) + dy), textcoords="offset points",
+                                  ha="center", va="bottom" if up else "top", fontsize=fs,
+                                  color=col, annotation_clip=False)
+                reg("trans", t["id"], "free", ("text", txt))
+
+            label = t.get("label") or ("" if hang else gamma_energy_text(a, b))
             side = t.get("label_side") or "default"
             if side == "default":
                 side = style["gamma_label_side"]
@@ -647,7 +678,8 @@ def new_level(id_, energy, column=0):
 def new_transition(id_, from_id, to_id, x=0.5):
     return {"id": id_, "from": from_id, "to": to_id, "label": "", "intensity": 10.0,
             "x": x, "x_to": None, "label_side": "default", "color": "",
-            "tentative": False, "multipolarity": "", "bwu": "", "offsets": {}}
+            "tentative": False, "multipolarity": "", "bwu": "", "free_energy": None,
+            "free_text": "?", "offsets": {}}
 
 
 def new_scheme(id_, title=""):
@@ -765,8 +797,8 @@ def normalise_doc(d):
         for t in s["transitions"]:
             nt += 1
             t["id"] = nt
-            t["from"] = remap.get(t["from"], -1)
-            t["to"] = remap.get(t["to"], -1)
+            t["from"] = 0 if t["from"] == 0 else remap.get(t["from"], -1)   # 0 = unknown end
+            t["to"] = 0 if t["to"] == 0 else remap.get(t["to"], -1)
     return {"schemes": schemes}
 
 
@@ -1040,6 +1072,8 @@ LEVEL_FIELDS = [
 TRANS_FIELDS = [
     ("from", "From level", "level"),
     ("to", "To level", "level"),
+    ("free_energy", "Unknown end at energy (keV)", "optfloat"),
+    ("free_text", "Unknown end label", "str"),
     ("label", "Label (blank = auto Eγ)", "str"),
     ("intensity", "Intensity (sets width)", "float"),
     ("multipolarity", "Multipolarity, e.g. E2", "str"),
@@ -1128,6 +1162,10 @@ Building a scheme
   • Transitions tab: pick From/To levels (within the active scheme). Eγ is computed
     from the level energies unless you type a label. Arrow width scales with
     intensity (per scheme, or across all schemes: Style ▸ Width scaling).
+  • Hanging transitions (unknown initial or final state): pick '(unknown ?)' as the
+    From or To level. The arrow then starts or stops in mid-air at 'Unknown end at
+    energy (keV)', with '?' (or your 'Unknown end label') beyond its head or tail.
+    No Eγ is shown unless you type a Label; the '?' can be dragged.
   • Transition strengths: enter a Multipolarity (E2, M1 …) and B(σλ) in W.u.
     (e.g. 4.5(3), >12 or 2.1(+5-4) for asymmetric errors). It is drawn as
     'B(E2) = 4.5(3) W.u.' on the opposite side of the arrow from Eγ, can be
@@ -1495,9 +1533,11 @@ class App:
                 a, b = self.level(t["from"]), self.level(t["to"])
                 if a and b:
                     e = t.get("label") or gamma_energy_text(a, b)
-                    fa, fb = "{:g}".format(float(a["energy"])), "{:g}".format(float(b["energy"]))
+                    fa, fb = energy_text(a), energy_text(b)
                 else:
-                    e, fa, fb = "?", "?", "?"
+                    e = t.get("label") or ""
+                    fa = energy_text(a) if a else (t.get("free_text") or "?")
+                    fb = energy_text(b) if b else (t.get("free_text") or "?")
                 tr.insert("", "end", iid=str(t["id"]), values=(e, fa, fb, "{:g}".format(float(t.get("intensity") or 0))))
             for tree, kind in ((lv, "level"), (tr, "trans")):
                 if self.selected and self.selected[0] == kind and tree.exists(str(self.selected[1])):
@@ -1515,7 +1555,7 @@ class App:
         cur = self.cur()
         pairs = [(l["id"], self.level_name(l))
                  for l in sorted(cur["levels"], key=lambda l: -float(l["energy"]))]
-        self.tr_form.set_level_choices(pairs)
+        self.tr_form.set_level_choices([(0, "(unknown ?)")] + pairs)
         kind = self.selected[0] if self.selected else None
         self.sc_form.load(cur)
         self.lv_form.load(self.selected_obj() if kind == "level" else None)
@@ -1534,6 +1574,10 @@ class App:
 
     def status(self, msg):
         self.status_var.set(msg)
+
+    def bell_status(self, msg):
+        self.root.bell()
+        self.status(msg)
 
     def update_title(self):
         name = os.path.basename(self.path) if self.path else "untitled"
@@ -1585,6 +1629,23 @@ class App:
 
     # --------------------------------------------------------------- editing
     def on_item_change(self, target, key, val):
+        if key in ("from", "to") and val == 0:    # hanging transition: one end unknown
+            other = self.level(target["to" if key == "from" else "from"])
+            if other is None:
+                self.bell_status("Only one end of a transition can be unknown.")
+                self.load_forms()
+                return
+            self.push_undo()
+            target[key] = 0
+            if target.get("free_energy") is None:
+                e = float(other["energy"]) + (150.0 if key == "from" else -150.0)
+                target["free_energy"] = max(e, 0.0) if key == "to" else e
+            self.refresh_trees()
+            self.load_forms()
+            self.redraw()
+            self.status("Unknown end placed at %g keV; change it in 'Unknown end at energy'."
+                        % target["free_energy"])
+            return
         if key == "energy":                  # keep the energy exactly as typed
             val, raw = val
             if target.get("energy") == val and energy_text(target) == raw:
@@ -1636,7 +1697,7 @@ class App:
             l["id"] = nl + i
         for i, t in enumerate(s["transitions"]):
             t["id"] = nt + i
-            t["from"], t["to"] = remap.get(t["from"], -1), remap.get(t["to"], -1)
+            t["from"], t["to"] = [0 if v == 0 else remap.get(v, -1) for v in (t["from"], t["to"])]
         self.schemes().insert(self.schemes().index(src) + 1, s)
         self.active = s["id"]
         self.selected = None
