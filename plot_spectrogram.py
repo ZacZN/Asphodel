@@ -579,6 +579,27 @@ SIM_CSS = """
   .sim-row .opt-grp input[type=text]:focus { outline: none; border-color: #f97316; }
   .sim-row .opt-grp select { background: #374151; border: 1px solid #4b5563; border-radius: 4px;
                      color: #e5e7eb; padding: 3px 4px; font-size: 13px; }
+  .sim-modal { display: none; position: fixed; inset: 0; z-index: 1000;
+               background: rgba(0,0,0,.6); align-items: center; justify-content: center; }
+  .sim-modal.open { display: flex; }
+  .sim-dialog { background: #1f2937; border: 1px solid #374151; border-radius: 8px;
+                box-shadow: 0 10px 40px rgba(0,0,0,.5); width: min(760px, calc(100vw - 32px));
+                max-height: calc(100vh - 32px); overflow-y: auto; }
+  .sim-head { display: flex; align-items: center; justify-content: space-between;
+              padding: 10px 16px; border-bottom: 1px solid #374151; }
+  .sim-head #simTitle { font-size: 13px; font-weight: 600; text-transform: uppercase;
+                        letter-spacing: .06em; color: #f97316; }
+  .sim-x { background: none; border: none; color: #9ca3af; font-size: 20px; line-height: 1;
+           cursor: pointer; padding: 0 4px; }
+  .sim-x:hover { color: #e5e7eb; }
+  .sim-body { display: flex; flex-direction: column; gap: 12px; padding: 14px 16px 16px; }
+  .sim-body .opt-grp { flex-wrap: wrap; }
+  .full-toggle { background: #1f2937; border: 1px solid #374151; border-radius: 6px;
+                 color: #e5e7eb; font-size: 12px; font-weight: 600; text-transform: uppercase;
+                 letter-spacing: .06em; padding: 6px 12px; cursor: pointer; width: 100%;
+                 text-align: left; margin-bottom: 4px; }
+  .full-toggle:hover { border-color: #f97316; }
+  .full-toggle #fullArrow { color: #f97316; display: inline-block; width: 12px; }
   .opt-grp span#simStatus { font-size: 11px; margin-left: 4px; text-transform: none;
                             letter-spacing: normal; font-weight: 400; }
 """
@@ -598,8 +619,13 @@ def sim_panel_html():
     units = "".join(f'<option value="{u}"{" selected" if u == p.get("min_half_life_unit") else ""}>{u}</option>'
                     for u in HL_CUT_UNITS)
     return f"""
-  <div class="opts-row sim-row">
-    <div class="opt-grp"><span style="color:#e5e7eb;">Simulated ions</span></div>
+  <div id="simModal" class="sim-modal" onclick="if(event.target===this) simClose()">
+   <div class="sim-dialog sim-row" role="dialog" aria-modal="true" aria-labelledby="simTitle">
+    <div class="sim-head">
+      <span id="simTitle">Simulated ions</span>
+      <button class="sim-x" onclick="simClose()" title="Close (Esc)">×</button>
+    </div>
+    <div class="sim-body">
     <div class="opt-grp">
       <input type="checkbox" id="sim_show" {chk("show")} onchange="runSim()">
       <label for="sim_show" title="Draw simulated ion frequencies on the 2-D plot">show</label>
@@ -644,6 +670,8 @@ def sim_panel_html():
       <button onclick="runSim()">Simulate</button>
       <span id="simStatus"></span>
     </div>
+    </div>
+   </div>
   </div>
 """
 
@@ -745,11 +773,40 @@ async function _fetchFull() {
   } catch (e) { console.log('[full1d] ' + e.message); }
 }
 
+// ── Popout dialog for the simulated-ion settings ────────────────────────────
+var _simLastFocus = null;
+function simOpen() {
+  _simLastFocus = document.activeElement;
+  document.getElementById('simModal').classList.add('open');
+  document.getElementById('sim_ref_name').focus();
+}
+function simClose() {
+  document.getElementById('simModal').classList.remove('open');
+  if (_simLastFocus) _simLastFocus.focus();
+}
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape' && document.getElementById('simModal').classList.contains('open')) simClose();
+});
+
+// ── Collapsible whole-file 1-D plot (open/closed state saved in prefs) ──────
+function _fullOpen() { return document.getElementById('fullPlot').style.display !== 'none'; }
+function _setFull(open) {
+  document.getElementById('fullPlot').style.display = open ? '' : 'none';
+  document.getElementById('fullArrow').textContent = open ? '▾' : '▸';
+  document.getElementById('fullToggle').setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+function toggleFull() {
+  var open = !_fullOpen();
+  _setFull(open);
+  savePref('fullOpen', open ? '1' : '0');
+  if (open) _renderFull();
+}
+
 // Built the same way as scanner.py's spectrum figure so it stays responsive:
 // the spectrum is one WebGL trace with hover switched off, and each line group
 // is ONE WebGL trace (20 points per line, so tooltips work along it).
 function _renderFull() {
-  if (!FULL) return;
+  if (!FULL || !_fullOpen()) return;   // drawn when expanded (needs real width)
   var useDb = document.getElementById('dbCheck').checked;
   if (useDb && !FULL.ydb) {
     FULL.ydb = FULL.y.map(function(v) { return v > 0 ? 10 * Math.log10(v) : NaN; });
@@ -905,6 +962,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
         title = _vt
     _chk_show1d = "" if _view.get("show1d") is False else "checked"
     _sim_panel = sim_panel_html()
+    _full_open_js = "false" if _prefs.get("fullOpen") == "0" else "true"
 
     z_label = "Power (dB)" if log_scale else "Power (linear)"
 
@@ -1144,6 +1202,9 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
       <button onclick="updateSurface()">Apply</button>
       <span id="discardMsg"></span>
     </div>
+    <div class="opt-grp">
+      <button onclick="simOpen()" title="Settings for the simulated ion lines">Simulated ions…</button>
+    </div>
   </div>
   <div class="opts-row decay-row">
     <div class="opt-grp"><span style="color:#e5e7eb;">Decay fit</span></div>
@@ -1211,7 +1272,12 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
   <div id="heatDiv"><div id="heatPlot"></div></div>
   <div id="surfDiv">{plot_div}</div>
 </div>
-<div id="fullDiv" style="margin-top:8px;"><div id="fullPlot"></div></div>
+<div id="fullDiv" style="margin-top:8px;">
+  <button id="fullToggle" class="full-toggle" onclick="toggleFull()" aria-expanded="true">
+    <span id="fullArrow">▾</span> Whole-file spectrum
+  </button>
+  <div id="fullPlot"></div>
+</div>
 <script>
 {loader_js}
 {SIM_JS}
@@ -1782,6 +1848,12 @@ var _lastT1d = [null, null];
 _syncDecayControls();
 _initHeatmap();
 _fetchSpec1d();
+_setFull({_full_open_js});
+// the page is built once per load; re-read the saved state so a browser refresh keeps it
+fetch('/get-pref?key=fullOpen').then(function(r) {{ return r.json(); }}).then(function(d) {{
+  var open = d.value !== '0';
+  if (open !== _fullOpen()) {{ _setFull(open); if (open) _renderFull(); }}
+}}).catch(function() {{}});
 _fetchFull();
 // Align colorscale max across both plots using full data range
 (function() {{
@@ -1880,6 +1952,12 @@ def serve(html, state):
             q   = parse_qs(url.query)
             if url.path in ("/", "/spectrogram.html"):
                 self._send(200, STATE["html"], "text/html; charset=utf-8")
+
+            elif url.path == "/get-pref":
+                key = q.get("key", [""])[0]
+                if key not in ("fullOpen",):
+                    return self._send(400, {"error": f"unknown pref key: {key!r}"})
+                self._send(200, {"value": read_prefs().get(key)})
 
             elif url.path == "/spectrum-file":
                 # whole uncropped file, summed over all time frames
@@ -2038,7 +2116,7 @@ def serve(html, state):
                     pref_val = body.get("value", "")
                     if pref_key not in ("gamma", "errA", "errB", "hlIso", "hlGs",
                                         "skipStart", "skipEnd", "bateman", "unweighted",
-                                        "parentMin", "parentMax", "bars3d"):
+                                        "parentMin", "parentMax", "bars3d", "fullOpen"):
                         raise ValueError(f"unknown pref key: {pref_key!r}")
                     with _PREFS_LOCK:
                         prefs = read_prefs()
