@@ -139,7 +139,7 @@ def saved_view(file_path, fmin_req, fmax_req):
 # Simulated ion lines (physics ported from Theia/scanner.py)
 # ---------------------------------------------------------------------------
 # The reference is the strongest bin of the summed power (all time frames, the
-# whole loaded frequency range). It is taken to be `ref_name` at
+# whole uncropped file). It is taken to be `ref_name` at
 # `ref_harmonic`; every other ion in the selection is placed relative to it.
 
 # Defaults = the Theia scanner_config.json values at the time this was written.
@@ -385,8 +385,8 @@ def sim_prefs():
 
 def compute_sim_lines(freq, sum_all, raw):
     """Reference from the strongest bin of `sum_all` (power summed over all
-    frames, aligned with `freq`), then all simulated lines inside the loaded
-    frequency range. Returns a JSON-able dict."""
+    frames, aligned with `freq` - the whole uncropped file), then all
+    simulated lines inside that frequency range. Returns a JSON-able dict."""
     s = parse_sim_settings(raw)
     i_ref = int(np.nanargmax(sum_all))
     ref_freq = float(freq[i_ref])
@@ -606,7 +606,7 @@ def sim_panel_html():
       <input type="checkbox" id="sim_show_excluded" {chk("show_excluded")} onchange="runSim()">
       <label for="sim_show_excluded" title="Also draw ions excluded by the half-life cut (dotted)">excluded</label>
     </div>
-    <div class="opt-grp" title="The strongest bin of the power summed over ALL time frames (whole loaded frequency range) is taken to be this ion at this harmonic">
+    <div class="opt-grp" title="The strongest bin of the power summed over ALL time frames (whole uncropped file) is taken to be this ion at this harmonic">
       <span>Ref</span>
       {txt("ref_name", 90, "Reference ion, e.g. 208Pb80+")}
       <label>h</label>
@@ -695,7 +695,7 @@ async function runSim() {
     _renderFull();
     _simStatus('✓ ref ' + d.ref_name + ' h' + d.ref_harmonic + ' = ' +
                d.ref_freq.toLocaleString('en-GB', {maximumFractionDigits: 1}) + ' Hz · ' +
-               d.lines.length + ' lines in file range', 'ok');
+               d.lines.length + ' lines across the whole file', 'ok');
   } catch (e) {
     if (seq === _simSeq) _simStatus('✗ ' + e.message, 'err');
   }
@@ -734,7 +734,7 @@ var FULL = null;   // {y, n} summed power, aligned with F_1D
 
 async function _fetchFull() {
   try {
-    var r = await fetch('/spectrum1d');          // no tmin/tmax → all frames
+    var r = await fetch('/spectrum-file');       // whole uncropped file, all frames
     var d = await r.json();
     if (!r.ok) throw new Error(d.error || 'error');
     FULL = d;
@@ -781,7 +781,7 @@ function _renderFull() {
     {name: 'Reference',          line: {color: 'rgba(255,255,255,0.95)', width: 1.5}}
   ];
   var traces = [{
-    type: 'scattergl', mode: 'lines', x: F_1D, y: y, name: pLabel, showlegend: false,
+    type: 'scattergl', mode: 'lines', x: FULL.f, y: y, name: pLabel, showlegend: false,
     line: {color: 'rgba(56,189,248,0.95)', width: 1},
     hovertemplate: 'Freq: %{x:,.1f} Hz<br>' + pLabel + ': %{y:.4g}<extra></extra>'
   }];
@@ -795,10 +795,12 @@ function _renderFull() {
                marker: {size: 8, opacity: 0}});
   Plotly.react('fullPlot', traces, {
     template: {},
-    title: {text: 'Whole spectrum: all ' + FULL.n + ' frames, full loaded range',
+    title: {text: 'Whole file: all ' + FULL.n + ' frames, ' +
+                  Math.round(FULL.f[0]).toLocaleString('en-GB') + ' – ' +
+                  Math.round(FULL.f[FULL.f.length - 1]).toLocaleString('en-GB') + ' Hz',
             x: 0.5, xanchor: 'center', font: {size: 13, color: '#e5e7eb'}},
     xaxis: {title: {text: 'Frequency (Hz)'}, tickformat: ',d',
-            range: [F_1D[0], F_1D[F_1D.length - 1]],
+            range: [FULL.f[0], FULL.f[FULL.f.length - 1]],
             color: '#9ca3af', gridcolor: '#374151', zerolinecolor: '#374151'},
     yaxis: {title: {text: pLabel}, range: [lo, hi],
             color: '#9ca3af', gridcolor: '#374151', zerolinecolor: '#374151'},
@@ -1799,6 +1801,11 @@ def load_dataset(path, fmin=None, fmax=None, linear=False, n_avg=1):
     html, state = build_page(freq_s, time, power_s, make_title(path, lo, hi, linear),
                              log_scale=not linear, n_avg=max(1, int(n_avg)),
                              file_path=path, fmin_req=fmin, fmax_req=fmax)
+    # Whole (uncropped) file, summed over all frames: used for the simulated-
+    # line reference and the whole-file 1-D plot
+    state["file_freq"] = np.asarray(freq, dtype=float)
+    state["file_sum"]  = np.asarray(power, dtype=float).sum(axis=0)
+    state["file_n"]    = int(power.shape[0])
     _PREFS_LOCK.acquire()
     prefs = read_prefs()
     prefs["lastDir"] = os.path.dirname(path)
@@ -1854,6 +1861,14 @@ def serve(html, state):
             q   = parse_qs(url.query)
             if url.path in ("/", "/spectrogram.html"):
                 self._send(200, STATE["html"], "text/html; charset=utf-8")
+
+            elif url.path == "/spectrum-file":
+                # whole uncropped file, summed over all time frames
+                if STATE.get("file_sum") is None:
+                    return self._send(400, {"error": "no file loaded"})
+                self._send(200, {"f": STATE["file_freq"].tolist(),
+                                 "y": STATE["file_sum"].tolist(),
+                                 "n": STATE["file_n"]})
 
             elif url.path == "/spectrum1d":
                 if STATE.get("t_full") is None:
@@ -1967,9 +1982,10 @@ def serve(html, state):
                         write_prefs(prefs)
                     if body.get("save_only"):
                         return self._send(200, {"status": "saved"})
-                    if STATE.get("sum_all") is None:
+                    if STATE.get("file_sum") is None:
                         raise ValueError("no file loaded")
-                    self._send(200, compute_sim_lines(STATE["f_full"], STATE["sum_all"], body))
+                    # reference + lines over the whole uncropped file
+                    self._send(200, compute_sim_lines(STATE["file_freq"], STATE["file_sum"], body))
                 except ImportError as exc:
                     self._send(400, {"error": f"{exc} (needs pandas, and nubase_reader.py + "
                                               f"nubase_4.mas20 next to this script)"})
