@@ -135,6 +135,287 @@ def saved_view(file_path, fmin_req, fmax_req):
     return {}
 
 
+# ---------------------------------------------------------------------------
+# Simulated ion lines (physics ported from Theia/scanner.py)
+# ---------------------------------------------------------------------------
+# The reference is the strongest bin of the summed power (all time frames, the
+# whole loaded frequency range). It is taken to be `ref_name` at
+# `ref_harmonic`; every other ion in the selection is placed relative to it.
+
+# Defaults = the Theia scanner_config.json values at the time this was written.
+SIM_DEFAULTS = {
+    "show":               True,
+    "ref_name":           "208Pb80+",
+    "ref_harmonic":       214,
+    "z_lims":             "60, 83",
+    "n_lims":             "100, 127",
+    "el1":                "156, 66",
+    "el2":                "200, 82",
+    "mq_width":           0.2,
+    "gamma_t":            1.399,
+    "harmonics":          "212, 213, 214",
+    "correction_enabled": True,
+    "corr_a":             2.8498393862845746e-07,
+    "corr_b":             -1.0910358215490124,
+    "corr_c":             1044186.4522976408,
+    "min_half_life":      1,
+    "min_half_life_unit": "ms",
+    "exclude_unknown_hl": False,
+    "show_excluded":      True,
+}
+
+# NUBASE half-life units -> seconds
+HL_UNITS = {"ys": 1e-24, "zs": 1e-21, "as": 1e-18, "fs": 1e-15, "ps": 1e-12, "ns": 1e-9,
+            "us": 1e-6, "ms": 1e-3, "s": 1.0, "m": 60.0, "h": 3600.0, "d": 86400.0,
+            "y": 3.15576e7, "ky": 3.15576e10, "My": 3.15576e13, "Gy": 3.15576e16,
+            "Ty": 3.15576e19, "Py": 3.15576e22, "Ey": 3.15576e25, "Zy": 3.15576e28,
+            "Yy": 3.15576e31}
+HL_CUT_UNITS = ["ns", "us", "ms", "s", "m", "h", "d", "y"]
+
+
+def delta_f(ref_frequency, ref_mq, delta_mq, gamma_t):
+    return (-1 / (gamma_t**2)) * (delta_mq / ref_mq) * ref_frequency
+
+
+def apply_correction(freq, a, b, c):
+    """Return freq + a*freq**2 + b*freq + c (second-order polynomial correction)."""
+    return freq + a * freq**2 + b * freq + c
+
+
+def ion_base_name(ion_name):
+    """'204Hg79+' -> '204Hg',  'm186Hf72+' -> 'm186Hf'"""
+    import re
+    return re.sub(r"\d+\+$", "", ion_name)
+
+
+def build_hover_label(ion_name, row):
+    """Hover label for a simulated line (copied from scanner.py/viewer.py)."""
+    import pandas as pd
+
+    def _val(key):
+        v = row.get(key, None)
+        if v is None:
+            return ""
+        try:
+            if pd.isna(v):
+                return ""
+        except (TypeError, ValueError):
+            pass
+        return str(v).strip()
+
+    def _fmt_float(v):
+        try:
+            if v == int(v):
+                return str(int(v))
+            return f"{v:.3f}".rstrip("0").rstrip(".")
+        except (ValueError, OverflowError):
+            return str(v)
+
+    lines = [ion_name]
+    me_sys     = bool(row.get("m.e. sys?", False))
+    me_raw     = row.get("m.e.", None)
+    me_unc_raw = row.get("m.e._unc", None)
+    if me_raw is not None and not pd.isna(me_raw):
+        prefix  = "#" if me_sys else ""
+        me_line = f"m.e. = {_fmt_float(me_raw)}{prefix}"
+        if me_unc_raw is not None and not pd.isna(me_unc_raw):
+            me_line += f" ± {_fmt_float(me_unc_raw)}{prefix}"
+        lines.append(me_line + " keV")
+    t_val, t_unc, t_unit = _val("T"), _val("T_unc"), _val("T_unit")
+    if t_val:
+        t_line = f"T = {t_val}"
+        if t_unc:
+            t_line += f" ± {t_unc}"
+        if t_unit:
+            t_line += f" {t_unit}"
+        lines.append(t_line)
+    if ion_name and ion_name[0].isalpha():          # isomer
+        ex_val, ex_unc = _val("E_x"), _val("E_x_unc")
+        if ex_val:
+            lines.append(f"E_x = {ex_val}" + (f" ± {ex_unc}" if ex_unc else "") + " keV")
+    br = _val("BR")
+    if br:
+        lines.append(f"Decay: {br}")
+    return "<br>".join(lines)
+
+
+def half_life_seconds(t, unit):
+    """NUBASE half-life (T, T_unit) -> seconds. 'stbl' -> inf, unknown -> NaN."""
+    import re
+    t = "" if t is None or (isinstance(t, float) and np.isnan(t)) else str(t).strip()
+    if t.startswith("stbl"):
+        return np.inf
+    num = re.sub(r"[#<>~=\s]", "", t)
+    unit = "" if unit is None or (isinstance(unit, float) and np.isnan(unit)) else str(unit).strip()
+    try:
+        return float(num) * HL_UNITS[unit]
+    except (ValueError, KeyError):
+        return np.nan
+
+
+def hl_allowed(ion_db, s):
+    """Bool per ion: False = excluded by the half-life cut (still drawn, dotted)."""
+    thr = float(s.get("min_half_life") or 0)
+    if thr <= 0 or "half_life_s" not in ion_db:
+        return np.ones(len(ion_db), dtype=bool)
+    thr *= HL_UNITS.get(s.get("min_half_life_unit") or "s", 1.0)
+    hl = ion_db["half_life_s"].to_numpy(dtype=float)
+    known = ~np.isnan(hl)
+    ok = np.zeros(len(hl), dtype=bool)
+    ok[known] = hl[known] >= thr
+    if not s.get("exclude_unknown_hl"):
+        ok[~known] = True
+    return ok
+
+
+_ION_DB_CACHE = {}
+
+
+def build_ion_database(z_lims, n_lims, el1, el2, ref_name, mq_width):
+    """Bare, H-, He- and Li-like ions inside the selection, restricted to the
+    m/q window around the reference ion (as in scanner.py). Cached."""
+    key = (z_lims, n_lims, el1, el2, ref_name, mq_width)
+    if key in _ION_DB_CACHE:
+        return _ION_DB_CACHE[key]
+    import pandas as pd
+    from nubase_reader import df_nubase, rect_restrict, diag_restrict, index_by_name
+    frames = []
+    for electrons in (0, 1, 2, 3):
+        d = df_nubase(electrons=electrons)
+        d = rect_restrict(df=d, z_lims=list(z_lims), n_lims=list(n_lims))
+        d = diag_restrict(df=d, el1=list(el1), el2=list(el2))
+        d = index_by_name(df=d, electrons=electrons)
+        d["electrons"] = electrons
+        d["charge"] = d["ZZZi"] - electrons
+        frames.append(d)
+    db = pd.concat(frames).sort_values("m/q", ascending=False)
+    if ref_name not in db.index:
+        raise ValueError(f"reference ion '{ref_name}' is not in the ion selection "
+                         f"(check Z/N limits, el1/el2)")
+    mq_ref = db.loc[ref_name, "m/q"]
+    if isinstance(mq_ref, pd.Series):
+        mq_ref = mq_ref.iloc[0]
+    db = db[(db["m/q"] >= mq_ref - mq_width) & (db["m/q"] <= mq_ref + mq_width)].copy()
+    db["ion"] = db.index.astype(str)
+    db["ion_base"] = db["ion"].map(ion_base_name)
+    db["half_life_s"] = [half_life_seconds(t, u) for t, u in zip(db["T"], db["T_unit"])]
+    db["hover"] = [build_hover_label(name, row) for name, (_, row) in zip(db["ion"], db.iterrows())]
+    out = (db.reset_index(drop=True), float(mq_ref))
+    if len(_ION_DB_CACHE) > 8:
+        _ION_DB_CACHE.clear()
+    _ION_DB_CACHE[key] = out
+    return out
+
+
+def simulate_frequencies(ion_db, ref_mq, ref_obs_freq, ref_harmonic, gamma_t, harmonics,
+                         correction_enabled=False, corr_a=0.0, corr_b=0.0, corr_c=0.0):
+    """One row per (ion, harmonic): ion_row, harmonic, f_sim (as scanner.py)."""
+    import pandas as pd
+    ref_rev = ref_obs_freq / ref_harmonic
+    mq = ion_db["m/q"].to_numpy(dtype=float)
+    f_true = ref_rev + delta_f(ref_rev, ref_mq, mq - ref_mq, gamma_t)
+    if correction_enabled:
+        f_true = apply_correction(f_true, corr_a, corr_b, corr_c)
+    rows = np.arange(len(ion_db))
+    out = [pd.DataFrame({"ion_row": rows, "harmonic": int(h), "f_sim": f_true * h})
+           for h in harmonics]
+    return pd.concat(out, ignore_index=True)
+
+
+def _ints(v, n, what):
+    import re
+    try:
+        vals = [int(float(x)) for x in re.split(r"[,\s]+", str(v).strip()) if x]
+    except ValueError:
+        raise ValueError(f"{what}: expected integers, got {v!r}")
+    if n is not None and len(vals) != n:
+        raise ValueError(f"{what}: expected {n} integers, got {v!r}")
+    return vals
+
+
+def _num(v, what, default=None):
+    if v is None or str(v).strip() == "":
+        if default is None:
+            raise ValueError(f"{what} is empty")
+        return default
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        raise ValueError(f"{what}: not a number ({v!r})")
+
+
+def parse_sim_settings(raw):
+    """Raw panel values -> typed settings. Raises ValueError with a readable message."""
+    s = {}
+    s["ref_name"] = str(raw.get("ref_name") or "").strip()
+    if not s["ref_name"]:
+        raise ValueError("reference ion name is empty")
+    s["ref_harmonic"] = int(_num(raw.get("ref_harmonic"), "reference harmonic"))
+    if s["ref_harmonic"] <= 0:
+        raise ValueError("reference harmonic must be > 0")
+    s["z_lims"] = _ints(raw.get("z_lims"), 2, "Z limits")
+    s["n_lims"] = _ints(raw.get("n_lims"), 2, "N limits")
+    s["el1"] = _ints(raw.get("el1"), 2, "el1")
+    s["el2"] = _ints(raw.get("el2"), 2, "el2")
+    s["mq_width"] = _num(raw.get("mq_width"), "m/q window")
+    s["gamma_t"] = _num(raw.get("gamma_t"), "γt")
+    s["harmonics"] = _ints(raw.get("harmonics"), None, "harmonics")
+    if not s["harmonics"]:
+        raise ValueError("harmonics list is empty")
+    s["correction_enabled"] = bool(raw.get("correction_enabled"))
+    s["corr_a"] = _num(raw.get("corr_a"), "a", 0.0)
+    s["corr_b"] = _num(raw.get("corr_b"), "b", 0.0)
+    s["corr_c"] = _num(raw.get("corr_c"), "c", 0.0)
+    s["min_half_life"] = _num(raw.get("min_half_life"), "min half-life", 0.0)
+    s["min_half_life_unit"] = raw.get("min_half_life_unit") or "ms"
+    if s["min_half_life_unit"] not in HL_UNITS:
+        raise ValueError(f"half-life unit '{s['min_half_life_unit']}' not recognised")
+    s["exclude_unknown_hl"] = bool(raw.get("exclude_unknown_hl"))
+    return s
+
+
+def sim_prefs():
+    """Saved panel values (defaults filled in)."""
+    saved = read_prefs().get("sim")
+    out = dict(SIM_DEFAULTS)
+    if isinstance(saved, dict):
+        out.update({k: v for k, v in saved.items() if k in SIM_DEFAULTS})
+    return out
+
+
+def compute_sim_lines(freq, sum_all, raw):
+    """Reference from the strongest bin of `sum_all` (power summed over all
+    frames, aligned with `freq`), then all simulated lines inside the loaded
+    frequency range. Returns a JSON-able dict."""
+    s = parse_sim_settings(raw)
+    i_ref = int(np.nanargmax(sum_all))
+    ref_freq = float(freq[i_ref])
+    ion_db, ref_mq = build_ion_database(tuple(s["z_lims"]), tuple(s["n_lims"]),
+                                        tuple(s["el1"]), tuple(s["el2"]),
+                                        s["ref_name"], float(s["mq_width"]))
+    allowed = hl_allowed(ion_db, s)
+    sims = simulate_frequencies(ion_db, ref_mq, ref_freq, s["ref_harmonic"], s["gamma_t"],
+                                s["harmonics"], s["correction_enabled"],
+                                s["corr_a"], s["corr_b"], s["corr_c"])
+    lo, hi = float(np.min(freq)), float(np.max(freq))
+    sims = sims[(sims["f_sim"] >= lo) & (sims["f_sim"] <= hi)].reset_index(drop=True)
+    rows = sims["ion_row"].to_numpy()
+    names = ion_db["ion"].to_numpy()[rows]
+    hover = ion_db["hover"].to_numpy()[rows]
+    lines = []
+    for name, h, f, hv, ok in zip(names, sims["harmonic"], sims["f_sim"], hover, allowed[rows]):
+        lines.append({
+            "f": float(f),
+            "ion": str(name),
+            "h": int(h),
+            "excluded": not bool(ok),
+            "is_ref": str(name) == s["ref_name"] and int(h) == s["ref_harmonic"],
+            "label": f"{hv}<br>Harmonic: {int(h)}<br>f_sim = {float(f):,.1f} Hz",
+        })
+    return {"ref_freq": ref_freq, "ref_name": s["ref_name"], "ref_harmonic": s["ref_harmonic"],
+            "n_ions": int(len(ion_db)), "lines": lines}
+
+
 def make_title(path, fmin, fmax, linear=False):
     return (f"{os.path.basename(path)}   "
             f"[{fmin:,.0f} – {fmax:,.0f} Hz]   "
@@ -291,6 +572,164 @@ async function ldLoad() {
 """
 
 
+SIM_CSS = """
+  .sim-row .opt-grp input[type=text] { width: 80px; background: #374151;
+                     border: 1px solid #4b5563; border-radius: 4px; color: #e5e7eb;
+                     padding: 3px 6px; font-size: 13px; }
+  .sim-row .opt-grp input[type=text]:focus { outline: none; border-color: #f97316; }
+  .sim-row .opt-grp select { background: #374151; border: 1px solid #4b5563; border-radius: 4px;
+                     color: #e5e7eb; padding: 3px 4px; font-size: 13px; }
+  .opt-grp span#simStatus { font-size: 11px; margin-left: 4px; text-transform: none;
+                            letter-spacing: normal; font-weight: 400; }
+"""
+
+
+def sim_panel_html():
+    """HTML for the 'Simulated ions' settings row, pre-filled from prefs."""
+    p = sim_prefs()
+    esc = lambda v: str(v).replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
+    chk = lambda k: "checked" if p.get(k) else ""
+
+    def txt(key, width, tip, placeholder=""):
+        return (f'<input type="text" id="sim_{key}" style="width:{width}px;" '
+                f'value="{esc(p.get(key, ""))}" placeholder="{placeholder}" title="{esc(tip)}" '
+                f'onkeydown="if(event.key===\'Enter\') runSim()">')
+
+    units = "".join(f'<option value="{u}"{" selected" if u == p.get("min_half_life_unit") else ""}>{u}</option>'
+                    for u in HL_CUT_UNITS)
+    return f"""
+  <div class="opts-row sim-row">
+    <div class="opt-grp"><span style="color:#e5e7eb;">Simulated ions</span></div>
+    <div class="opt-grp">
+      <input type="checkbox" id="sim_show" {chk("show")} onchange="runSim()">
+      <label for="sim_show" title="Draw simulated ion frequencies on the 2-D plot">show</label>
+      <input type="checkbox" id="sim_show_excluded" {chk("show_excluded")} onchange="runSim()">
+      <label for="sim_show_excluded" title="Also draw ions excluded by the half-life cut (dotted)">excluded</label>
+    </div>
+    <div class="opt-grp" title="The strongest bin of the power summed over ALL time frames (whole loaded frequency range) is taken to be this ion at this harmonic">
+      <span>Ref</span>
+      {txt("ref_name", 90, "Reference ion, e.g. 208Pb80+")}
+      <label>h</label>
+      {txt("ref_harmonic", 44, "Harmonic of the reference peak")}
+    </div>
+    <div class="opt-grp">
+      <span>Z</span>{txt("z_lims", 64, "Z min, max")}
+      <span>N</span>{txt("n_lims", 64, "N min, max")}
+    </div>
+    <div class="opt-grp" title="Diagonal cuts (as in scanner.py): two (A, Z) points defining the selection band">
+      <span style="text-transform:none;">el1</span>{txt("el1", 64, "el1")}
+      <span style="text-transform:none;">el2</span>{txt("el2", 64, "el2")}
+    </div>
+    <div class="opt-grp">
+      <span style="text-transform:none;">m/q ±</span>{txt("mq_width", 48, "m/q window around the reference ion")}
+      <span style="text-transform:none;">γt</span>{txt("gamma_t", 54, "Transition gamma γt")}
+    </div>
+    <div class="opt-grp">
+      <span>Harmonics</span>{txt("harmonics", 96, "Harmonics to simulate, comma-separated")}
+    </div>
+    <div class="opt-grp" title="Second-order correction applied to the revolution frequency: f + a·f² + b·f + c">
+      <input type="checkbox" id="sim_correction_enabled" {chk("correction_enabled")}>
+      <label for="sim_correction_enabled">correction</label>
+      <span>a</span>{txt("corr_a", 150, "a")}
+      <span>b</span>{txt("corr_b", 150, "b")}
+      <span>c</span>{txt("corr_c", 150, "c")}
+    </div>
+    <div class="opt-grp" title="Ions with a half-life below this are drawn dotted (as 'excluded'). 0 = off">
+      <span>T½ ≥</span>{txt("min_half_life", 44, "Minimum half-life (0 = off)")}
+      <select id="sim_min_half_life_unit">{units}</select>
+      <input type="checkbox" id="sim_exclude_unknown_hl" {chk("exclude_unknown_hl")}>
+      <label for="sim_exclude_unknown_hl" title="Also exclude ions with an unknown half-life">+ unknown</label>
+    </div>
+    <div class="opt-grp">
+      <button onclick="runSim()">Simulate</button>
+      <span id="simStatus"></span>
+    </div>
+  </div>
+"""
+
+
+SIM_JS = """
+// ── Simulated ion lines on the 2-D plot (physics from Theia/scanner.py) ────
+var SIM = null;              // last /simulate result
+var SIM_TRACES = [2, 3, 4];  // heatPlot traces: normal, excluded, reference
+var SIM_KEYS = ['ref_name', 'ref_harmonic', 'z_lims', 'n_lims', 'el1', 'el2', 'mq_width',
+                'gamma_t', 'harmonics', 'corr_a', 'corr_b', 'corr_c', 'min_half_life',
+                'min_half_life_unit'];
+var SIM_CHECKS = ['show', 'show_excluded', 'correction_enabled', 'exclude_unknown_hl'];
+
+function _simStatus(msg, kind) {
+  var s = document.getElementById('simStatus');
+  s.textContent = msg;
+  s.style.color = kind === 'err' ? '#f87171' : kind === 'ok' ? '#4ade80' : '#fbbf24';
+}
+
+function _simRaw() {
+  var raw = {};
+  SIM_KEYS.forEach(function(k) { raw[k] = document.getElementById('sim_' + k).value; });
+  SIM_CHECKS.forEach(function(k) { raw[k] = document.getElementById('sim_' + k).checked; });
+  return raw;
+}
+
+var _simSeq = 0;
+async function runSim() {
+  var raw = _simRaw();
+  var seq = ++_simSeq;
+  if (!raw.show) {
+    // just save the toggle and clear the lines
+    fetch('/simulate', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(Object.assign({save_only: true}, raw))});
+    _renderSim(); _simStatus('');
+    return;
+  }
+  _simStatus('Simulating…');
+  try {
+    var r = await fetch('/simulate', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(raw)
+    });
+    var d = await r.json();
+    if (seq !== _simSeq) return;
+    if (!r.ok) { SIM = null; _renderSim(); _simStatus('✗ ' + (d.error || 'error'), 'err'); return; }
+    SIM = d;
+    _renderSim();
+    _simStatus('✓ ref ' + d.ref_name + ' h' + d.ref_harmonic + ' = ' +
+               d.ref_freq.toLocaleString('en-GB', {maximumFractionDigits: 1}) + ' Hz · ' +
+               d.lines.length + ' lines in file range', 'ok');
+  } catch (e) {
+    if (seq === _simSeq) _simStatus('✗ ' + e.message, 'err');
+  }
+}
+
+// Redraw the lines that fall inside the current frequency-slider range
+function _renderSim() {
+  if (typeof _heatReady === 'undefined' || !_heatReady) return;
+  var groups = [{x: [], y: [], h: []}, {x: [], y: [], h: []}, {x: [], y: [], h: []}];
+  var show = document.getElementById('sim_show').checked;
+  if (show && SIM && T_RAW.length) {
+    var showEx = document.getElementById('sim_show_excluded').checked;
+    var fMin = +document.getElementById('fMin').value;
+    var fMax = +document.getElementById('fMax').value;
+    var t0 = T_RAW[0], t1 = T_RAW[T_RAW.length - 1], N = 20;
+    SIM.lines.forEach(function(l) {
+      if (l.f < fMin || l.f > fMax) return;
+      if (l.excluded && !l.is_ref && !showEx) return;
+      var g = groups[l.is_ref ? 2 : (l.excluded ? 1 : 0)];
+      // several points along each line so the tooltip works anywhere on it
+      for (var i = 0; i < N; i++) {
+        g.x.push(t0 + (t1 - t0) * i / (N - 1)); g.y.push(l.f); g.h.push(l.label);
+      }
+      g.x.push(null); g.y.push(null); g.h.push(null);
+    });
+  }
+  Plotly.restyle('heatPlot', {
+    x: groups.map(function(g) { return g.x; }),
+    y: groups.map(function(g) { return g.y; }),
+    hovertext: groups.map(function(g) { return g.h; })
+  }, SIM_TRACES);
+}
+"""
+
+
 def loader_parts(file_path=None, fmin=None, fmax=None):
     """Return (html, js) for the loader row, pre-filled."""
     import json
@@ -379,6 +818,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
     if isinstance(_vt, str) and _vt.strip():
         title = _vt
     _chk_show1d = "" if _view.get("show1d") is False else "checked"
+    _sim_panel = sim_panel_html()
 
     z_label = "Power (dB)" if log_scale else "Power (linear)"
 
@@ -551,6 +991,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
   #heatDiv {{ flex: 1; min-width: 0; }}
   #surfDiv {{ flex: 1; min-width: 0; }}
 {LOADER_CSS}
+{SIM_CSS}
 </style>
 </head>
 <body>
@@ -678,6 +1119,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
       <span id="decayStatus"></span>
     </div>
   </div>
+{_sim_panel}
 </div>
 <div id="plots">
   <div id="heatDiv"><div id="heatPlot"></div></div>
@@ -685,6 +1127,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
 </div>
 <script>
 {loader_js}
+{SIM_JS}
 const Z_RAW = {z_raw_json};
 const T_RAW = {t_raw_json};
 const F_PLOT = {f_raw_json};  // freq array, low-to-high (2-D heatmap y-axis)
@@ -777,6 +1220,19 @@ function _initHeatmap() {{
     line: {{ color: 'rgba(56,189,248,0.9)', width: 1.2 }},
     showlegend: false,
     hovertemplate: 'Freq: %{{y:,.0f}} Hz<br>Summed: %{{x:.4g}}<extra></extra>'
+  }}, {{
+    // Simulated ion lines (filled by _renderSim): normal, excluded, reference
+    type: 'scatter', mode: 'lines', x: [], y: [], hovertext: [], hoverinfo: 'text',
+    connectgaps: false, showlegend: false, name: 'Simulated',
+    line: {{ color: 'rgba(229,231,235,0.85)', width: 1, dash: 'dash' }}
+  }}, {{
+    type: 'scatter', mode: 'lines', x: [], y: [], hovertext: [], hoverinfo: 'text',
+    connectgaps: false, showlegend: false, name: 'Simulated (T½ cut)',
+    line: {{ color: 'rgba(156,163,175,0.6)', width: 1, dash: 'dot' }}
+  }}, {{
+    type: 'scatter', mode: 'lines', x: [], y: [], hovertext: [], hoverinfo: 'text',
+    connectgaps: false, showlegend: false, name: 'Reference',
+    line: {{ color: 'rgba(255,255,255,0.95)', width: 1.5 }}
   }}], {{
     template: {{}},
     title: {{ text: document.getElementById('plotTitle').value,
@@ -1215,6 +1671,7 @@ function update() {{
   }} else {{
     _renderSpec1d();
   }}
+  _renderSim();
   saveSession();
 }}
 var _lastT1d = [null, null];
@@ -1231,11 +1688,14 @@ _fetchSpec1d();
   _rescaleToWindow(rebinned.Z, rebinned.t);
 }})();
 _hookCamera();
+if (document.getElementById('sim_show').checked) runSim();
 </script>
 </body>
 </html>"""
 
-    state = dict(npz_path=_npz_path, t_full=_t_full, p_full=_p_full)
+    state = dict(npz_path=_npz_path, t_full=_t_full, p_full=_p_full,
+                 f_full=np.asarray(freq, dtype=float),
+                 sum_all=np.asarray(_p_full, dtype=float).sum(axis=0))
     return html, state
 
 
@@ -1415,6 +1875,24 @@ def serve(html, state):
                     self._send(200, {"status": "launched"})
                 except Exception as exc:
                     self._send(500, {"error": str(exc)})
+
+            elif self.path == "/simulate":
+                try:
+                    body = self._body()
+                    with _PREFS_LOCK:
+                        prefs = read_prefs()
+                        prefs["sim"] = {k: body[k] for k in SIM_DEFAULTS if k in body}
+                        write_prefs(prefs)
+                    if body.get("save_only"):
+                        return self._send(200, {"status": "saved"})
+                    if STATE.get("sum_all") is None:
+                        raise ValueError("no file loaded")
+                    self._send(200, compute_sim_lines(STATE["f_full"], STATE["sum_all"], body))
+                except ImportError as exc:
+                    self._send(400, {"error": f"{exc} (needs pandas, and nubase_reader.py + "
+                                              f"nubase_4.mas20 next to this script)"})
+                except Exception as exc:
+                    self._send(400, {"error": str(exc)})
 
             elif self.path == "/save-session":
                 # GUI view state for the current file (see saveSession() in the page)
