@@ -55,7 +55,7 @@ DEFAULT_STYLE = {
     "font_family": "serif", "mathtext_fontset": "stix", "usetex": False,
     "font_size": 9.0, "gamma_font_size": 8.5,
     # schemes
-    "scheme_gap": 1.0, "scheme_title_pos": "below", "scheme_title_size": 10.0,
+    "scheme_gap": 1.0, "auto_scheme_gap": True, "scheme_clearance": 6.0, "scheme_title_pos": "below", "scheme_title_size": 10.0,
     # levels
     "column_width": 1.0, "column_gap": 0.8, "level_lw": 1.0, "level_color": "black",
     "energy_italic": True,
@@ -265,15 +265,19 @@ def scheme_ncol(scheme):
     return max([int(l.get("column", 0)) for l in scheme.get("levels", [])] + [0]) + 1
 
 
-def scheme_layout(doc, style):
-    """[(scheme, x_left, width), ...] for the schemes placed left to right."""
+def scheme_layout(doc, style, extra=None):
+    """[(scheme, x_left, width), ...] for the schemes placed left to right.
+
+    extra[i] widens the gap after scheme i (set automatically to stop labels of
+    neighbouring schemes overlapping)."""
     cw, cg = float(style["column_width"]), float(style["column_gap"])
+    extra = extra or []
     out, x = [], 0.0
-    for s in doc.get("schemes", []):
+    for i, s in enumerate(doc.get("schemes", [])):
         n = scheme_ncol(s)
         w = n * cw + (n - 1) * cg
         out.append((s, x, w))
-        x += w + float(style["scheme_gap"])
+        x += w + float(style["scheme_gap"]) + (extra[i] if i < len(extra) else 0.0)
     return out
 
 
@@ -293,7 +297,48 @@ def render(fig, doc, style, hits=None, selected=None, limits=None, highlight="#f
 
     doc: {"schemes": [{"title", "shift", "column_titles", "levels", "transitions"}, ...]}
     hits/selected/limits/highlight are only used by the interactive editor.
+    With style["auto_scheme_gap"], the gap between neighbouring schemes is widened
+    until their labels are at least style["scheme_clearance"] points apart.
     """
+    n = len(doc.get("schemes", []))
+    extra = [0.0] * max(n - 1, 0)
+    auto = bool(style.get("auto_scheme_gap", True)) and n > 1
+    cached = getattr(fig, "_ls_extra", None)
+    if limits is not None and cached is not None and len(cached) == len(extra):
+        extra, auto = list(cached), False          # keep the layout fixed while dragging
+    for _ in range(8):
+        if hits is not None:
+            del hits[:]
+        groups = {}
+        ax = _render_once(fig, doc, style, hits, selected, limits, highlight, extra, groups)
+        if not auto:
+            break
+        try:
+            renderer = fig.canvas.get_renderer()
+        except AttributeError:
+            renderer = fig._get_renderer()
+        xl = ax.get_xlim()
+        px_per_x = ax.bbox.width / max(xl[1] - xl[0], 1e-9)
+        clear = float(style.get("scheme_clearance", 6.0)) * fig.dpi / 72.0
+        boxes = {i: [a.get_window_extent(renderer) for a in arts] for i, arts in groups.items()}
+        changed = False
+        for i in range(n - 1):
+            need = 0.0
+            for ba in boxes.get(i, []):
+                for bb in boxes.get(i + 1, []):
+                    if ba.y0 < bb.y1 and bb.y0 < ba.y1:          # at the same height
+                        need = max(need, ba.x1 + clear - bb.x0)
+            if need > 0.5:
+                extra[i] += need / px_per_x * 1.02
+                changed = True
+        if not changed:
+            break
+    fig._ls_extra = extra
+    return ax
+
+
+def _render_once(fig, doc, style, hits, selected, limits, highlight, extra, groups):
+    """One drawing pass of render(); groups[i] collects scheme i's artists."""
     fig.clf()
     fig.patch.set_facecolor("white")
     ml, mr = float(style["margin_left"]), float(style["margin_right"])
@@ -301,7 +346,7 @@ def render(fig, doc, style, hits=None, selected=None, limits=None, highlight="#f
     ax = fig.add_axes([ml, mb, max(0.05, 1 - ml - mr), max(0.05, 1 - mb - mt)])
     ax.set_axis_off()
 
-    layout = scheme_layout(doc, style)
+    layout = scheme_layout(doc, style, extra)
     fs = float(style["font_size"])
     gfs = float(style["gamma_font_size"])
     cw = float(style["column_width"])
@@ -349,7 +394,8 @@ def render(fig, doc, style, hits=None, selected=None, limits=None, highlight="#f
     stub, diag = float(style["connector_stub"]), float(style["connector_diag"])
     lowest_label = None                  # lowest fanned label (points), to keep titles clear
 
-    for s, base, _w in layout:
+    for si, (s, base, _w) in enumerate(layout):
+        n0 = (len(ax.texts), len(ax.lines), len(ax.patches))
         shift = float(s.get("shift") or 0.0)
         levels = {l["id"]: l for l in s.get("levels", [])}
 
@@ -495,6 +541,9 @@ def render(fig, doc, style, hits=None, selected=None, limits=None, highlight="#f
                                   fontsize=gfs, color=col, annotation_clip=False)
                 reg("trans", t["id"], "bwu", ("text", txt))
 
+        groups[si] = (list(ax.texts)[n0[0]:] + list(ax.lines)[n0[1]:]
+                      + list(ax.patches)[n0[2]:])
+
     # --- titles: column titles, then scheme titles, then figure title --------
     ylo, yhi = ax.get_ylim()
     sts = float(style["scheme_title_size"])
@@ -502,7 +551,7 @@ def render(fig, doc, style, hits=None, selected=None, limits=None, highlight="#f
     if lowest_label is not None:         # fanned labels below the bottom of the axes
         below = max(0.0, ylo * pts_per_kev - (lowest_label - 0.7 * fs) + 2.0)
     any_cols = False
-    for s, base, _w in layout:
+    for si, (s, base, _w) in enumerate(layout):
         raw = (s.get("column_titles") or "").strip()
         sel = is_sel("scheme", s["id"])
         for c, txt in enumerate([p.strip() for p in raw.split("|")] if raw else []):
@@ -514,11 +563,12 @@ def render(fig, doc, style, hits=None, selected=None, limits=None, highlight="#f
                                  va="top", fontsize=fs, color=highlight if sel else "black",
                                  annotation_clip=False)
                 reg("scheme", s["id"], "col%d" % c, ("text", tt))
+                groups.setdefault(si, []).append(tt)
     if any_cols:
         below += fs * 1.6
     pos = style.get("scheme_title_pos", "below")
     any_titles = False
-    for s, base, w in layout:
+    for si, (s, base, w) in enumerate(layout):
         title = scheme_title(s)
         if not title or pos == "none":
             continue
@@ -536,6 +586,7 @@ def render(fig, doc, style, hits=None, selected=None, limits=None, highlight="#f
                              fontsize=sts, color=highlight if sel else "black",
                              annotation_clip=False)
         reg("scheme", s["id"], "title", ("text", tt))
+        groups.setdefault(si, []).append(tt)
     if any_titles and pos == "below":
         below += sts * 1.7
     if style.get("title"):
@@ -549,7 +600,7 @@ def render(fig, doc, style, hits=None, selected=None, limits=None, highlight="#f
 
 EXPORTED_FUNCTIONS = [style_rc, energy_text, gamma_energy_text, format_spin, format_lifetime,
                       spread_positions, fan_close_levels, format_bwu, element_z, scheme_title, column_x0,
-                      scheme_ncol, scheme_layout, level_y, level_xspan, render]
+                      scheme_ncol, scheme_layout, level_y, level_xspan, render, _render_once]
 
 
 # =============================================================================
@@ -989,6 +1040,8 @@ STYLE_FIELDS = [
     ("usetex", "Use LaTeX (needs TeX install)", "bool"),
     (None, "Schemes", "header"),
     ("scheme_gap", "Gap between schemes", "float"),
+    ("auto_scheme_gap", "Widen gaps to stop overlaps", "bool"),
+    ("scheme_clearance", "Min. clearance between schemes (pt)", "float"),
     ("scheme_title_pos", "Scheme titles", "choice", ["below", "above", "none"]),
     ("scheme_title_size", "Scheme title size (pt)", "float"),
     (None, "Levels", "header"),
@@ -1339,7 +1392,7 @@ class App:
         return "%d: %s" % (i, scheme_label(s) or "(untitled)")
 
     def layout(self):
-        return scheme_layout(self.doc, self.style)
+        return scheme_layout(self.doc, self.style, getattr(self.fig, "_ls_extra", None))
 
     # ------------------------------------------------------------- undo/redo
     def snapshot(self):
