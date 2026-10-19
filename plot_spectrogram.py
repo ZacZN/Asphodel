@@ -519,6 +519,10 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
   .row {{ display: flex; align-items: center; gap: 8px; margin: 4px 0; }}
   .row label {{ width: 28px; color: #9ca3af; }}
   .row input[type=range] {{ flex: 1; accent-color: #f97316; cursor: pointer; }}
+  .row button.step {{ width: 22px; height: 20px; padding: 0; background: #374151;
+                      border: 1px solid #4b5563; border-radius: 4px; color: #e5e7eb;
+                      font-size: 13px; line-height: 1; cursor: pointer; }}
+  .row button.step:hover {{ border-color: #f97316; color: #f97316; }}
   .row span {{ width: 110px; text-align: right; color: #d1d5db; font-size: 11px;
                font-variant-numeric: tabular-nums; }}
   .opts-row {{ grid-column: 1 / -1; display: flex; align-items: center;
@@ -577,12 +581,16 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
       <label>Min</label>
       <input type="range" id="tMin" min="{t_init_min}" max="{t_init_max}"
              step="{dt_init}" value="{t_sel_min}" oninput="update()">
+      <button class="step" onclick="stepTime('tMin', -1)" title="Back one time frame">−</button>
+      <button class="step" onclick="stepTime('tMin', 1)" title="Forward one time frame">+</button>
       <span id="tMinVal">{t_sel_min:.3f}</span>
     </div>
     <div class="row">
       <label>Max</label>
       <input type="range" id="tMax" min="{t_init_min}" max="{t_init_max}"
              step="{dt_init}" value="{t_sel_max}" oninput="update()">
+      <button class="step" onclick="stepTime('tMax', -1)" title="Back one time frame">−</button>
+      <button class="step" onclick="stepTime('tMax', 1)" title="Forward one time frame">+</button>
       <span id="tMaxVal">{t_sel_max:.3f}</span>
     </div>
   </div>
@@ -1119,6 +1127,19 @@ function updateSurface() {{
   // Time sliders were reset → re-sum the 1-D spectrum
   _fetchSpec1d();
   saveSession();
+}}
+
+// −/+ buttons: move a time slider by one displayed (time-averaged) frame,
+// keeping min < max.
+function stepTime(id, dir) {{
+  var s = document.getElementById(id);
+  var old = s.value;
+  if (dir > 0) s.stepUp(); else s.stepDown();
+  if (+document.getElementById('tMin').value >= +document.getElementById('tMax').value) {{
+    s.value = old;   // would cross the other slider
+    return;
+  }}
+  if (s.value !== old) update();
 }}
 
 function fmt(v, dec) {{
