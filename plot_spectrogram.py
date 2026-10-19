@@ -742,37 +742,43 @@ async function _fetchFull() {
   } catch (e) { console.log('[full1d] ' + e.message); }
 }
 
+// Built the same way as scanner.py's spectrum figure so it stays responsive:
+// the spectrum is one WebGL trace with hover switched off, and each line group
+// is ONE WebGL trace (20 points per line, so tooltips work along it).
 function _renderFull() {
   if (!FULL) return;
   var useDb = document.getElementById('dbCheck').checked;
-  var y = useDb ? FULL.y.map(function(v) { return v > 0 ? 10 * Math.log10(v) : NaN; }) : FULL.y;
-  var lo = Infinity, hi = -Infinity;
-  for (var i = 0; i < y.length; i++) {
-    var v = y[i];
-    if (!isFinite(v)) continue;
-    if (v < lo) lo = v;
-    if (v > hi) hi = v;
+  if (useDb && !FULL.ydb) {
+    FULL.ydb = FULL.y.map(function(v) { return v > 0 ? 10 * Math.log10(v) : NaN; });
   }
-  if (!isFinite(lo)) { lo = 0; hi = 1; }
-  var pad = (hi - lo) * 0.05 || 1;
-  lo -= pad; hi += pad;
+  var y = useDb ? FULL.ydb : FULL.y;
+  var key = useDb ? 'db' : 'lin';
+  if (!FULL.range || FULL.range.key !== key) {
+    var lo = Infinity, hi = -Infinity;
+    for (var i = 0; i < y.length; i++) {
+      var v = y[i];
+      if (!isFinite(v)) continue;
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+    if (!isFinite(lo)) { lo = 0; hi = 1; }
+    var pad = (hi - lo) * 0.05 || 1;
+    FULL.range = {key: key, lo: lo - pad, hi: hi + pad};
+  }
+  var y0 = FULL.range.lo, y1 = FULL.range.hi;
   var pLabel = useDb ? 'Summed power (dB)' : 'Summed power (linear)';
 
-  // vertical simulated lines over the whole loaded range (sliders ignored)
-  // lines are drawn with 2 points each (clean dashes); an invisible marker
-  // trace along each line carries the tooltips
-  var groups = [{x: [], y: []}, {x: [], y: []}, {x: [], y: []}];
-  var hov = {x: [], y: [], h: []};
-  var show = document.getElementById('sim_show').checked;
-  if (show && SIM) {
-    var showEx = document.getElementById('sim_show_excluded').checked, N = 20;
+  // vertical simulated lines over the whole file (sliders ignored)
+  var N = 20, ys = [];
+  for (var k = 0; k < N; k++) ys.push(y0 + (y1 - y0) * k / (N - 1));
+  var groups = [{x: [], y: [], h: []}, {x: [], y: [], h: []}, {x: [], y: [], h: []}];
+  if (document.getElementById('sim_show').checked && SIM) {
+    var showEx = document.getElementById('sim_show_excluded').checked;
     SIM.lines.forEach(function(l) {
       if (l.excluded && !l.is_ref && !showEx) return;
       var g = groups[l.is_ref ? 2 : (l.excluded ? 1 : 0)];
-      g.x.push(l.f, l.f, null); g.y.push(lo, hi, null);
-      for (var k = 0; k < N; k++) {
-        hov.x.push(l.f); hov.y.push(lo + (hi - lo) * k / (N - 1)); hov.h.push(l.label);
-      }
+      for (var k = 0; k < N; k++) { g.x.push(l.f); g.y.push(ys[k]); g.h.push(l.label); }
+      g.x.push(null); g.y.push(null); g.h.push(null);
     });
   }
   var styles = [
@@ -782,17 +788,13 @@ function _renderFull() {
   ];
   var traces = [{
     type: 'scattergl', mode: 'lines', x: FULL.f, y: y, name: pLabel, showlegend: false,
-    line: {color: 'rgba(56,189,248,0.95)', width: 1},
-    hovertemplate: 'Freq: %{x:,.1f} Hz<br>' + pLabel + ': %{y:.4g}<extra></extra>'
+    hoverinfo: 'skip', line: {shape: 'hvh', color: 'rgba(56,189,248,0.95)', width: 1}
   }];
   groups.forEach(function(g, i) {
-    traces.push({type: 'scatter', mode: 'lines', x: g.x, y: g.y, hoverinfo: 'skip',
-                 connectgaps: false, showlegend: false,
+    traces.push({type: 'scattergl', mode: 'lines', x: g.x, y: g.y, hovertext: g.h,
+                 hoverinfo: 'text', connectgaps: false, showlegend: false,
                  name: styles[i].name, line: styles[i].line});
   });
-  traces.push({type: 'scatter', mode: 'markers', x: hov.x, y: hov.y, hovertext: hov.h,
-               hoverinfo: 'text', showlegend: false, name: 'Simulated',
-               marker: {size: 8, opacity: 0}});
   Plotly.react('fullPlot', traces, {
     template: {},
     title: {text: 'Whole file: all ' + FULL.n + ' frames, ' +
@@ -800,13 +802,13 @@ function _renderFull() {
                   Math.round(FULL.f[FULL.f.length - 1]).toLocaleString('en-GB') + ' Hz',
             x: 0.5, xanchor: 'center', font: {size: 13, color: '#e5e7eb'}},
     xaxis: {title: {text: 'Frequency (Hz)'}, tickformat: ',d',
-            range: [FULL.f[0], FULL.f[FULL.f.length - 1]],
             color: '#9ca3af', gridcolor: '#374151', zerolinecolor: '#374151'},
-    yaxis: {title: {text: pLabel}, range: [lo, hi],
+    yaxis: {title: {text: pLabel}, range: [y0, y1],
             color: '#9ca3af', gridcolor: '#374151', zerolinecolor: '#374151'},
     paper_bgcolor: '#111827', plot_bgcolor: '#1f2937', font: {color: '#e5e7eb'},
-    hovermode: 'closest', margin: {l: 90, r: 20, t: 40, b: 50}, height: 380
-  }, {responsive: true});
+    hovermode: 'x', dragmode: 'pan', uirevision: 'full',   // as scanner.py
+    margin: {l: 90, r: 20, t: 40, b: 50}, height: 380
+  }, {responsive: true, scrollZoom: true});
 }
 """
 
