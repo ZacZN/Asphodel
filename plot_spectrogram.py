@@ -651,7 +651,8 @@ def sim_panel_html():
 SIM_JS = """
 // ── Simulated ion lines on the 2-D plot (physics from Theia/scanner.py) ────
 var SIM = null;              // last /simulate result
-var SIM_TRACES = [2, 3, 4];  // heatPlot traces: normal, excluded, reference
+var SIM_TRACES = [2, 3, 4, 5, 6, 7];  // heatPlot: outlines (2-4) then white lines (5-7)
+                                      // for normal, excluded, reference
 var SIM_KEYS = ['ref_name', 'ref_harmonic', 'z_lims', 'n_lims', 'el1', 'el2', 'mq_width',
                 'gamma_t', 'harmonics', 'corr_a', 'corr_b', 'corr_c', 'min_half_life',
                 'min_half_life_unit'];
@@ -722,10 +723,12 @@ function _renderSim() {
       g.x.push(null); g.y.push(null); g.h.push(null);
     });
   }
+  // same geometry for the dark outlines and the white lines on top
+  var both = groups.concat(groups);
   Plotly.restyle('heatPlot', {
-    x: groups.map(function(g) { return g.x; }),
-    y: groups.map(function(g) { return g.y; }),
-    hovertext: groups.map(function(g) { return g.h; })
+    x: both.map(function(g) { return g.x; }),
+    y: both.map(function(g) { return g.y; }),
+    hovertext: both.map(function(g) { return g.h; })
   }, SIM_TRACES);
 }
 
@@ -1305,18 +1308,32 @@ function _initHeatmap() {{
     showlegend: false,
     hovertemplate: 'Freq: %{{y:,.0f}} Hz<br>Summed: %{{x:.4g}}<extra></extra>'
   }}, {{
-    // Simulated ion lines (filled by _renderSim): normal, excluded, reference
+    // Simulated ion lines (filled by _renderSim). Each group is drawn twice:
+    // a wide dark outline underneath (traces 2-4) and a thin white line on
+    // top (traces 5-7), with identical px dash patterns so they line up.
+    type: 'scatter', mode: 'lines', x: [], y: [], hoverinfo: 'skip',
+    connectgaps: false, showlegend: false, name: 'Simulated outline',
+    line: {{ color: 'rgba(0,0,0,0.75)', width: 3.5, dash: '6px,4px' }}
+  }}, {{
+    type: 'scatter', mode: 'lines', x: [], y: [], hoverinfo: 'skip',
+    connectgaps: false, showlegend: false, name: 'Simulated (T½ cut) outline',
+    line: {{ color: 'rgba(0,0,0,0.6)', width: 3, dash: '2px,3px' }}
+  }}, {{
+    type: 'scatter', mode: 'lines', x: [], y: [], hoverinfo: 'skip',
+    connectgaps: false, showlegend: false, name: 'Reference outline',
+    line: {{ color: 'rgba(0,0,0,0.8)', width: 4 }}
+  }}, {{
     type: 'scatter', mode: 'lines', x: [], y: [], hovertext: [], hoverinfo: 'text',
     connectgaps: false, showlegend: false, name: 'Simulated',
-    line: {{ color: 'rgba(229,231,235,0.85)', width: 1, dash: 'dash' }}
+    line: {{ color: 'rgba(255,255,255,0.95)', width: 1.2, dash: '6px,4px' }}
   }}, {{
     type: 'scatter', mode: 'lines', x: [], y: [], hovertext: [], hoverinfo: 'text',
     connectgaps: false, showlegend: false, name: 'Simulated (T½ cut)',
-    line: {{ color: 'rgba(156,163,175,0.6)', width: 1, dash: 'dot' }}
+    line: {{ color: 'rgba(220,220,220,0.85)', width: 1, dash: '2px,3px' }}
   }}, {{
     type: 'scatter', mode: 'lines', x: [], y: [], hovertext: [], hoverinfo: 'text',
     connectgaps: false, showlegend: false, name: 'Reference',
-    line: {{ color: 'rgba(255,255,255,0.95)', width: 1.5 }}
+    line: {{ color: 'rgba(255,255,255,1)', width: 1.8 }}
   }}], {{
     template: {{}},
     title: {{ text: document.getElementById('plotTitle').value,
