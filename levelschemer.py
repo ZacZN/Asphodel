@@ -57,7 +57,7 @@ DEFAULT_STYLE = {
     "scheme_gap": 1.0, "scheme_title_pos": "below", "scheme_title_size": 10.0,
     # levels
     "column_width": 1.0, "column_gap": 0.8, "level_lw": 1.0, "level_color": "black",
-    "energy_fmt": "{:.0f}", "energy_italic": True,
+    "energy_decimals": 0, "energy_italic": True,
     "spin_side": "left", "energy_side": "right", "label_pad": 4.0,
     "auto_spin_format": True,
     "stack_close_levels": True, "label_min_sep": 11.0, "stack_width": 0.6, "stack_gap": 3.0,
@@ -90,11 +90,14 @@ def style_rc(style):
     }
 
 
-def fmt_energy(value, style):
+def fmt_energy(value, style, decimals=None):
+    """Energy label with a fixed number of decimal places (style or override)."""
+    d = style.get("energy_decimals", 0) if decimals in (None, "") else decimals
     try:
-        return style["energy_fmt"].format(value)
-    except Exception:
-        return "{:g}".format(value)
+        d = max(0, min(int(d), 6))
+    except (TypeError, ValueError):
+        d = 0
+    return "{:.{}f}".format(float(value), d)
 
 
 def format_spin(s, auto=True):
@@ -336,13 +339,16 @@ def render(fig, doc, style, hits=None, selected=None, limits=None, highlight="#f
             y = ydraw.get(l["id"], level_y(l, shift))
             st = stacked.get(l["id"])
             spin = format_spin(l.get("spin", ""), style["auto_spin_format"])
-            elab = l.get("energy_label") or fmt_energy(float(l["energy"]), style)
+            elab = l.get("energy_label") or fmt_energy(float(l["energy"]), style, l.get("decimals"))
             if st:                                   # shorter, centred on its cluster's base
                 bx0, bx1 = level_xspan(levels[st[2]], style, base)
-                frac = float(style["stack_width"]) ** st[0]
-                # but never too short for its spin + energy text (rough width estimate)
-                nchar = sum(len(re.sub(r"[$^{}]", "", txt)) for txt in (spin, elab))
-                frac = min(1.0, max(frac, (0.55 * fs * nchar + 8) / max((bx1 - bx0) * pts_per_x, 1e-9)))
+                if l.get("stack_width") not in (None, ""):     # per-level override, used as-is
+                    frac = max(0.02, float(l["stack_width"]))
+                else:
+                    frac = float(style["stack_width"]) ** st[0]
+                    # but never too short for its spin + energy text (rough width estimate)
+                    nchar = sum(len(re.sub(r"[$^{}]", "", txt)) for txt in (spin, elab))
+                    frac = min(1.0, max(frac, (0.55 * fs * nchar + 8) / max((bx1 - bx0) * pts_per_x, 1e-9)))
                 xc, half = (bx0 + bx1) / 2, (bx1 - bx0) * frac / 2
                 x0, x1 = xc - half, xc + half
             sel = is_sel("level", l["id"])
@@ -517,7 +523,8 @@ EXPORTED_FUNCTIONS = [style_rc, fmt_energy, format_spin, format_lifetime,
 def new_level(id_, energy, column=0):
     return {"id": id_, "energy": float(energy), "spin": "", "energy_label": "",
             "lifetime": "", "column": int(column), "x0": 0.0, "x1": 1.0, "lw": None,
-            "color": "", "tentative": False, "y_shift": 0.0, "offsets": {}}
+            "color": "", "tentative": False, "y_shift": 0.0, "decimals": None,
+            "stack_width": None, "offsets": {}}
 
 
 def new_transition(id_, from_id, to_id, x=0.5):
@@ -591,6 +598,10 @@ def merged_style(style):
     s = copy.deepcopy(DEFAULT_STYLE)
     s.update(style or {})
     s.pop("column_titles", None)          # moved into each scheme in file v2
+    old = s.pop("energy_fmt", None)       # replaced by energy_decimals
+    if old is not None and "energy_decimals" not in (style or {}):
+        m = re.search(r"\.(\d+)f", str(old))
+        s["energy_decimals"] = int(m.group(1)) if m else 0
     if not isinstance(s.get("offsets"), dict):
         s["offsets"] = {}
     return s
@@ -902,6 +913,8 @@ LEVEL_FIELDS = [
     ("color", "Colour (blank = default)", "color"),
     ("tentative", "Tentative (dashed)", "bool"),
     ("y_shift", "Drawn offset (keV)", "float"),
+    ("decimals", "Energy decimals (blank = global)", "optint"),
+    ("stack_width", "Stacked width 0-1 (blank = auto)", "optfloat"),
 ]
 
 TRANS_FIELDS = [
@@ -944,7 +957,7 @@ STYLE_FIELDS = [
     ("column_gap", "Gap between columns", "float"),
     ("level_lw", "Default line width (pt)", "float"),
     ("level_color", "Default colour", "color"),
-    ("energy_fmt", "Energy format", "str"),
+    ("energy_decimals", "Energy decimal places", "int"),
     ("energy_italic", "Italic energies", "bool"),
     ("spin_side", "Spin labels", "choice", ["left", "right", "none"]),
     ("energy_side", "Energy labels", "choice", ["right", "left", "none"]),
@@ -997,6 +1010,12 @@ Building a scheme
     (e.g. 4.5(3), >12 or 2.1(+5-4) for asymmetric errors). It is drawn as
     'B(E2) = 4.5(3) W.u.' on the opposite side of the arrow from Eγ, can be
     dragged, and can be hidden for the whole figure with Style ▸ Show B(σλ) labels.
+  • Energy labels: Style ▸ Energy decimal places sets the number of decimals for
+    all level and γ energies (0 → 2186, 1 → 2186.3). A level's own 'Energy
+    decimals' box overrides it for that level (blank = use the global value).
+  • Stacked levels: a level's 'Stacked width' box (0-1, fraction of the level below)
+    fixes its width exactly; blank = automatic. It only matters when the level is
+    stacked.
   • Style tab: figure size, fonts, gaps, arrow widths, label placement.
 
 Mouse (preview)
@@ -1134,7 +1153,7 @@ class App:
         lt = ttk.Frame(self.nb)
         self.nb.add(lt, text="Levels")
         self.lv_tree = self._make_tree(lt, [("E", "Energy", 70), ("spin", "Spin", 80),
-                                            ("life", "Lifetime", 90), ("col", "Col", 35)])
+                                            ("life", "Lifetime", 90), ("col", "Col", 35)], height=6)
         self.lv_tree.bind("<<TreeviewSelect>>", lambda e: self._tree_select("level", self.lv_tree))
         self._buttons(lt, (("Add", self.add_level), ("Duplicate", self.duplicate_selected),
                            ("Delete", self.delete_selected), ("Reset labels", self.reset_labels)))
@@ -1459,7 +1478,7 @@ class App:
         target[key] = val
         if key in ("fig_width", "fig_height"):
             self._layout_canvas()
-        if key in ("energy_fmt",):
+        if key in ("energy_decimals",):
             self.refresh_trees()
         self.redraw()
 
