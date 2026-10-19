@@ -60,6 +60,7 @@ DEFAULT_STYLE = {
     "energy_fmt": "{:.0f}", "energy_italic": True,
     "spin_side": "left", "energy_side": "right", "label_pad": 4.0,
     "auto_spin_format": True,
+    "stack_close_levels": True, "label_min_sep": 11.0, "stack_width": 0.6, "stack_gap": 3.0,
     # transitions
     "arrow_max_width": 5.0, "arrow_min_width": 0.8, "head_length": 6.0, "head_extra": 4.0,
     "intensity_norm": "per scheme",
@@ -112,6 +113,39 @@ def format_lifetime(s, style):
         return ""
     mu = r"$\mu$" if style.get("usetex") else "\u03bc"
     return re.sub(r"(\d|\))\s*us\b", lambda m: m.group(1) + " " + mu + "s", s.strip())
+
+
+def stack_close_levels(items, min_sep, label_h, gap):
+    """Decide which levels in one column are stacked on the level below them.
+
+    items: [(id, y_pts, has_lifetime), ...] with y in printed points.
+    A level closer than `min_sep` to an ordinary level below it (whose spin/energy
+    sit beside the line) becomes the 1st step of a stack; a level too close to a
+    stacked level (whose labels sit on top of its line) becomes the next step.
+    Each step is raised just enough to clear the labels underneath it.
+    Returns {id: (step k >= 1, raise in points, id of the cluster's base level)}.
+    """
+    out = {}
+    prev = None                              # (drawn y, step, has_lifetime, base id)
+    for id_, y, life in sorted(items, key=lambda it: it[1]):
+        if prev is None:
+            prev = (y, 0, life, id_)
+            continue
+        q0, k0, life0, base = prev
+        if k0 == 0:                          # below: ordinary level, labels at the sides
+            close = y - q0 < min_sep
+            need = label_h + 2.5 if life0 else gap     # its lifetime sits on top of it
+        else:                                # below: stacked level, labels on top
+            top = label_h * (2 if life0 else 1)
+            close = y - q0 < top + min_sep / 2.0
+            need = top + 2.5
+        if close:
+            q = max(y, q0 + need)
+            out[id_] = (k0 + 1, q - y, base)
+            prev = (q, k0 + 1, life, base)
+        else:
+            prev = (y, 0, life, id_)
+    return out
 
 
 def format_bwu(multipolarity, value):
@@ -263,14 +297,54 @@ def render(fig, doc, style, hits=None, selected=None, limits=None, highlight="#f
     all_i = [float(t.get("intensity") or 0) for s, _, _ in layout for t in s.get("transitions", [])]
     global_imax = max(all_i + [1e-12])
 
+    # points per energy unit on the printed figure (for stacking close levels)
+    fig_h = fig.get_size_inches()[1] * 72.0 * max(0.05, 1 - mb - mt)
+    ylo0, yhi0 = ax.get_ylim()
+    pts_per_kev = fig_h / max(yhi0 - ylo0, 1e-9)
+    fig_w = fig.get_size_inches()[0] * 72.0 * max(0.05, 1 - ml - mr)
+    xlo0, xhi0 = ax.get_xlim()
+    pts_per_x = fig_w / max(xhi0 - xlo0, 1e-9)
+    label_h = fs * 1.15
+
     for s, base, _w in layout:
         shift = float(s.get("shift") or 0.0)
         levels = {l["id"]: l for l in s.get("levels", [])}
 
+        # --- stack levels that are too close (per column) ---------------------
+        # stacked[id] = (k, raise_pts, base_id): k-th level above base_id in a cluster
+        stacked = {}
+        if style.get("stack_close_levels", True):
+            cols = {}
+            for l in s.get("levels", []):
+                cols.setdefault(int(l.get("column", 0)), []).append(
+                    (l["id"], level_y(l, shift) * pts_per_kev, bool(l.get("lifetime"))))
+            for items in cols.values():
+                stacked.update(stack_close_levels(items, float(style["label_min_sep"]),
+                                                  label_h, float(style["stack_gap"])))
+        ydraw = {i: level_y(levels[i], shift) + v[1] / pts_per_kev for i, v in stacked.items()}
+
+        def on_top(text, l, part, anchor, ha, lift, col, **kw):
+            dx, dy = offs(l, part)
+            t = ax.annotate(text, anchor, xytext=((1 if ha == "left" else -1) + dx, lift + dy),
+                            textcoords="offset points", ha=ha, va="bottom", fontsize=fs,
+                            color=col, annotation_clip=False, **kw)
+            reg("level", l["id"], part, ("text", t))
+
         # --- levels ---------------------------------------------------------
         for l in s.get("levels", []):
             x0, x1 = level_xspan(l, style, base)
-            y = level_y(l, shift)
+            y = ydraw.get(l["id"], level_y(l, shift))
+            st = stacked.get(l["id"])
+            spin = format_spin(l.get("spin", ""), style["auto_spin_format"])
+            elab = l.get("energy_label") or fmt_energy(float(l["energy"]), style)
+            if st:                                   # shorter, centred on its cluster's base
+                bx0, bx1 = level_xspan(levels[st[2]], style, base)
+                frac = float(style["stack_width"]) ** st[0]
+                # but never too short for its spin + energy text (rough width estimate)
+                nchar = sum(len(re.sub(r"[$^{}]", "", txt)) for txt in (spin, elab))
+                frac = min(1.0, max(frac, (0.55 * fs * nchar + 8) / max((bx1 - bx0) * pts_per_x, 1e-9)))
+                xc, half = (bx0 + bx1) / 2, (bx1 - bx0) * frac / 2
+                x0, x1 = xc - half, xc + half
             sel = is_sel("level", l["id"])
             col = highlight if sel else (l.get("color") or style["level_color"])
             lw = float(l.get("lw") or style["level_lw"])
@@ -278,8 +352,21 @@ def render(fig, doc, style, hits=None, selected=None, limits=None, highlight="#f
             ax.plot([x0, x1], [y, y], color=col, lw=lw, ls=ls, solid_capstyle="butt",
                     clip_on=False, zorder=2)
             reg("level", l["id"], "line", ("seg", (x0, y, x1, y), lw / 2 + 3))
+            eit = {"fontstyle": "italic" if style["energy_italic"] else "normal"}
+            life = format_lifetime(l.get("lifetime", ""), style)
 
-            spin = format_spin(l.get("spin", ""), style["auto_spin_format"])
+            if st:
+                # labels sit on top of the line: spin at the left end, energy at the right,
+                # lifetime above the energy
+                lift = lw / 2 + 1.0
+                if spin and style["spin_side"] != "none":
+                    on_top(spin, l, "spin", (x0, y), "left", lift, col)
+                if elab and style["energy_side"] != "none":
+                    on_top(elab, l, "energy", (x1, y), "right", lift, col, **eit)
+                if life:
+                    on_top(life, l, "life", (x1, y), "right", lift + label_h, col)
+                continue
+
             if spin and style["spin_side"] != "none":
                 left = style["spin_side"] == "left"
                 dx, dy = offs(l, "spin")
@@ -289,19 +376,15 @@ def render(fig, doc, style, hits=None, selected=None, limits=None, highlight="#f
                                 va="center", fontsize=fs, color=col, annotation_clip=False)
                 reg("level", l["id"], "spin", ("text", t))
 
-            elab = l.get("energy_label") or fmt_energy(float(l["energy"]), style)
             if elab and style["energy_side"] != "none":
                 left = style["energy_side"] == "left"
                 dx, dy = offs(l, "energy")
                 t = ax.annotate(elab, (x0 if left else x1, y),
                                 xytext=((-pad if left else pad) + dx, dy),
                                 textcoords="offset points", ha="right" if left else "left",
-                                va="center", fontsize=fs, color=col,
-                                fontstyle="italic" if style["energy_italic"] else "normal",
-                                annotation_clip=False)
+                                va="center", fontsize=fs, color=col, annotation_clip=False, **eit)
                 reg("level", l["id"], "energy", ("text", t))
 
-            life = format_lifetime(l.get("lifetime", ""), style)
             if life:
                 dx, dy = offs(l, "life")
                 t = ax.annotate(life, (x1, y), xytext=(-1 + dx, lw / 2 + 1.5 + dy),
@@ -326,7 +409,8 @@ def render(fig, doc, style, hits=None, selected=None, limits=None, highlight="#f
             else:
                 xt = t.get("x_to")
                 xb = base + column_x0(cb, style) + cw * float(t.get("x", 0.5) if xt is None else xt)
-            ya, yb = level_y(a, shift), level_y(b, shift)
+            ya = ydraw.get(a["id"], level_y(a, shift))
+            yb = ydraw.get(b["id"], level_y(b, shift))
             inten = float(t.get("intensity") or 0)
             tw = wmin + (wmax - wmin) * max(inten, 0) / imax
             hw = tw + float(style["head_extra"])
@@ -422,7 +506,7 @@ def render(fig, doc, style, hits=None, selected=None, limits=None, highlight="#f
 
 
 EXPORTED_FUNCTIONS = [style_rc, fmt_energy, format_spin, format_lifetime,
-                      format_bwu, element_z, scheme_title, column_x0,
+                      stack_close_levels, format_bwu, element_z, scheme_title, column_x0,
                       scheme_ncol, scheme_layout, level_y, level_xspan, render]
 
 
@@ -866,6 +950,10 @@ STYLE_FIELDS = [
     ("energy_side", "Energy labels", "choice", ["right", "left", "none"]),
     ("label_pad", "Label gap (pt)", "float"),
     ("auto_spin_format", "Auto-superscript parity", "bool"),
+    ("stack_close_levels", "Stack close levels", "bool"),
+    ("label_min_sep", "Closeness threshold (pt)", "float"),
+    ("stack_width", "Stacked line width (fraction)", "float"),
+    ("stack_gap", "Min. raise of stacked line (pt)", "float"),
     (None, "Transitions", "header"),
     ("arrow_max_width", "Max arrow width (pt)", "float"),
     ("arrow_min_width", "Min arrow width (pt)", "float"),
@@ -914,6 +1002,13 @@ Building a scheme
 Mouse (preview)
   • Click: select. Drag a level line up/down to separate crowded levels
     (only where it's drawn changes, not the energy).
+  • Levels too close for their labels to fit are stacked automatically: the upper
+    level is drawn as a shorter, centred line raised just enough to clear the level
+    below, with its spin (left end), energy (right end) and lifetime sitting on top
+    of the line. Three or more close levels form steps, each shorter than the last.
+    Energy labels keep the true energies. Tune it in Style ▸ Levels (closeness
+    threshold, stacked line width, minimum raise) or switch it off. Labels can still
+    be dragged afterwards.
   • Drag an arrow sideways to move it; drag any label (including scheme titles)
     to nudge it.
   • Right-drag from one level to another in the same scheme to create a transition.
