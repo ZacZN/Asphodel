@@ -44,6 +44,36 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 APP_NAME = "LevelSchemer"
 HIGHLIGHT = "#f57d15"
+
+
+def settings_path():
+    """Per-user settings file (remembers the last scheme file)."""
+    if os.name == "nt":
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    else:
+        base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    return os.path.join(base, "levelschemer", "settings.json")
+
+
+def load_settings():
+    try:
+        with open(settings_path(), encoding="utf-8") as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_settings(**changes):
+    """Merge `changes` into the settings file; failures are ignored."""
+    d = load_settings()
+    d.update(changes)
+    try:
+        os.makedirs(os.path.dirname(settings_path()), exist_ok=True)
+        with open(settings_path(), "w", encoding="utf-8") as fh:
+            json.dump(d, fh, indent=1)
+    except Exception:
+        pass
 FILE_VERSION = 3
 
 DEFAULT_STYLE = {
@@ -1131,6 +1161,9 @@ Output
   • Save / Open store all schemes in one JSON file (older single-scheme files open
     as one scheme).
 
+On launch the last opened or saved scheme file is reopened (File ▸ New for a blank
+one; a file named on the command line takes priority).
+
 Keys: Delete, Ctrl+Z / Ctrl+Y, Ctrl+S, Ctrl+O, Ctrl+N
 """
 
@@ -1142,7 +1175,7 @@ Keys: Delete, Ctrl+Z / Ctrl+Y, Ctrl+S, Ctrl+O, Ctrl+N
 class App:
     TAB_SCHEMES, TAB_LEVELS, TAB_TRANS, TAB_STYLE = range(4)
 
-    def __init__(self, root, path=None):
+    def __init__(self, root, path=None, reopen=False):
         self.root = root
         self.doc = empty_doc()
         self.active = self.doc["schemes"][0]["id"]
@@ -1161,7 +1194,7 @@ class App:
         self._bind_keys()
         root.protocol("WM_DELETE_WINDOW", self.quit)
         if path:
-            self.open_file(path)
+            self.open_file(path, quiet=reopen)
         self.refresh_all()
         self.update_title()
 
@@ -1954,15 +1987,19 @@ class App:
         if p:
             self.open_file(p)
 
-    def open_file(self, path):
+    def open_file(self, path, quiet=False):
         try:
             with open(path, encoding="utf-8") as fh:
                 d = json.load(fh)
             doc = normalise_doc(d)
             style = merged_style(d.get("style"))
         except Exception as exc:
-            messagebox.showerror(APP_NAME, "Could not open %s:\n%s" % (path, exc))
-            return
+            if quiet:                                   # e.g. last file at startup
+                self.status("Could not reopen %s (%s); started a new scheme."
+                            % (path, str(exc).splitlines()[0][:120]))
+            else:
+                messagebox.showerror(APP_NAME, "Could not open %s:\n%s" % (path, exc))
+            return False
         self._set_doc(doc, style)
         self.path, self.dirty = path, False
         self.undo_stack.clear()
@@ -1970,8 +2007,11 @@ class App:
         self._layout_canvas()
         self.refresh_all()
         self.update_title()
-        self.status("Opened %s (%d scheme%s)" % (path, len(doc["schemes"]),
-                                                 "" if len(doc["schemes"]) == 1 else "s"))
+        self.status("%s %s (%d scheme%s)" % ("Reopened" if quiet else "Opened", path,
+                                             len(doc["schemes"]),
+                                             "" if len(doc["schemes"]) == 1 else "s"))
+        save_settings(last_file=os.path.abspath(path))
+        return True
 
     def save(self):
         if not self.path:
@@ -1987,6 +2027,7 @@ class App:
         self.dirty = False
         self.update_title()
         self.status("Saved %s" % self.path)
+        save_settings(last_file=os.path.abspath(self.path))
         return True
 
     def save_as(self):
@@ -2045,7 +2086,11 @@ class App:
 def main():
     root = tk.Tk()
     root.geometry("1150x780")
-    App(root, sys.argv[1] if len(sys.argv) > 1 else None)
+    if len(sys.argv) > 1:                       # a file given on the command line wins
+        App(root, sys.argv[1])
+    else:                                       # otherwise reopen the last scheme file
+        last = load_settings().get("last_file")
+        App(root, last if last and os.path.isfile(last) else None, reopen=True)
     root.mainloop()
 
 
