@@ -57,7 +57,7 @@ DEFAULT_STYLE = {
     "scheme_gap": 1.0, "scheme_title_pos": "below", "scheme_title_size": 10.0,
     # levels
     "column_width": 1.0, "column_gap": 0.8, "level_lw": 1.0, "level_color": "black",
-    "energy_decimals": 0, "energy_italic": True,
+    "energy_italic": True,
     "spin_side": "left", "energy_side": "right", "label_pad": 4.0,
     "auto_spin_format": True,
     "stack_close_levels": True, "label_min_sep": 11.0, "stack_width": 0.6, "stack_gap": 3.0,
@@ -90,14 +90,20 @@ def style_rc(style):
     }
 
 
-def fmt_energy(value, style, decimals=None):
-    """Energy label with a fixed number of decimal places (style or override)."""
-    d = style.get("energy_decimals", 0) if decimals in (None, "") else decimals
-    try:
-        d = max(0, min(int(d), 6))
-    except (TypeError, ValueError):
-        d = 0
-    return "{:.{}f}".format(float(value), d)
+def energy_text(level):
+    """A level's energy exactly as typed in the GUI (e.g. '1556', '2506.0', '1.642')."""
+    t = str(level.get("energy_text") or "").strip()
+    if t:
+        return t
+    v = float(level["energy"])
+    return str(int(v)) if v.is_integer() else repr(v)
+
+
+def gamma_energy_text(a, b):
+    """Eγ from two levels, with as many decimals as the more precise of the two."""
+    d = max(len(m.group(1)) if m else 0
+            for m in (re.search(r"\.(\d+)", energy_text(x)) for x in (a, b)))
+    return "{:.{}f}".format(abs(float(a["energy"]) - float(b["energy"])), d)
 
 
 def format_spin(s, auto=True):
@@ -339,7 +345,7 @@ def render(fig, doc, style, hits=None, selected=None, limits=None, highlight="#f
             y = ydraw.get(l["id"], level_y(l, shift))
             st = stacked.get(l["id"])
             spin = format_spin(l.get("spin", ""), style["auto_spin_format"])
-            elab = l.get("energy_label") or fmt_energy(float(l["energy"]), style, l.get("decimals"))
+            elab = l.get("energy_label") or energy_text(l)
             if st:                                   # shorter, centred on its cluster's base
                 bx0, bx1 = level_xspan(levels[st[2]], style, base)
                 if l.get("stack_width") not in (None, ""):     # per-level override, used as-is
@@ -435,7 +441,7 @@ def render(fig, doc, style, hits=None, selected=None, limits=None, highlight="#f
                                          clip_on=False, zorder=3))
             reg("trans", t["id"], "arrow", ("seg", (xa, ya, xb, yb), hw / 2 + 2))
 
-            label = t.get("label") or fmt_energy(abs(float(a["energy"]) - float(b["energy"])), style)
+            label = t.get("label") or gamma_energy_text(a, b)
             side = t.get("label_side") or "default"
             if side == "default":
                 side = style["gamma_label_side"]
@@ -511,7 +517,7 @@ def render(fig, doc, style, hits=None, selected=None, limits=None, highlight="#f
     return ax
 
 
-EXPORTED_FUNCTIONS = [style_rc, fmt_energy, format_spin, format_lifetime,
+EXPORTED_FUNCTIONS = [style_rc, energy_text, gamma_energy_text, format_spin, format_lifetime,
                       stack_close_levels, format_bwu, element_z, scheme_title, column_x0,
                       scheme_ncol, scheme_layout, level_y, level_xspan, render]
 
@@ -523,7 +529,7 @@ EXPORTED_FUNCTIONS = [style_rc, fmt_energy, format_spin, format_lifetime,
 def new_level(id_, energy, column=0):
     return {"id": id_, "energy": float(energy), "spin": "", "energy_label": "",
             "lifetime": "", "column": int(column), "x0": 0.0, "x1": 1.0, "lw": None,
-            "color": "", "tentative": False, "y_shift": 0.0, "decimals": None,
+            "color": "", "tentative": False, "y_shift": 0.0, "energy_text": "",
             "stack_width": None, "offsets": {}}
 
 
@@ -598,10 +604,8 @@ def merged_style(style):
     s = copy.deepcopy(DEFAULT_STYLE)
     s.update(style or {})
     s.pop("column_titles", None)          # moved into each scheme in file v2
-    old = s.pop("energy_fmt", None)       # replaced by energy_decimals
-    if old is not None and "energy_decimals" not in (style or {}):
-        m = re.search(r"\.(\d+)f", str(old))
-        s["energy_decimals"] = int(m.group(1)) if m else 0
+    s.pop("energy_fmt", None)             # energies are now shown as typed
+    s.pop("energy_decimals", None)
     if not isinstance(s.get("offsets"), dict):
         s["offsets"] = {}
     return s
@@ -808,6 +812,8 @@ class PropertyForm(ttk.Frame):
                 var = self.vars[k]
                 if kind == "computed":
                     var.set(opts(target))
+                elif kind == "energy":
+                    var.set(energy_text(target) if target is not None else "")
                 elif kind == "bool":
                     var.set(bool(v))
                 elif kind == "level":
@@ -825,6 +831,8 @@ class PropertyForm(ttk.Frame):
         raw = raw.strip() if isinstance(raw, str) else raw
         if kind == "float":
             return float(raw)
+        if kind == "energy":                 # value + the text exactly as typed
+            return (float(raw), raw)
         if kind == "optfloat":
             return None if raw == "" else float(raw)
         if kind == "int":
@@ -902,7 +910,7 @@ SCHEME_FIELDS = [
 ]
 
 LEVEL_FIELDS = [
-    ("energy", "Energy (keV)", "float"),
+    ("energy", "Energy (keV)", "energy"),
     ("spin", "Spin/parity, e.g. (23/2-)", "str"),
     ("energy_label", "Energy label (blank = auto)", "str"),
     ("lifetime", "Lifetime label, e.g. 5.9(2) us", "str"),
@@ -913,7 +921,6 @@ LEVEL_FIELDS = [
     ("color", "Colour (blank = default)", "color"),
     ("tentative", "Tentative (dashed)", "bool"),
     ("y_shift", "Drawn offset (keV)", "float"),
-    ("decimals", "Energy decimals (blank = global)", "optint"),
     ("stack_width", "Stacked width 0-1 (blank = auto)", "optfloat"),
 ]
 
@@ -957,7 +964,6 @@ STYLE_FIELDS = [
     ("column_gap", "Gap between columns", "float"),
     ("level_lw", "Default line width (pt)", "float"),
     ("level_color", "Default colour", "color"),
-    ("energy_decimals", "Energy decimal places", "int"),
     ("energy_italic", "Italic energies", "bool"),
     ("spin_side", "Spin labels", "choice", ["left", "right", "none"]),
     ("energy_side", "Energy labels", "choice", ["right", "left", "none"]),
@@ -1010,9 +1016,9 @@ Building a scheme
     (e.g. 4.5(3), >12 or 2.1(+5-4) for asymmetric errors). It is drawn as
     'B(E2) = 4.5(3) W.u.' on the opposite side of the arrow from Eγ, can be
     dragged, and can be hidden for the whole figure with Style ▸ Show B(σλ) labels.
-  • Energy labels: Style ▸ Energy decimal places sets the number of decimals for
-    all level and γ energies (0 → 2186, 1 → 2186.3). A level's own 'Energy
-    decimals' box overrides it for that level (blank = use the global value).
+  • Energy labels show each level energy exactly as you typed it (2186, 2186.3,
+    1.642 …). Automatic γ energies use as many decimals as the more precise of
+    the two levels.
   • Stacked levels: a level's 'Stacked width' box (0-1, fraction of the level below)
     fixes its width exactly; blank = automatic. It only matters when the level is
     stacked.
@@ -1295,7 +1301,7 @@ class App:
         return max([i["id"] for i in items] + [0]) + 1
 
     def level_name(self, l):
-        return "{:g}  {}".format(float(l["energy"]), l.get("spin", "")).strip() + "  #%d" % l["id"]
+        return ("%s  %s" % (energy_text(l), l.get("spin", ""))).strip() + "  #%d" % l["id"]
 
     def scheme_name(self, s):
         i = self.schemes().index(s) + 1
@@ -1364,14 +1370,14 @@ class App:
             for l in sorted(cur["levels"],
                             key=lambda l: (l.get("column", 0), -float(l["energy"]))):
                 lv.insert("", "end", iid=str(l["id"]), values=(
-                    "{:g}".format(float(l["energy"])), l.get("spin", ""),
+                    energy_text(l), l.get("spin", ""),
                     l.get("lifetime", ""), l.get("column", 0)))
             tr = self.tr_tree
             tr.delete(*tr.get_children())
             for t in cur["transitions"]:
                 a, b = self.level(t["from"]), self.level(t["to"])
                 if a and b:
-                    e = t.get("label") or fmt_energy(abs(float(a["energy"]) - float(b["energy"])), self.style)
+                    e = t.get("label") or gamma_energy_text(a, b)
                     fa, fb = "{:g}".format(float(a["energy"])), "{:g}".format(float(b["energy"]))
                 else:
                     e, fa, fb = "?", "?", "?"
@@ -1462,6 +1468,16 @@ class App:
 
     # --------------------------------------------------------------- editing
     def on_item_change(self, target, key, val):
+        if key == "energy":                  # keep the energy exactly as typed
+            val, raw = val
+            if target.get("energy") == val and energy_text(target) == raw:
+                return
+            self.push_undo()
+            target["energy"], target["energy_text"] = val, raw
+            self.refresh_trees()
+            self.load_forms()
+            self.redraw()
+            return
         if key == "symbol":
             val = val.strip().capitalize()
             if target.get(key) == val:
@@ -1478,8 +1494,6 @@ class App:
         target[key] = val
         if key in ("fig_width", "fig_height"):
             self._layout_canvas()
-        if key in ("energy_decimals",):
-            self.refresh_trees()
         self.redraw()
 
     # schemes
@@ -1604,7 +1618,7 @@ class App:
         sch["transitions"].append(t)
         self.select(("trans", t["id"]), from_canvas=True)
         self.status("Added %s transition. Edit it in the Transitions tab."
-                    % fmt_energy(abs(float(a["energy"]) - float(b["energy"])), self.style))
+                    % gamma_energy_text(a, b))
 
     def duplicate_selected(self):
         obj = self.selected_obj()
@@ -1619,6 +1633,7 @@ class App:
         if kind == "level":
             new["id"] = self.next_id(self.all_levels())
             new["energy"] = float(new["energy"]) + 100.0
+            new["energy_text"] = ""
             sch["levels"].append(new)
         else:
             new["id"] = self.next_id(self.all_trans())
