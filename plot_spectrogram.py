@@ -1124,8 +1124,8 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
   #controls {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
                background: #1f2937; border-radius: 8px; padding: 12px 16px;
                margin-bottom: 6px; }}
-  .title-row {{ grid-column: 1 / -1; display: flex; align-items: center;
-                gap: 10px; margin-bottom: 4px; }}
+  .title-row {{ flex: 1; min-width: 240px; display: flex; align-items: center;
+                gap: 10px; margin: 0; }}
   .title-row label {{ color: #9ca3af; white-space: nowrap; font-size: 12px;
                       font-weight: 600; text-transform: uppercase;
                       letter-spacing: .06em; color: #f97316; }}
@@ -1187,10 +1187,6 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
     </div>
    </div>
   </div>
-  <div class="title-row">
-    <label>Title</label>
-    <input type="text" id="plotTitle" value="{title_html}" oninput="updateTitle()">
-  </div>
   <div class="grp">
     <h4>Frequency (Hz)</h4>
     <div class="row">
@@ -1237,6 +1233,10 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
       <button onclick="modalOpen('fileModal', 'ldPath')" title="Load a file / change the frequency crop">File Settings…</button>
       <button onclick="simOpen()" title="Particle-identification settings: simulated ion lines">PID Settings…</button>
       <button onclick="modalOpen('decayModal', 'batemanChk')" title="Decay-fit settings and Run">Decay fit…</button>
+    </div>
+    <div class="title-row">
+      <label for="plotTitle">Title</label>
+      <input type="text" id="plotTitle" value="{title_html}" oninput="updateTitle()">
     </div>
   </div>
   <div id="decayModal" class="sim-modal" onclick="if(event.target===this) modalClose('decayModal')">
