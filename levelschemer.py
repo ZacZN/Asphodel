@@ -97,7 +97,7 @@ DEFAULT_STYLE = {
     "arrow_max_width": 5.0, "arrow_min_width": 0.8, "head_length": 6.0, "head_extra": 4.0,
     "intensity_norm": "per scheme",
     "gamma_label_side": "left", "gamma_label_rotation": "0", "gamma_label_pad": 3.0,
-    "show_bwu": True,
+    "show_bwu": True, "avoid_label_overlaps": True,
     # annotations
     "title": "", "title_size": 12.0,
     "offsets": {},
@@ -221,6 +221,85 @@ def fan_close_levels(items, min_sep, min_gap, life_h=0.0):
         if id_ in close or abs(p - q) > 0.25:
             labels[id_] = p - q
     return raised, labels
+
+
+def place_transition_labels(fig, ax, tlabels, gfs):
+    """Move Eγ / B(σλ) labels so they don't overlap other labels, arrows or lines.
+
+    For each transition, candidate placements are tried in order: sliding along
+    the arrow, swapping sides, B(σλ) stacked under Eγ, pushed further out. The
+    first placement free of overlaps is used (else the least-overlapping one) and
+    remembered in t["label_place"]; labels the user has dragged keep the
+    remembered placement so they don't jump.
+    """
+    try:
+        renderer = fig.canvas.get_renderer()
+    except AttributeError:
+        renderer = fig._get_renderer()
+    fracs = (0.5, 0.38, 0.62, 0.27, 0.73, 0.17, 0.83)
+    cands = ([(f, False, False, 0) for f in fracs] + [(f, True, False, 0) for f in fracs]
+             + [(f, sw, True, 0) for f in (0.5, 0.35, 0.65) for sw in (False, True)]
+             + [(0.5, sw, False, k) for k in (1, 2, 3, 4) for sw in (False, True)])
+
+    def apply(tl, cand):
+        f, swap, stack, push = cand
+        t = tl["t"]
+        xa, ya, xb, yb = tl["seg"]
+        xy = (xa + (xb - xa) * f, ya + (yb - ya) * f)
+        g_left = tl.get("g_left", True) != swap
+        b_left = g_left if stack else not g_left
+        gap = tl["gap"] + push * 0.5 * gfs
+        for key, txt, left in (("label", tl["g"], g_left), ("bwu", tl["b"], b_left)):
+            if txt is None:
+                continue
+            o = (t.get("offsets") or {}).get(key) or (0, 0)
+            dy = -1.15 * gfs if (stack and key == "bwu" and tl["g"] is not None) else 0.0
+            txt.xy = xy
+            txt.xyann = ((-1 if left else 1) * gap + float(o[0]), dy + float(o[1]))
+            txt.set_ha("right" if left else "left")
+
+    def overlap(tl, obstacles):
+        area = 0.0
+        for txt in (tl["g"], tl["b"]):
+            if txt is None:
+                continue
+            bb = txt.get_window_extent(renderer)
+            for ob in obstacles:
+                w = min(bb.x1, ob.x1) - max(bb.x0, ob.x0) + 1
+                h = min(bb.y1, ob.y1) - max(bb.y0, ob.y0) + 1
+                if w > 0 and h > 0:
+                    area += w * h
+        if tl["g"] is not None and tl["b"] is not None:     # its own two labels
+            a, b = tl["g"].get_window_extent(renderer), tl["b"].get_window_extent(renderer)
+            w = min(a.x1, b.x1) - max(a.x0, b.x0) + 1
+            h = min(a.y1, b.y1) - max(a.y0, b.y0) + 1
+            if w > 0 and h > 0:
+                area += w * h
+        return area
+
+    for tl in tlabels:
+        if tl["g"] is None and tl["b"] is None:
+            continue
+        t = tl["t"]
+        dragged = any((t.get("offsets") or {}).get(k) for k in ("label", "bwu"))
+        if dragged:
+            if t.get("label_place"):
+                apply(tl, tuple(t["label_place"]))
+            continue
+        mine = {id(a) for a in [tl["g"], tl["b"]] + tl["own"] if a is not None}
+        obstacles = [a.get_window_extent(renderer)
+                     for a in list(ax.texts) + list(ax.patches) + list(ax.lines)
+                     if id(a) not in mine and a.get_visible()]
+        best, best_area = None, None
+        for cand in cands:
+            apply(tl, cand)
+            area = overlap(tl, obstacles)
+            if best_area is None or area < best_area:
+                best, best_area = cand, area
+            if area == 0:
+                break
+        apply(tl, best)
+        t["label_place"] = list(best)
 
 
 def format_bwu(multipolarity, value):
@@ -426,6 +505,7 @@ def _render_once(fig, doc, style, hits, selected, limits, highlight, extra, grou
     pts_per_kev = fig_h / max(yhi0 - ylo0, 1e-9)
     stub, diag = float(style["connector_stub"]), float(style["connector_diag"])
     lowest_label = None                  # lowest fanned label (points), to keep titles clear
+    tlabels = []                         # transition labels, for overlap avoidance
 
     for si, (s, base, _w) in enumerate(layout):
         n0 = (len(ax.texts), len(ax.lines), len(ax.patches))
@@ -551,17 +631,20 @@ def _render_once(fig, doc, style, hits, selected, limits, highlight, extra, grou
             hw = tw + float(style["head_extra"])
             sel = is_sel("trans", t["id"])
             col = highlight if sel else (t.get("color") or "black")
+            own = []
             if t.get("tentative"):
                 # dashed shaft (stops at the head) + solid head with an invisible tail
-                ax.add_patch(FancyArrowPatch((xa, ya), (xb, yb), arrowstyle="-", mutation_scale=1,
+                own.append(FancyArrowPatch((xa, ya), (xb, yb), arrowstyle="-", mutation_scale=1,
                                              shrinkA=0, shrinkB=hl * 0.9, lw=max(0.6 * tw, 0.6),
-                                             ls=(0, (3, 2)), color=col, clip_on=False, zorder=3))
+                                             ls=(0, (3, 2)), color=col, capstyle="butt",
+                                             joinstyle="miter", clip_on=False, zorder=3))
+                ax.add_patch(own[-1])
                 ast = ArrowStyle("Simple", head_length=hl, head_width=hw, tail_width=0.0)
             else:
                 ast = ArrowStyle("Simple", head_length=hl, head_width=hw, tail_width=tw)
-            ax.add_patch(FancyArrowPatch((xa, ya), (xb, yb), arrowstyle=ast, mutation_scale=1,
-                                         shrinkA=0, shrinkB=0, lw=0, fc=col, ec="none",
-                                         clip_on=False, zorder=3))
+            own.append(ax.add_patch(FancyArrowPatch((xa, ya), (xb, yb), arrowstyle=ast,
+                                                    mutation_scale=1, shrinkA=0, shrinkB=0, lw=0,
+                                                    fc=col, ec="none", clip_on=False, zorder=3)))
             reg("trans", t["id"], "arrow", ("seg", (xa, ya, xb, yb), hw / 2 + 2))
 
             if hang:
@@ -576,6 +659,9 @@ def _render_once(fig, doc, style, hits, selected, limits, highlight, extra, grou
                                   color=col, annotation_clip=False)
                 reg("trans", t["id"], "free", ("text", txt))
 
+            tl = {"t": t, "seg": (xa, ya, xb, yb), "gap": tw / 2 + gpad, "own": own,
+                  "g": None, "b": None}
+            tlabels.append(tl)
             label = t.get("label") or ("" if hang else gamma_energy_text(a, b))
             side = t.get("label_side") or "default"
             if side == "default":
@@ -589,6 +675,7 @@ def _render_once(fig, doc, style, hits, selected, limits, highlight, extra, grou
                                   va="center", rotation=float(style["gamma_label_rotation"] or 0),
                                   fontsize=gfs, color=col, annotation_clip=False)
                 reg("trans", t["id"], "label", ("text", txt))
+                tl["g"] = txt
 
             bl = format_bwu(t.get("multipolarity"), t.get("bwu")) if style.get("show_bwu", True) else ""
             if bl:
@@ -601,9 +688,14 @@ def _render_once(fig, doc, style, hits, selected, limits, highlight, extra, grou
                                   va="center", rotation=float(style["gamma_label_rotation"] or 0),
                                   fontsize=gfs, color=col, annotation_clip=False)
                 reg("trans", t["id"], "bwu", ("text", txt))
+                tl["b"] = txt
+            tl["g_left"] = side == "left"
 
         groups[si] = (list(ax.texts)[n0[0]:] + list(ax.lines)[n0[1]:]
                       + list(ax.patches)[n0[2]:])
+
+    if style.get("avoid_label_overlaps", True) and tlabels:
+        place_transition_labels(fig, ax, tlabels, gfs)
 
     # --- titles: column titles, then scheme titles, then figure title --------
     ylo, yhi = ax.get_ylim()
@@ -660,7 +752,7 @@ def _render_once(fig, doc, style, hits, selected, limits, highlight, extra, grou
 
 
 EXPORTED_FUNCTIONS = [style_rc, energy_text, gamma_energy_text, format_spin, format_lifetime,
-                      spread_positions, fan_close_levels, format_bwu, element_z, scheme_title, column_x0,
+                      spread_positions, fan_close_levels, place_transition_labels, format_bwu, element_z, scheme_title, column_x0,
                       scheme_ncol, scheme_layout, level_y, level_xspan, render, _render_once]
 
 
@@ -1133,6 +1225,7 @@ STYLE_FIELDS = [
     ("gamma_label_rotation", "Label rotation", "choice", ["0", "90"]),
     ("gamma_label_pad", "Label gap (pt)", "float"),
     ("show_bwu", "Show B(σλ) labels", "bool"),
+    ("avoid_label_overlaps", "Move labels to avoid overlaps", "bool"),
     (None, "Annotations", "header"),
     ("title", "Figure title (under everything)", "str"),
     ("title_size", "Title size (pt)", "float"),
