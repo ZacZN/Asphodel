@@ -608,13 +608,15 @@ SIM_CSS = """
                 max-height: calc(100vh - 32px); overflow-y: auto; }
   .sim-head { display: flex; align-items: center; justify-content: space-between;
               padding: 10px 16px; border-bottom: 1px solid #374151; }
-  .sim-head #simTitle, .sim-head #decayTitle, .sim-head #generalTitle { font-size: 13px; font-weight: 600; text-transform: uppercase;
+  .sim-head #simTitle, .sim-head #decayTitle, .sim-head #generalTitle, .sim-head #fileTitle { font-size: 13px; font-weight: 600; text-transform: uppercase;
                         letter-spacing: .06em; color: #f97316; }
   .sim-x { background: none; border: none; color: #9ca3af; font-size: 20px; line-height: 1;
            cursor: pointer; padding: 0 4px; }
   .sim-x:hover { color: #e5e7eb; }
   .sim-body { display: flex; flex-direction: column; gap: 12px; padding: 14px 16px 16px; }
   .sim-body .opt-grp { flex-wrap: wrap; }
+  .file-dialog { width: min(1000px, calc(100vw - 32px)); }
+  .file-dialog .loader-row { border-bottom: none; padding-bottom: 0; }
   .full-toggle { background: #1f2937; border: 1px solid #374151; border-radius: 6px;
                  color: #e5e7eb; font-size: 12px; font-weight: 600; text-transform: uppercase;
                  letter-spacing: .06em; padding: 6px 12px; cursor: pointer; width: 100%;
@@ -1174,7 +1176,17 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
 </head>
 <body>
 <div id="controls">
+  <div id="fileModal" class="sim-modal" onclick="if(event.target===this) modalClose('fileModal')">
+   <div class="sim-dialog file-dialog" role="dialog" aria-modal="true" aria-labelledby="fileTitle">
+    <div class="sim-head">
+      <span id="fileTitle">File settings</span>
+      <button class="sim-x" onclick="modalClose('fileModal')" title="Close (Esc)">×</button>
+    </div>
+    <div class="sim-body">
 {loader_html}
+    </div>
+   </div>
+  </div>
   <div class="title-row">
     <label>Title</label>
     <input type="text" id="plotTitle" value="{title_html}" oninput="updateTitle()">
@@ -1222,6 +1234,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
     </div>
     <div class="opt-grp">
       <button onclick="modalOpen('generalModal', 'colorscaleSel')" title="Colour scheme, dB scale, 3-D style, 1-D overlay">General Settings…</button>
+      <button onclick="modalOpen('fileModal', 'ldPath')" title="Load a file / change the frequency crop">File Settings…</button>
       <button onclick="simOpen()" title="Particle-identification settings: simulated ion lines">PID Settings…</button>
       <button onclick="modalOpen('decayModal', 'batemanChk')" title="Decay-fit settings and Run">Decay fit…</button>
     </div>
