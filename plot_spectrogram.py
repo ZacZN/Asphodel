@@ -1411,7 +1411,7 @@ function _initHeatmap() {{
     xaxis: {{ title: {{ text: 'Time (s)' }},
               range: [+document.getElementById('tMin').value, +document.getElementById('tMax').value],
               color: '#9ca3af', gridcolor: '#374151', zerolinecolor: '#374151' }},
-    yaxis: {{ title: {{ text: 'Frequency (Hz)' }}, tickformat: ',d', autorange: 'reversed',
+    yaxis: {{ title: {{ text: 'Frequency (Hz)' }}, tickformat: ',d', autorange: false,
               range: [+document.getElementById('fMax').value, +document.getElementById('fMin').value],
               color: '#9ca3af', gridcolor: '#374151', zerolinecolor: '#374151' }},
     paper_bgcolor: '#111827', plot_bgcolor: '#1f2937',
