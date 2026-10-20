@@ -514,12 +514,10 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
         eq_text = make_equation_text_decay(popt, perr, with_offset,
                                            half_life, half_life_err, gamma)
 
-    eq_text += f"\n\n$\\langle I \\rangle$ = {format_value(mean_intensity)} ± {format_value(std_resid)}"
+    # (⟨I⟩ and the σ error-model note are printed to the terminal, not shown in the box)
     if chi2 is not None:
         chi2_red = chi2 / ndf if ndf > 0 else float("nan")
-        eq_text += f"\n$\\chi^2/ndf$ = {chi2:.4g}/{ndf} = {chi2_red:.3g}"
-    if err_note:
-        eq_text += f"\n{err_note}"
+        eq_text += f"\n\n$\\chi^2/ndf$ = {chi2:.4g}/{ndf} = {chi2_red:.3g}"
 
     ax.text(
         0.97, 0.97, eq_text,
