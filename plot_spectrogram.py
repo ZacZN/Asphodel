@@ -572,12 +572,33 @@ async function ldLoad() {
 """
 
 
+COLORSCALE_NAMES = ["Inferno", "Magma", "Plasma", "Viridis", "Cividis", "Turbo", "Hot", "Jet",
+                    "Electric", "Blackbody", "Greys", "Blues", "YlGnBu", "Ice", "Haline"]
+
+
+def colorscales_dict():
+    """{name: [[pos, colour], ...]} for the colour-scheme dropdown."""
+    import plotly.colors as pc
+    out = {}
+    for n in COLORSCALE_NAMES:
+        try:
+            out[n] = [[float(p), c] for p, c in pc.get_colorscale(n)]
+        except Exception:      # very old plotly: name unknown -> leave it out
+            pass
+    if "Inferno" not in out:   # always keep the default available
+        out["Inferno"] = [[0.0, "rgb(0,0,4)"], [0.1, "rgb(27,11,65)"], [0.2, "rgb(74,12,107)"],
+                          [0.3, "rgb(119,28,109)"], [0.4, "rgb(163,47,92)"], [0.5, "rgb(200,70,67)"],
+                          [0.6, "rgb(229,103,37)"], [0.7, "rgb(246,142,9)"], [0.8, "rgb(252,185,22)"],
+                          [0.9, "rgb(252,226,83)"], [1.0, "rgb(252,255,164)"]]
+    return out
+
+
 SIM_CSS = """
   .sim-row .opt-grp input[type=text] { width: 80px; background: #374151;
                      border: 1px solid #4b5563; border-radius: 4px; color: #e5e7eb;
                      padding: 3px 6px; font-size: 13px; }
   .sim-row .opt-grp input[type=text]:focus { outline: none; border-color: #f97316; }
-  .sim-row .opt-grp select { background: #374151; border: 1px solid #4b5563; border-radius: 4px;
+  #colorscaleSel, .sim-row .opt-grp select { background: #374151; border: 1px solid #4b5563; border-radius: 4px;
                      color: #e5e7eb; padding: 3px 4px; font-size: 13px; }
   .sim-modal { display: none; position: fixed; inset: 0; z-index: 1000;
                background: rgba(0,0,0,.6); align-items: center; justify-content: center; }
@@ -587,7 +608,7 @@ SIM_CSS = """
                 max-height: calc(100vh - 32px); overflow-y: auto; }
   .sim-head { display: flex; align-items: center; justify-content: space-between;
               padding: 10px 16px; border-bottom: 1px solid #374151; }
-  .sim-head #simTitle, .sim-head #decayTitle { font-size: 13px; font-weight: 600; text-transform: uppercase;
+  .sim-head #simTitle, .sim-head #decayTitle, .sim-head #generalTitle { font-size: 13px; font-weight: 600; text-transform: uppercase;
                         letter-spacing: .06em; color: #f97316; }
   .sim-x { background: none; border: none; color: #9ca3af; font-size: 20px; line-height: 1;
            cursor: pointer; padding: 0 4px; }
@@ -960,6 +981,11 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
     _chk_unweighted = "checked" if _prefs.get("unweighted") else ""
     _chk_bars3d     = "" if _prefs.get("bars3d") == "0" else "checked"   # bars by default
     _chk_surface3d  = "" if _chk_bars3d else "checked"
+    _cs_all  = colorscales_dict()
+    _cs_name = _prefs.get("colorscale") if _prefs.get("colorscale") in _cs_all else "Inferno"
+    _cs_options = "".join(f'<option value="{n}"{" selected" if n == _cs_name else ""}>{n}</option>'
+                          for n in COLORSCALE_NAMES if n in _cs_all)
+    _cs_json = json.dumps(_cs_all)
 
     # Saved view for this file + crop (sliders, title, camera, 1-D overlay)
     _view = saved_view(file_path, fmin_req, fmax_req)
@@ -1016,7 +1042,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
         x=t_init,
         y=f_plot,
         z=z_plot_init,
-        colorscale="Inferno",
+        colorscale=_cs_all[_cs_name],
         colorbar=dict(
             title=dict(text=z_label, side="right"),
             thickness=18,
@@ -1189,31 +1215,13 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
   </div>
   <div class="opts-row">
     <div class="opt-grp">
-      <span>Scale</span>
-      <input type="checkbox" id="dbCheck" {db_checked} onchange="updateSurface()">
-      <label for="dbCheck">dB</label>
-    </div>
-    <div class="opt-grp">
-      <span>3D</span>
-      <input type="radio" name="style3d" id="bars3d" value="bars" {_chk_bars3d}
-             onchange="_set3dStyle()">
-      <label for="bars3d" title="Draw each point of the 3-D view as a flat-topped square bar, like the heatmap cells">bars</label>
-      <input type="radio" name="style3d" id="surface3d" value="surface" {_chk_surface3d}
-             onchange="_set3dStyle()">
-      <label for="surface3d" title="Smooth surface joining neighbouring points (the original 3-D style)">surface</label>
-    </div>
-    <div class="opt-grp">
-      <span>1D overlay</span>
-      <input type="checkbox" id="show1d" {_chk_show1d} onchange="_renderSpec1d(); saveSession()">
-      <label for="show1d">show</label>
-    </div>
-    <div class="opt-grp">
       <span>Time avg</span>
       <input type="number" id="nAvg" min="1" step="1" value="{n_avg_init}">
       <button onclick="updateSurface()">Apply</button>
       <span id="discardMsg"></span>
     </div>
     <div class="opt-grp">
+      <button onclick="modalOpen('generalModal', 'colorscaleSel')" title="Colour scheme, dB scale, 3-D style, 1-D overlay">General Settings…</button>
       <button onclick="simOpen()" title="Particle-identification settings: simulated ion lines">PID Settings…</button>
       <button onclick="modalOpen('decayModal', 'batemanChk')" title="Decay-fit settings and Run">Decay fit…</button>
     </div>
@@ -1285,6 +1293,40 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
     </div>
    </div>
   </div>
+  <div id="generalModal" class="sim-modal" onclick="if(event.target===this) modalClose('generalModal')">
+   <div class="sim-dialog" role="dialog" aria-modal="true" aria-labelledby="generalTitle">
+    <div class="sim-head">
+      <span id="generalTitle">General settings</span>
+      <button class="sim-x" onclick="modalClose('generalModal')" title="Close (Esc)">×</button>
+    </div>
+    <div class="sim-body">
+    <div class="opt-grp">
+      <span>Colour scheme</span>
+      <select id="colorscaleSel" onchange="setColorscale(this.value)"
+              title="Colour scale for the 2-D heatmap and 3-D plot">{_cs_options}</select>
+    </div>
+    <div class="opt-grp">
+      <span>Scale</span>
+      <input type="checkbox" id="dbCheck" {db_checked} onchange="updateSurface()">
+      <label for="dbCheck">dB</label>
+    </div>
+    <div class="opt-grp">
+      <span>3D</span>
+      <input type="radio" name="style3d" id="bars3d" value="bars" {_chk_bars3d}
+             onchange="_set3dStyle()">
+      <label for="bars3d" title="Draw each point of the 3-D view as a flat-topped square bar, like the heatmap cells">bars</label>
+      <input type="radio" name="style3d" id="surface3d" value="surface" {_chk_surface3d}
+             onchange="_set3dStyle()">
+      <label for="surface3d" title="Smooth surface joining neighbouring points (the original 3-D style)">surface</label>
+    </div>
+    <div class="opt-grp">
+      <span>1D overlay</span>
+      <input type="checkbox" id="show1d" {_chk_show1d} onchange="_renderSpec1d(); saveSession()">
+      <label for="show1d">show</label>
+    </div>
+    </div>
+   </div>
+  </div>
 {_sim_panel}
 </div>
 <div id="plots">
@@ -1310,15 +1352,18 @@ var LAST_CAMERA = {json.dumps(_camera)};
 
 var _heatReady = true;
 
-// Inferno colorscale defined explicitly so it works regardless of plotly.js version
-const INFERNO = [
-  [0.0,  'rgb(0,0,4)'],    [0.1,  'rgb(27,11,65)'],
-  [0.2,  'rgb(74,12,107)'], [0.3,  'rgb(119,28,109)'],
-  [0.4,  'rgb(163,47,92)'], [0.5,  'rgb(200,70,67)'],
-  [0.6,  'rgb(229,103,37)'],[0.7,  'rgb(246,142,9)'],
-  [0.8,  'rgb(252,185,22)'],[0.9,  'rgb(252,226,83)'],
-  [1.0,  'rgb(252,255,164)']
-];
+// Colour scales as explicit [pos, colour] arrays (from plotly.py), so every
+// scheme works whatever plotly.js version the CDN serves
+const COLORSCALES = {_cs_json};
+var CUR_CS = {json.dumps(_cs_name)};
+
+function setColorscale(name) {{
+  if (!COLORSCALES[name]) return;
+  CUR_CS = name;
+  Plotly.restyle('heatPlot', {{ colorscale: [COLORSCALES[name]] }}, [0]);
+  Plotly.restyle('specPlot', {{ colorscale: [COLORSCALES[name]] }}, [0]);
+  savePref('colorscale', name);
+}}
 
 function toDb(Z) {{
   var eps = 5e-324;
@@ -1380,7 +1425,7 @@ function _initHeatmap() {{
     x: rebinned.t,
     y: F_PLOT,
     z: _heat2dZ(rebinned.Z, useDb),
-    colorscale: INFERNO,
+    colorscale: COLORSCALES[CUR_CS],
     colorbar: {{ title: {{ text: zLabel, side: 'right' }} }},
     hovertemplate: 'Time: %{{x:.2f}} s<br>Freq: %{{y:,.0f}} Hz<br>' + zLabel + ': %{{z:.2f}}<extra></extra>'
   }}, {{
@@ -2149,7 +2194,7 @@ def serve(html, state):
                     pref_val = body.get("value", "")
                     if pref_key not in ("gamma", "errA", "errB", "hlIso", "hlGs",
                                         "skipStart", "skipEnd", "bateman", "unweighted",
-                                        "parentMin", "parentMax", "bars3d", "fullOpen"):
+                                        "parentMin", "parentMax", "bars3d", "fullOpen", "colorscale"):
                         raise ValueError(f"unknown pref key: {pref_key!r}")
                     with _PREFS_LOCK:
                         prefs = read_prefs()
