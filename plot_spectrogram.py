@@ -587,7 +587,7 @@ SIM_CSS = """
                 max-height: calc(100vh - 32px); overflow-y: auto; }
   .sim-head { display: flex; align-items: center; justify-content: space-between;
               padding: 10px 16px; border-bottom: 1px solid #374151; }
-  .sim-head #simTitle { font-size: 13px; font-weight: 600; text-transform: uppercase;
+  .sim-head #simTitle, .sim-head #decayTitle { font-size: 13px; font-weight: 600; text-transform: uppercase;
                         letter-spacing: .06em; color: #f97316; }
   .sim-x { background: none; border: none; color: #9ca3af; font-size: 20px; line-height: 1;
            cursor: pointer; padding: 0 4px; }
@@ -773,19 +773,25 @@ async function _fetchFull() {
   } catch (e) { console.log('[full1d] ' + e.message); }
 }
 
-// ── Popout dialog for the simulated-ion settings ────────────────────────────
-var _simLastFocus = null;
-function simOpen() {
-  _simLastFocus = document.activeElement;
-  document.getElementById('simModal').classList.add('open');
-  document.getElementById('sim_ref_name').focus();
+// ── Popout dialogs (simulated ions, decay fit) ──────────────────────────────
+var _modalLastFocus = null;
+function modalOpen(id, focusId) {
+  document.querySelectorAll('.sim-modal.open').forEach(function(m) { m.classList.remove('open'); });
+  _modalLastFocus = document.activeElement;
+  document.getElementById(id).classList.add('open');
+  var f = focusId && document.getElementById(focusId);
+  if (f) f.focus();
 }
-function simClose() {
-  document.getElementById('simModal').classList.remove('open');
-  if (_simLastFocus) _simLastFocus.focus();
+function modalClose(id) {
+  document.getElementById(id).classList.remove('open');
+  if (_modalLastFocus) _modalLastFocus.focus();
 }
+function simOpen()  { modalOpen('simModal', 'sim_ref_name'); }
+function simClose() { modalClose('simModal'); }
 document.addEventListener('keydown', function(e) {
-  if (e.key === 'Escape' && document.getElementById('simModal').classList.contains('open')) simClose();
+  if (e.key !== 'Escape') return;
+  var m = document.querySelector('.sim-modal.open');
+  if (m) modalClose(m.id);
 });
 
 // ── Collapsible whole-file 1-D plot (open/closed state saved in prefs) ──────
@@ -1130,7 +1136,8 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
   .opt-grp input:disabled + label {{ opacity: .35; }}
   .opt-grp button:disabled {{ opacity: .35; cursor: not-allowed; }}
   #discardMsg {{ font-size: 11px; color: #fbbf24; margin-left: 4px; }}
-  #decayStatus {{ font-size: 11px; margin-left: 4px; }}
+  .opt-grp span#decayStatus {{ font-size: 11px; margin-left: 4px; text-transform: none;
+                               letter-spacing: normal; font-weight: 400; }}
   #plots {{ display: flex; gap: 8px; align-items: flex-start; }}
   #heatDiv {{ flex: 1; min-width: 0; }}
   #surfDiv {{ flex: 1; min-width: 0; }}
@@ -1204,10 +1211,16 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
     </div>
     <div class="opt-grp">
       <button onclick="simOpen()" title="Settings for the simulated ion lines">Simulated ions…</button>
+      <button onclick="modalOpen('decayModal', 'batemanChk')" title="Decay-fit settings and Run">Decay fit…</button>
     </div>
   </div>
-  <div class="opts-row decay-row">
-    <div class="opt-grp"><span style="color:#e5e7eb;">Decay fit</span></div>
+  <div id="decayModal" class="sim-modal" onclick="if(event.target===this) modalClose('decayModal')">
+   <div class="sim-dialog" role="dialog" aria-modal="true" aria-labelledby="decayTitle">
+    <div class="sim-head">
+      <span id="decayTitle">Decay fit</span>
+      <button class="sim-x" onclick="modalClose('decayModal')" title="Close (Esc)">×</button>
+    </div>
+    <div class="sim-body">
     <div class="opt-grp">
       <span>Model</span>
       <input type="checkbox" id="batemanChk" {_chk_bateman}
@@ -1233,14 +1246,14 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
              style="width:72px;" value="{_saved_hl_gs}" oninput="savePref('hlGs', this.value)">
     </div>
     <div class="opt-grp">
-      <span>γ</span>
+      <span style="text-transform:none;">γ</span>
       <input type="number" id="gammaVal" min="0" step="0.01"
              placeholder="γ" title="Lorentz factor γ (optional; required for fixed half-lives)"
              style="width:64px;" value="{_saved_gamma}"
              oninput="savePref('gamma', this.value)">
     </div>
     <div class="opt-grp">
-      <span title="Error bar on each point: σ = a·I + b. Leave both blank to estimate a, b automatically from the fit residuals.">σ =</span>
+      <span style="text-transform:none;" title="Error bar on each point: σ = a·I + b. Leave both blank to estimate a, b automatically from the fit residuals.">σ =</span>
       <input type="number" id="errA" step="any"
              placeholder="auto" title="Error-bar slope a in σ = a·I + b (single-frame). Blank = estimate from residuals"
              style="width:64px;" value="{_saved_err_a}"
@@ -1265,6 +1278,8 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
       <button onclick="runDecayFit()">Run</button>
       <span id="decayStatus"></span>
     </div>
+    </div>
+   </div>
   </div>
 {_sim_panel}
 </div>
