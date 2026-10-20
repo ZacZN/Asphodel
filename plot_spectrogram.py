@@ -1754,16 +1754,23 @@ function updateSurface() {{
 }}
 
 // −/+ buttons: move a time slider by one displayed (time-averaged) frame,
-// keeping min < max.
+// keeping min < max. The step is done here by bin index rather than with the
+// browser's stepUp()/stepDown(): those compare positions exactly, so a value
+// a rounding error off the slider grid (common with float times) can make a
+// click snap to the same bin and appear to do nothing (seen in Firefox).
 function stepTime(id, dir) {{
-  var s = document.getElementById(id);
-  var old = s.value;
-  if (dir > 0) s.stepUp(); else s.stepDown();
-  if (+document.getElementById('tMin').value >= +document.getElementById('tMax').value) {{
-    s.value = old;   // would cross the other slider
-    return;
-  }}
-  if (s.value !== old) update();
+  var s  = document.getElementById(id);
+  var mn = +s.min, mx = +s.max, st = +s.step;
+  if (!(st > 0)) return;
+  var nMax = Math.round((mx - mn) / st);
+  var iOld = Math.min(nMax, Math.max(0, Math.round((+s.value - mn) / st)));
+  var iNew = Math.min(nMax, Math.max(0, iOld + dir));
+  if (iNew === iOld) return;                      // already at the end
+  var v = Math.min(mx, mn + iNew * st);
+  var other = +document.getElementById(id === 'tMin' ? 'tMax' : 'tMin').value;
+  if (id === 'tMin' ? v >= other - st / 2 : v <= other + st / 2) return;   // would cross
+  s.value = v;
+  update();
 }}
 
 function fmt(v, dec) {{
