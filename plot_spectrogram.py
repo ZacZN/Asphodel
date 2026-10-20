@@ -622,7 +622,7 @@ def sim_panel_html():
   <div id="simModal" class="sim-modal" onclick="if(event.target===this) simClose()">
    <div class="sim-dialog sim-row" role="dialog" aria-modal="true" aria-labelledby="simTitle">
     <div class="sim-head">
-      <span id="simTitle">Simulated ions</span>
+      <span id="simTitle">PID settings</span>
       <button class="sim-x" onclick="simClose()" title="Close (Esc)">×</button>
     </div>
     <div class="sim-body">
@@ -959,6 +959,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
     _chk_bateman    = "checked" if _prefs.get("bateman")    else ""
     _chk_unweighted = "checked" if _prefs.get("unweighted") else ""
     _chk_bars3d     = "" if _prefs.get("bars3d") == "0" else "checked"   # bars by default
+    _chk_surface3d  = "" if _chk_bars3d else "checked"
 
     # Saved view for this file + crop (sliders, title, camera, 1-D overlay)
     _view = saved_view(file_path, fmin_req, fmax_req)
@@ -1122,7 +1123,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
   .opt-grp span {{ font-size: 12px; font-weight: 600; text-transform: uppercase;
                    letter-spacing: .06em; color: #f97316; margin-right: 2px; }}
   .opt-grp label {{ color: #9ca3af; }}
-  .opt-grp input[type=checkbox] {{ accent-color: #f97316; width: 14px; height: 14px;
+  .opt-grp input[type=checkbox], .opt-grp input[type=radio] {{ accent-color: #f97316; width: 14px; height: 14px;
                                     cursor: pointer; }}
   .opt-grp input[type=number] {{ width: 60px; background: #374151;
                                   border: 1px solid #4b5563; border-radius: 4px;
@@ -1194,9 +1195,12 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
     </div>
     <div class="opt-grp">
       <span>3D</span>
-      <input type="checkbox" id="bars3d" {_chk_bars3d}
-             onchange="savePref('bars3d', this.checked ? '1' : '0'); _renderSurface()">
-      <label for="bars3d" title="Draw each point of the 3-D view as a flat-topped square bar (like the heatmap cells) instead of a smooth surface">bars</label>
+      <input type="radio" name="style3d" id="bars3d" value="bars" {_chk_bars3d}
+             onchange="_set3dStyle()">
+      <label for="bars3d" title="Draw each point of the 3-D view as a flat-topped square bar, like the heatmap cells">bars</label>
+      <input type="radio" name="style3d" id="surface3d" value="surface" {_chk_surface3d}
+             onchange="_set3dStyle()">
+      <label for="surface3d" title="Smooth surface joining neighbouring points (the original 3-D style)">surface</label>
     </div>
     <div class="opt-grp">
       <span>1D overlay</span>
@@ -1210,7 +1214,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
       <span id="discardMsg"></span>
     </div>
     <div class="opt-grp">
-      <button onclick="simOpen()" title="Settings for the simulated ion lines">Simulated ions…</button>
+      <button onclick="simOpen()" title="Particle-identification settings: simulated ion lines">PID Settings…</button>
       <button onclick="modalOpen('decayModal', 'batemanChk')" title="Decay-fit settings and Run">Decay fit…</button>
     </div>
   </div>
@@ -1677,6 +1681,13 @@ async function runDecayFit() {{
     status.textContent = '✗ ' + e.message;
     status.style.color = '#f87171';
   }}
+}}
+
+// 3-D style radio buttons: bars / surface (saved as the "bars3d" pref)
+function _set3dStyle() {{
+  var bars = document.getElementById('bars3d').checked;
+  savePref('bars3d', bars ? '1' : '0');
+  _renderSurface();
 }}
 
 function updateTitle() {{
