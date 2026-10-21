@@ -1475,8 +1475,13 @@ results_tab = html.Div([
 
 # Peak-fit parameter table (one row per peak).  Value columns are editable;
 # uncertainties and derived quantities are not.
+# line shapes available for each fitted peak
+SHAPE_LABELS = {"gauss": "Gaussian", "lorentz": "Lorentzian", "pvoigt": "Pseudo-Voigt"}
+
+
 FIT_COLUMNS = [
     {"name": "peak", "id": "peak", "editable": False},
+    {"name": "shape", "id": "shape", "presentation": "dropdown", "editable": True},
     {"name": "centre (Hz)", "id": "centre", "type": "numeric", "editable": True},
     {"name": "± centre", "id": "d_centre", "editable": False},
     {"name": "amplitude", "id": "amp", "type": "numeric", "editable": True},
@@ -1546,7 +1551,7 @@ further_tab = html.Div([
             html.Button("Peak fitting", id="btn-fit-mode", className="btn btn-outline-secondary btn-sm",
                         title="Turn on, then click peaks in the plot to add them to the fit",
                         style={"marginRight": "12px", "fontWeight": "600"}),
-            html.Span("Shape:", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
+            html.Span("Shape for new peaks:", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
             dcc.Dropdown(id="fit-shape", value="gauss", clearable=False,
                          options=[{"label": "Gaussian", "value": "gauss"},
                                   {"label": "Lorentzian", "value": "lorentz"},
@@ -1595,9 +1600,16 @@ further_tab = html.Div([
             dash_table.DataTable(
                 id="fit-table", data=[], editable=True, row_deletable=True,
                 columns=FIT_COLUMNS,
+                dropdown={"shape": {"clearable": False, "options": [
+                    {"label": v, "value": k} for k, v in SHAPE_LABELS.items()]}},
                 style_header=TABLE_HEADER, style_cell=TABLE_CELL,
                 style_data_conditional=TABLE_ODD + [
-                    {"if": {"column_editable": False}, "color": "#666"}],
+                    {"if": {"column_editable": False}, "color": "#666"},
+                    # eta only applies to pseudo-Voigt peaks
+                    {"if": {"column_id": "eta", "filter_query": '{shape} != "pvoigt"'},
+                     "color": "transparent", "backgroundColor": "#f2f2f2"}],
+                style_cell_conditional=[{"if": {"column_id": "shape"}, "textAlign": "left",
+                                         "minWidth": "140px", "width": "140px"}],
                 style_table={"overflowX": "auto"}),
             html.Div([
                 html.Span("Background  b0", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
@@ -2770,7 +2782,8 @@ FIT_TRACE_STYLES = [
     dict(name="fit", mode="lines", line=dict(color=ACCENT, width=2.5)),
     dict(name="fit components", mode="lines", line=dict(color="#555555", width=1.2, dash="dash")),
     dict(name="fit background", mode="lines", line=dict(color="#999999", width=1.2, dash="dot")),
-    dict(name="fit peaks", mode="markers",
+    dict(name="fit peaks", mode="markers+text", textposition="top center",
+         textfont=dict(color=ACCENT, size=15, family="Arial Black, Arial, sans-serif"),
          marker=dict(symbol="x-thin", size=12, color=ACCENT, line=dict(width=2.5, color=ACCENT))),
 ]
 
@@ -2792,6 +2805,9 @@ def draw_fit(fit_state, key):
     for i, (x, y) in enumerate(fit_overlay(cached[0], fit_state), start=1):
         patch["data"][i]["x"] = x
         patch["data"][i]["y"] = y
+    # peak numbers (as in the table) next to the markers
+    n = len((fit_state or {}).get("peaks") or [])
+    patch["data"][len(FIT_TRACE_STYLES)]["text"] = [str(k) for k in range(1, n + 1)]
     return patch
 
 
@@ -2913,11 +2929,18 @@ def _n_bg(bg):
     return {"none": 0, "const": 1, "linear": 2}.get(bg, 0)
 
 
+def _shapes(state):
+    """Line shape of each peak (each peak has its own)."""
+    default = state.get("shape") or "gauss"
+    return [pk.get("shape") or default for pk in state["peaks"]]
+
+
 def _pack(state):
-    """state -> (p0, names) for the parameters; centres as offsets from xref."""
-    xref, shape = state["xref"], state["shape"]
+    """state -> (p0, names) for the parameters; centres as offsets from xref.
+    eta is a parameter only for pseudo-Voigt peaks."""
+    xref = state["xref"]
     p, names = [], []
-    for i, pk in enumerate(state["peaks"]):
+    for i, (pk, shape) in enumerate(zip(state["peaks"], _shapes(state))):
         p += [pk["centre"] - xref, pk["amp"], pk["fwhm"]]
         names += [(i, "centre"), (i, "amp"), (i, "fwhm")]
         if shape == "pvoigt":
@@ -2929,18 +2952,23 @@ def _pack(state):
     return np.array(p, dtype=float), names
 
 
-def _model_from_vector(u, p, n_peaks, shape, bg):
-    k = 4 if shape == "pvoigt" else 3
+def _model_from_vector(u, p, shapes, bg):
+    """Model for the parameter vector laid out as in _pack."""
     y = np.zeros_like(u, dtype=float)
-    for i in range(n_peaks):
-        c, a, w = p[i * k: i * k + 3]
-        eta = p[i * k + 3] if shape == "pvoigt" else 0.0
+    q = 0
+    for shape in shapes:
+        c, a, w = p[q:q + 3]
+        q += 3
+        eta = 0.0
+        if shape == "pvoigt":
+            eta = p[q]
+            q += 1
         y += _peak_shape(u, c, a, w, eta, shape)
     nb = _n_bg(bg)
     if nb >= 1:
-        y += p[n_peaks * k]
+        y += p[q]
     if nb == 2:
-        y += p[n_peaks * k + 1] * u
+        y += p[q + 1] * u
     return y
 
 
@@ -2955,7 +2983,7 @@ def fit_overlay(ff, state):
     n = int(min(6000, max(200, 6 * (hi - lo) / bin_hz)))
     x = np.linspace(lo, hi, n)
     u = x - state["xref"]
-    shape, nb = state["shape"], _n_bg(state["bg"])
+    nb = _n_bg(state["bg"])
     bgp = state.get("bgp") or [0.0, 0.0]
     back = np.zeros_like(u)
     if nb >= 1:
@@ -2964,7 +2992,7 @@ def fit_overlay(ff, state):
         back += bgp[1] * u
     total = back.copy()
     cx, cy = [], []
-    for pk in state["peaks"]:
+    for pk, shape in zip(state["peaks"], _shapes(state)):
         comp = _peak_shape(u, pk["centre"] - state["xref"], pk["amp"], pk["fwhm"],
                            pk.get("eta", 0.5), shape)
         total += comp
@@ -3011,10 +3039,11 @@ def run_fit(ff, pp, sigma, state):
         if not (lb[q] < p0[q] < ub[q]):
             span = (ub[q] - lb[q]) if np.isfinite(ub[q] - lb[q]) else max(abs(p0[q]), 1.0)
             p0[q] = min(max(p0[q], lb[q] + 1e-6 * span), ub[q] - 1e-6 * span)
-    n_peaks, shape, bg = len(state["peaks"]), state["shape"], state["bg"]
+    shapes, bg = _shapes(state), state["bg"]
+    n_peaks = len(shapes)
 
     def f(uu, *p):
-        return _model_from_vector(uu, np.array(p), n_peaks, shape, bg)
+        return _model_from_vector(uu, np.array(p), shapes, bg)
 
     # absolute_sigma=False: the covariance is scaled by chi2/ndf, i.e. the
     # uncertainties are scaled by sqrt(chi2/ndf).  The noise sigma is only a
@@ -3043,7 +3072,7 @@ def run_fit(ff, pp, sigma, state):
         idx = [k for k, (j, _) in enumerate(names) if j == i]
         keys = [names[k][1] for k in idx]
 
-        def area_of(vec):
+        def area_of(vec, shape=shapes[i]):
             d = dict(zip(keys, vec))
             return _peak_area(d["amp"], d["fwhm"], d.get("eta", 0.5), shape)
         v0 = popt[idx].astype(float)
@@ -3092,12 +3121,12 @@ def fit_table_rows(state):
     if not state or not state.get("peaks"):
         return []
     unc = (state.get("unc") or {}).get("peaks") or [{} for _ in state["peaks"]]
-    pv = state["shape"] == "pvoigt"
     rows = []
-    for i, (pk, e) in enumerate(zip(state["peaks"], unc), start=1):
-        area = _peak_area(pk["amp"], pk["fwhm"], pk.get("eta", 0.5), state["shape"])
+    for i, (pk, e, shape) in enumerate(zip(state["peaks"], unc, _shapes(state)), start=1):
+        pv = shape == "pvoigt"
+        area = _peak_area(pk["amp"], pk["fwhm"], pk.get("eta", 0.5), shape)
         rows.append({
-            "peak": i,
+            "peak": i, "shape": shape,
             "centre": round(pk["centre"], 2), "d_centre": _fmt_num(e.get("centre"), ".2f"),
             "amp": float(f"{pk['amp']:.6g}"), "d_amp": _fmt_num(e.get("amp"), ".3g"),
             "fwhm": round(pk["fwhm"], 2), "d_fwhm": _fmt_num(e.get("fwhm"), ".2f"),
@@ -3341,7 +3370,9 @@ def update_fit(click, dragged, run, _ts, shape, bg, b0, b1, _clear, key, state, 
                     # background start value: median of the data in view
                     m = _region_mask(ff, region)
                     state["bgp"] = [float(np.nanmedian(pp[m])) if m.any() else 0.0, 0.0]
-                state["peaks"] = state["peaks"] + [_snap_peak(ff, pp, click["x"], state["bgp"], bg)]
+                new_pk = _snap_peak(ff, pp, click["x"], state["bgp"], bg)
+                new_pk["shape"] = shape              # shape chosen for new peaks
+                state["peaks"] = state["peaks"] + [new_pk]
                 state["fitted"], state["unc"] = False, None
             elif trig.startswith("fit-drag") and dragged:
                 k = int(dragged["peak"])
@@ -3367,8 +3398,10 @@ def update_fit(click, dragged, run, _ts, shape, bg, b0, b1, _clear, key, state, 
                     old = state["peaks"][n - 1] if 0 < n <= len(state["peaks"]) else {}
                     try:
                         eta = r.get("eta")
+                        shp = r.get("shape") if r.get("shape") in SHAPE_LABELS else \
+                            old.get("shape", shape)
                         pk = {"centre": float(r["centre"]), "amp": float(r["amp"]),
-                              "fwhm": abs(float(r["fwhm"])),
+                              "fwhm": abs(float(r["fwhm"])), "shape": shp,
                               "eta": float(eta) if eta not in (None, "") else old.get("eta", 0.5)}
                         pk["eta"] = min(max(pk["eta"], 0.0), 1.0)
                     except (TypeError, ValueError, KeyError):
@@ -3382,13 +3415,15 @@ def update_fit(click, dragged, run, _ts, shape, bg, b0, b1, _clear, key, state, 
                 if b1 is not None:
                     state["bgp"][1] = float(b1)
                 state["fitted"], state["unc"] = False, None
-            elif trig.startswith("fit-shape") or trig.startswith("fit-bg"):
+            elif trig.startswith("fit-bg"):
                 state["fitted"], state["unc"] = False, None
+            # (fit-shape only sets the shape for peaks added from now on)
         except Exception as exc:
             traceback.print_exc()
             error = str(exc)
 
-    pv = bool(state) and state["shape"] == "pvoigt"
+    # eta columns only when at least one peak is pseudo-Voigt
+    pv = bool(state) and "pvoigt" in _shapes(state)
     cols = [c for c in FIT_COLUMNS if pv or c["id"] not in ("eta", "d_eta")]
     if state is None:
         msg = ("Sum the spectra first, then turn on peak fitting."
@@ -3424,8 +3459,7 @@ def show_residuals(state, key):
     m = _region_mask(ff, state["region"])
     x, y = ff[m], pp[m]
     p, _ = _pack(state)
-    model = _model_from_vector(x - state["xref"], p, len(state["peaks"]), state["shape"],
-                               state["bg"])
+    model = _model_from_vector(x - state["xref"], p, _shapes(state), state["bg"])
     fig = go.Figure()
     fig.add_hrect(y0=-sigma, y1=sigma, fillcolor=ACCENT_PALE, opacity=0.9, line_width=0,
                   layer="below")
