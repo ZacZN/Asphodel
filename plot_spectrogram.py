@@ -641,6 +641,7 @@ SIM_CSS = """
                     padding: 5px 12px; position: sticky; top: 0; background: #1f2937;
                     color: #9ca3af; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
   .srch-list .ex { color: #9ca3af; }
+  .opt-grp span#decaySugStatus,
   .opt-grp span#srchStatus { font-size: 11px; text-transform: none; letter-spacing: normal;
                              font-weight: 400; }
   .file-dialog .loader-row { border-bottom: none; padding-bottom: 0; }
@@ -952,6 +953,7 @@ function _initRegion(v) {
   fetch('/get-region').then(function(r) { return r.json(); }).then(function(d) {
     document.getElementById(d.mode === 'box' ? 'regBox' : 'regSliders').checked = true;
     if (d.box) _regSetFields(d.box);
+    document.getElementById('decayTitleBox').value = d.title || '';
     _regSync();
     _regLoaded = true;
   }).catch(function() { _regLoaded = true; });
@@ -1005,6 +1007,51 @@ function decayWindow() {
            fMin: Math.min(v[2], v[3]), fMax: Math.max(v[2], v[3])};
   if (!(w.tMax > w.tMin) || !(w.fMax > w.fMin)) throw new Error('region box has zero size');
   return w;
+}
+
+// ── Decay-fit title: pick from simulated ions inside the fit region ─────────
+function _sugStatus(msg, kind) {
+  var s = document.getElementById('decaySugStatus');
+  s.textContent = msg;
+  s.style.color = kind === 'err' ? '#f87171' : kind === 'ok' ? '#4ade80' : '#fbbf24';
+}
+async function suggestDecayTitle() {
+  var list = document.getElementById('decaySugList');
+  list.innerHTML = '';
+  var w;
+  try { w = decayWindow(); } catch (e) { _sugStatus('✗ ' + e.message, 'err'); return; }
+  _sugStatus('Looking…');
+  try {
+    var r = await fetch('/region-ions', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                         body: JSON.stringify({fMin: w.fMin, fMax: w.fMax})});
+    var d = await r.json();
+    if (!r.ok) { _sugStatus('✗ ' + (d.error || 'error'), 'err'); return; }
+    if (!d.hits.length) { _sugStatus('No simulated ions in this region', 'err'); return; }
+    _sugStatus(d.n + ' in region, nearest centre first, click one', 'ok');
+    var hdr = document.createElement('div'); hdr.className = 'hdr';
+    ['Ion', 'Harmonic', 'f_sim (Hz)', 'from centre'].forEach(function(t) {
+      var c = document.createElement('span'); c.textContent = t; hdr.appendChild(c);
+    });
+    list.appendChild(hdr);
+    d.hits.forEach(function(l) {
+      var it = document.createElement('div'); it.className = 'item'; it.tabIndex = 0;
+      var txt = l.ion + ' h' + l.h;
+      it.title = 'Use "' + txt + '" as the title';
+      [l.ion + (l.is_ref ? '  (ref)' : ''), 'h' + l.h,
+       l.f.toLocaleString('en-GB', {maximumFractionDigits: 1}),
+       (l.df >= 0 ? '+' : '−') + Math.abs(l.df).toLocaleString('en-GB', {maximumFractionDigits: 0}) + ' Hz'
+      ].forEach(function(t) { var c = document.createElement('span'); c.textContent = t; it.appendChild(c); });
+      var pick = function() {
+        document.getElementById('decayTitleBox').value = txt;
+        list.innerHTML = ''; _sugStatus('');
+        saveSession();
+        document.getElementById('decayTitleBox').focus();
+      };
+      it.onclick = pick;
+      it.onkeydown = function(e) { if (e.key === 'Enter') pick(); };
+      list.appendChild(it);
+    });
+  } catch (e) { _sugStatus('✗ ' + e.message, 'err'); }
 }
 
 // ── Popout dialogs (simulated ions, decay fit) ──────────────────────────────
@@ -1459,7 +1506,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
     </div>
   </div>
   <div id="decayModal" class="sim-modal" onclick="if(event.target===this) modalClose('decayModal')">
-   <div class="sim-dialog" role="dialog" aria-modal="true" aria-labelledby="decayTitle">
+   <div class="sim-dialog sim-row" role="dialog" aria-modal="true" aria-labelledby="decayTitle">
     <div class="sim-head">
       <span id="decayTitle">Decay fit</span>
       <button class="sim-x" onclick="modalClose('decayModal')" title="Close (Esc)">×</button>
@@ -1487,6 +1534,15 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
       <input type="number" id="regF1" step="any" style="width:120px;" oninput="regFieldsChanged()">
       <button onclick="clearRegionBox()" title="Remove the drawn box">Clear</button>
     </div>
+    <div class="opt-grp" style="width:100%;" title="Title of the decay-fit plot. Empty = automatic (file, range, model)">
+      <span>Title</span>
+      <input type="text" id="decayTitleBox" placeholder="automatic (file, range, model)"
+             style="flex:1; width:auto; min-width:260px;" oninput="saveSession()">
+      <button onclick="suggestDecayTitle()"
+              title="List simulated ions inside the fit region to pick a title from">Suggest ▾</button>
+      <span id="decaySugStatus"></span>
+    </div>
+    <div id="decaySugList" class="srch-list"></div>
     <div class="opt-grp">
       <span>Model</span>
       <input type="checkbox" id="batemanChk" {_chk_bateman}
@@ -1896,6 +1952,7 @@ function _sessionState() {{
       show1d: document.getElementById('show1d').checked,
       // undefined (= keep the saved box) until the saved region has been read back
       regBox: _regLoaded ? _regBoxValues() : undefined,
+      decayTitle: _regLoaded ? document.getElementById('decayTitleBox').value : undefined,
       camera: cam
     }}
   }};
@@ -1954,8 +2011,8 @@ async function runDecayFit() {{
       throw new Error('fixed half-lives need γ (they are c.o.m. values)');
     }}
     // Only pass the GUI title if the user edited it (the decay plot builds its own default)
-    var guiTitle = document.getElementById('plotTitle').value.trim();
-    var titleArg = (guiTitle !== '' && guiTitle !== DEFAULT_TITLE) ? guiTitle : null;
+    // decay-plot title from the dialog's own box (empty = decay_fit.py's automatic title)
+    var titleFull = document.getElementById('decayTitleBox').value.trim() || null;
     var pMinRaw = document.getElementById('parentMin').value.trim();
     var pMaxRaw = document.getElementById('parentMax').value.trim();
     var parentWindow = null;
@@ -1984,7 +2041,7 @@ async function runDecayFit() {{
       hlIso:    (bateman && hlIsoRaw !== '') ? +hlIsoRaw : null,
       hlGs:     (bateman && hlGsRaw  !== '') ? +hlGsRaw  : null,
       skip:     [skip0, skip1],
-      title:    titleArg,
+      titleFull: titleFull,
       parentWindow: parentWindow
     }};
     var r = await fetch('/run-decay-fit', {{
@@ -2328,7 +2385,8 @@ def serve(html, state):
                     if STATE.get("npz_path") else {}
                 rb = view.get("regBox")
                 self._send(200, {"mode": read_prefs().get("decayRegion") or "sliders",
-                                 "box": rb if isinstance(rb, list) and len(rb) == 4 else None})
+                                 "box": rb if isinstance(rb, list) and len(rb) == 4 else None,
+                                 "title": view.get("decayTitle") or ""})
 
             elif url.path == "/get-pref":
                 key = q.get("key", [""])[0]
@@ -2441,12 +2499,36 @@ def serve(html, state):
                     skip = body.get("skip") or [0, 0]
                     if int(skip[0]) > 0 or int(skip[1]) > 0:
                         cmd += ["--skip", str(int(skip[0])), str(int(skip[1]))]
-                    if body.get("title"):
+                    if body.get("titleFull"):
+                        cmd += ["--title-full", str(body["titleFull"])]
+                    elif body.get("title"):
                         cmd += ["--title", str(body["title"])]
                     _subprocess.Popen(cmd)
                     self._send(200, {"status": "launched"})
                 except Exception as exc:
                     self._send(500, {"error": str(exc)})
+
+            elif self.path == "/region-ions":
+                # simulated lines (current PID settings) inside [fMin, fMax],
+                # T1/2-cut ions left out, nearest to the window centre first
+                try:
+                    b = self._body()
+                    f0, f1 = sorted((float(b["fMin"]), float(b["fMax"])))
+                    if STATE.get("file_sum") is None:
+                        raise ValueError("no file loaded")
+                    res = compute_sim_lines(STATE["file_freq"], STATE["file_sum"], sim_prefs())
+                    c = 0.5 * (f0 + f1)
+                    hits = [l for l in res["lines"] if f0 <= l["f"] <= f1 and not l["excluded"]]
+                    hits.sort(key=lambda l: abs(l["f"] - c))
+                    for l in hits:
+                        l.pop("label", None)
+                        l["df"] = l["f"] - c
+                    self._send(200, {"hits": hits[:200], "n": len(hits)})
+                except ImportError as exc:
+                    self._send(400, {"error": f"{exc} (needs pandas, and nubase_reader.py + "
+                                              f"nubase_4.mas20 next to this script)"})
+                except Exception as exc:
+                    self._send(400, {"error": str(exc)})
 
             elif self.path == "/search-ion":
                 # simulated lines (current PID settings, whole file) whose ion
@@ -2501,8 +2583,9 @@ def serve(html, state):
                             if isinstance(body.get("view"), dict):
                                 new_view = dict(body["view"])
                                 old_view = sess.get("view") if isinstance(sess.get("view"), dict) else {}
-                                if "regBox" not in new_view and "regBox" in old_view:
-                                    new_view["regBox"] = old_view["regBox"]   # page not ready yet
+                                for k in ("regBox", "decayTitle"):     # page not ready yet
+                                    if k not in new_view and k in old_view:
+                                        new_view[k] = old_view[k]
                                 sess["view"] = new_view
                             if "linear" in body:
                                 sess["linear"] = bool(body["linear"])

@@ -46,6 +46,7 @@ Common options
   --gamma G         Lorentz factor γ; converts c.o.m. half-lives to lab frame,
                     and shows t½(c.o.m.) = t½(lab) / γ in the plot annotation.
   --title TEXT      Extra text appended to the auto-generated plot title
+  --title-full TEXT Use TEXT as the whole plot title instead
   --skip X Y        Skip the first X and last Y time bins
   --err-coeffs A B  Manual per-point error bars σ = A·I + B (single-frame
                     calibration). With --time-avg N, σ is divided by √N.
@@ -119,6 +120,9 @@ def parse_args():
                              "and shows t½(c.o.m.) in annotation.")
     parser.add_argument("--title", type=str, default=None,
                         help="Extra text appended to the auto-generated plot title")
+    parser.add_argument("--title-full", type=str, default=None, metavar="TEXT",
+                        help="Use TEXT as the whole plot title (replaces the auto-generated "
+                             "title; --title is then ignored)")
     parser.add_argument("--skip", type=int, nargs=2, default=[0, 0], metavar=("X", "Y"),
                         help="Skip the first X and last Y time bins (applied before --tmin/--tmax)")
     parser.add_argument("--err-coeffs", type=float, nargs=2, default=None, metavar=("A", "B"),
@@ -476,7 +480,8 @@ def make_equation_text_bateman(resolved, gamma=None):
 
 def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, resolved,
                with_offset, bateman, freq_min, freq_max, filename,
-               gamma=None, title_suffix=None, sigma_fit=None, err_note=None):
+               gamma=None, title_suffix=None, sigma_fit=None, err_note=None,
+               title_full=None):
 
     plt.rcParams.update({"font.size": 20})
 
@@ -550,6 +555,8 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
     )
     if title_suffix:
         title += f"   {title_suffix}"
+    if title_full:
+        title = title_full
 
     ax.set_xlabel("Time (s)", fontsize=22)
     ax.set_ylabel("Integrated power (arb. units)", fontsize=22)
@@ -838,6 +845,8 @@ def plot_joint(args, tP, IP, tD, ID, sigmaP, sigmaD, vals, errs,
              f"daughter [{dwin[0]:,.0f} – {dwin[1]:,.0f} Hz]")
     if args.title:
         title += f"   {args.title}"
+    if args.title_full:
+        title = args.title_full
     axP.set_title(title, fontsize=18, pad=8)
     axD.set_xlabel("Time (s)", fontsize=22)
     axD.set_xlim(left=0)
@@ -1035,6 +1044,7 @@ def main():
         args.file,
         gamma=args.gamma,
         title_suffix=args.title,
+        title_full=args.title_full,
         sigma_fit=sigma_fit,
         err_note=err_note,
     )
