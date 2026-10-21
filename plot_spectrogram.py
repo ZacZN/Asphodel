@@ -1151,14 +1151,19 @@ function toggleFull() {
 //    bar (the bar sits at the bottom of the window; the expanded 1-D plot
 //    is below it and the page scrolls) ─────────────────────────────────────
 var _fitTimer = null;
-function fitPlots() {
+// height that makes the 2-D/3-D plots fill the window above the bottom bar
+function plotHeight() {
   var plots = document.getElementById('plots');
   var bar   = document.getElementById('fullToggle');
-  if (!plots || !bar || typeof Plotly === 'undefined') return;
+  if (!plots || !bar) return 680;
   var top   = plots.getBoundingClientRect().top + window.scrollY;
   var boxV  = 2 * 6 + 2;                                  // panel padding + border
   var below = 8 + bar.offsetHeight + 4 + 8;               // gap, bar, gap, body padding
-  var h = Math.max(420, Math.floor(window.innerHeight - top - boxV - below));
+  return Math.max(420, Math.floor(window.innerHeight - top - boxV - below));
+}
+function fitPlots() {
+  if (typeof Plotly === 'undefined') return;
+  var h = plotHeight();
   var setH = function(id, hh) {
     var gd = document.getElementById(id);
     if (!gd || !gd.layout) return null;
@@ -1400,13 +1405,8 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
     else:
         t_init, z_init = t_ds.copy(), z_ds.copy()
 
-    eps = np.finfo(float).tiny
-    z_plot_init = (10.0 * np.log10(np.maximum(z_init, eps)) if log_scale else z_init).T
-
     fig = go.Figure(data=[go.Surface(
-        x=t_init,
-        y=f_plot,
-        z=z_plot_init,
+        x=[0, 1], y=[0, 1], z=[[0, 0], [0, 0]],   # placeholder: real data built in the page
         colorscale=_cs_all[_cs_name],
         colorbar=dict(
             title=dict(text=z_label, side="right"),
@@ -1470,8 +1470,22 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
     db_checked = "checked" if log_scale else ""
     n_avg_init = n_avg
 
-    plot_div = fig.to_html(full_html=False, include_plotlyjs="cdn", div_id="specPlot",
-                           config={"responsive": True})
+    # The 3-D plot is created in the page by _initSurface() from Z_RAW, so only
+    # its style and layout are embedded (not a second copy of the data), and
+    # plotly.js is loaded from the same CDN URL plotly.py would use.
+    import re as _re_cdn
+    from plotly.utils import PlotlyJSONEncoder
+    _cdn = _re_cdn.search(r'<script src="([^"]*cdn\.plot\.ly[^"]*)"',
+                          go.Figure().to_html(full_html=False, include_plotlyjs="cdn"))
+    _cdn_url = _cdn.group(1) if _cdn else "https://cdn.plot.ly/plotly-latest.min.js"
+    _lay = fig.to_plotly_json()["layout"]      # incl. plotly's default template (3-D panes)
+    surf_layout_json = json.dumps(_lay, cls=PlotlyJSONEncoder).replace("</", "<\\/")
+    surf_style_json = json.dumps({
+        "type": "surface",
+        "colorbar": {"title": {"text": z_label, "side": "right"}, "thickness": 18},
+    }).replace("</", "<\\/")
+    plot_div = (f'<script src="{_cdn_url}" charset="utf-8"></script>\n'
+                f'<div id="specPlot" style="width:100%;"></div>')
     _default_title_js = json.dumps(_default_title).replace("</", "<\\/")
     title_html = title.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
 
@@ -1789,6 +1803,8 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
 {loader_js}
 {SIM_JS}
 const Z_RAW = {z_raw_json};
+const SURF_LAYOUT = {surf_layout_json};
+const SURF_STYLE  = {surf_style_json};
 const T_RAW = {t_raw_json};
 const F_PLOT = {f_raw_json};  // freq array, low-to-high (2-D heatmap y-axis)
 const F_1D   = {f_1d_json};   // full-resolution freq array for the 1-D spectrum
@@ -1861,10 +1877,8 @@ function _heat2dZ(rebinnedZ, useDb) {{
   return transpose(useDb ? toDb(Zunflip) : Zunflip);
 }}
 
-function _initHeatmap() {{
-  var n = Math.max(1, Math.round(+document.getElementById('nAvg').value || 1));
+function _initHeatmap(h, rebinned, mm) {{
   var useDb = document.getElementById('dbCheck').checked;
-  var rebinned = rebin(Z_RAW, T_RAW, n);
   var zLabel = useDb ? 'Power (dB)' : 'Power (linear)';
   Plotly.newPlot('heatPlot', [{{
     type: 'heatmap',
@@ -1872,6 +1886,7 @@ function _initHeatmap() {{
     y: F_PLOT,
     z: _heat2dZ(rebinned.Z, useDb),
     colorscale: COLORSCALES[CUR_CS],
+    zmin: mm.min, zmax: mm.max, zauto: false,
     colorbar: {{ title: {{ text: zLabel, side: 'right' }} }},
     hovertemplate: 'Time: %{{x:.2f}} s<br>Freq: %{{y:,.0f}} Hz<br>' + zLabel + ': %{{z:.2f}}<extra></extra>'
   }}, {{
@@ -1928,7 +1943,7 @@ function _initHeatmap() {{
     paper_bgcolor: '#111827', plot_bgcolor: '#1f2937',
     font: {{ color: '#e5e7eb' }},
     margin: {{ l: 110, r: 20, t: 120, b: 60 }},
-    height: 680,   // resized to fill the window by fitPlots()
+    height: h,     // fills the window (plotHeight); refit on resize by fitPlots()
   }}, {{ responsive: true }});
 }}
 
@@ -2233,11 +2248,10 @@ function _stepAxis(c) {{
   return out;
 }}
 
-function _renderSurface(rebinned) {{
-  if (!rebinned) {{
-    var n = Math.max(1, Math.round(+document.getElementById('nAvg').value || 1));
-    rebinned = rebin(Z_RAW, T_RAW, n);
-  }}
+// Trace data for the 3-D plot (smooth surface or stepped "bars"), as plain
+// values; _renderSurface wraps them for Plotly.update, _initSurface uses them
+// directly in Plotly.newPlot.
+function _surfaceData(rebinned) {{
   var useDb  = document.getElementById('dbCheck').checked;
   var bars   = document.getElementById('bars3d').checked;
   var zLabel = useDb ? 'Power (dB)' : 'Power (linear)';
@@ -2256,19 +2270,49 @@ function _renderSurface(rebinned) {{
       Zs.push(zr, zr.slice()); cd.push(cr, cr);
     }}
     upd = {{
-      x: [_stepAxis(t)], y: [_stepAxis(fDesc)], z: [Zs], customdata: [cd],
-      hovertemplate: ['Time: %{{customdata[0]:.2f}} s<br>Freq: %{{customdata[1]:,.0f}} Hz<br>' +
-                      zLabel + ': %{{z:.2f}}<extra></extra>']
+      x: _stepAxis(t), y: _stepAxis(fDesc), z: Zs, customdata: cd,
+      hovertemplate: 'Time: %{{customdata[0]:.2f}} s<br>Freq: %{{customdata[1]:,.0f}} Hz<br>' +
+                     zLabel + ': %{{z:.2f}}<extra></extra>'
     }};
   }} else {{
     upd = {{
-      x: [rebinned.t], y: [fDesc], z: [Zt], customdata: [null],
-      hovertemplate: ['Time: %{{x:.2f}} s<br>Freq: %{{y:,.0f}} Hz<br>' + zLabel + ': %{{z:.2f}}<extra></extra>']
+      x: rebinned.t, y: fDesc, z: Zt, customdata: null,
+      hovertemplate: 'Time: %{{x:.2f}} s<br>Freq: %{{y:,.0f}} Hz<br>' + zLabel + ': %{{z:.2f}}<extra></extra>'
     }};
   }}
-  upd['colorbar.title.text'] = [zLabel];
-  Plotly.restyle('specPlot', upd, [0]);
-  Plotly.relayout('specPlot', {{'scene.zaxis.title.text': zLabel}});
+  upd.zLabel = zLabel;
+  return upd;
+}}
+
+function _renderSurface(rebinned) {{
+  if (!rebinned) {{
+    var n = Math.max(1, Math.round(+document.getElementById('nAvg').value || 1));
+    rebinned = rebin(Z_RAW, T_RAW, n);
+  }}
+  var d = _surfaceData(rebinned);
+  // one redraw: data + z-axis title together
+  Plotly.update('specPlot', {{
+    x: [d.x], y: [d.y], z: [d.z], customdata: [d.customdata], hovertemplate: [d.hovertemplate],
+    'colorbar.title.text': [d.zLabel]
+  }}, {{'scene.zaxis.title.text': d.zLabel}}, [0]);
+}}
+
+// Create the 3-D plot once, already sized, styled and colour-ranged
+function _initSurface(h, rebinned, mm) {{
+  var d = _surfaceData(rebinned);
+  var trace = Object.assign({{}}, SURF_STYLE, {{
+    x: d.x, y: d.y, z: d.z, customdata: d.customdata, hovertemplate: d.hovertemplate,
+    cmin: mm.min, cmax: mm.max, cauto: false
+  }});
+  trace.colorbar = Object.assign({{}}, SURF_STYLE.colorbar, {{title: {{text: d.zLabel, side: 'right'}}}});
+  trace.colorscale = COLORSCALES[CUR_CS];
+  var layout = JSON.parse(JSON.stringify(SURF_LAYOUT));
+  layout.height = h;
+  layout.scene = layout.scene || {{}};
+  layout.scene.zaxis = Object.assign({{}}, layout.scene.zaxis, {{range: [mm.min, mm.max], title: {{text: d.zLabel}}}});
+  var gd = document.getElementById('specPlot');
+  gd.style.height = h + 'px';
+  return Plotly.newPlot('specPlot', [trace], layout, {{responsive: true}});
 }}
 
 function updateSurface() {{
@@ -2346,11 +2390,10 @@ function _rescaleToWindow(Z, t) {{
   var tMax = +document.getElementById('tMax').value;
   var useDb = document.getElementById('dbCheck').checked;
   var mm = windowMinMax(Z, t, tMin, tMax, fMin, fMax, useDb);
-  // Colorscale bounds (both plots)
-  Plotly.restyle('specPlot', {{ cmin: [mm.min], cmax: [mm.max], cauto: [false] }}, [0]);
+  // Colour range (both plots) and 3-D z-axis range: one redraw per plot
+  Plotly.update('specPlot', {{ cmin: [mm.min], cmax: [mm.max], cauto: [false] }},
+                {{ 'scene.zaxis.range': [mm.min, mm.max] }}, [0]);
   if (_heatReady) Plotly.restyle('heatPlot', {{ zmin: [mm.min], zmax: [mm.max], zauto: [false] }}, [0]);
-  // 3-D z-axis height range
-  Plotly.relayout('specPlot', {{ 'scene.zaxis.range': [mm.min, mm.max] }});
 }}
 
 function update() {{
@@ -2392,7 +2435,18 @@ var _lastT1d = [null, null];
 
 // Initialise the 2-D heatmap and 1-D spectrum immediately on load
 _syncDecayControls();
-_initHeatmap();
+// Draw each plot once: data, colour range, z-range and height all known up front
+(function() {{
+  var n = Math.max(1, Math.round(+document.getElementById('nAvg').value || 1));
+  var rebinned = rebin(Z_RAW, T_RAW, n);
+  var mm = windowMinMax(rebinned.Z, rebinned.t,
+                        +document.getElementById('tMin').value, +document.getElementById('tMax').value,
+                        +document.getElementById('fMin').value, +document.getElementById('fMax').value,
+                        document.getElementById('dbCheck').checked);
+  var h = plotHeight();
+  _initHeatmap(h, rebinned, mm);
+  _initSurface(h, rebinned, mm);
+}})();
 _fetchSpec1d();
 _setFull({_full_open_js});
 // the page is built once per load; re-read the saved state so a browser refresh keeps it
@@ -2401,14 +2455,7 @@ fetch('/get-pref?key=fullOpen').then(function(r) {{ return r.json(); }}).then(fu
   if (open !== _fullOpen()) {{ _setFull(open); if (open) _renderFull(); }}
 }}).catch(function() {{}});
 _fetchFull();
-fitPlots();
-// Align colorscale max across both plots using full data range
-(function() {{
-  var n = Math.max(1, Math.round(+document.getElementById('nAvg').value || 1));
-  var rebinned = rebin(Z_RAW, T_RAW, n);
-  if (document.getElementById('bars3d').checked) _renderSurface(rebinned);
-  _rescaleToWindow(rebinned.Z, rebinned.t);
-}})();
+fitPlots();   // only redraws if the window changed size meanwhile
 _hookCamera();
 _initRegion({_reg_init_js});
 if (document.getElementById('sim_show').checked) runSim();
