@@ -539,9 +539,22 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
     # optional residual panel underneath sharing its time axis
     ncols = 2 if log_plot else 1
     nrows = 2 if show_residuals else 1
-    fig = plt.figure(figsize=(16 if ncols == 1 else 26, 6 if nrows == 1 else 8.5))
-    gs  = fig.add_gridspec(nrows, ncols, height_ratios=[3, 1] if nrows == 2 else [1],
-                           hspace=0.05, wspace=0.12)
+    multi = ncols > 1 or nrows > 1
+    figsize = (16 if ncols == 1 else 26, 6 if nrows == 1 else 8.5)
+    if multi:
+        # constrained layout keeps axis labels/titles inside the figure,
+        # also when the window is smaller than figsize or is resized
+        try:
+            fig = plt.figure(figsize=figsize, layout="constrained")
+        except TypeError:                                   # matplotlib < 3.5
+            fig = plt.figure(figsize=figsize, constrained_layout=True)
+        try:
+            fig.get_layout_engine().set(h_pad=0.04, w_pad=0.04, hspace=0.0, wspace=0.03)
+        except AttributeError:
+            fig.set_constrained_layout_pads(h_pad=0.04, w_pad=0.04, hspace=0.0, wspace=0.03)
+    else:
+        fig = plt.figure(figsize=figsize)
+    gs  = fig.add_gridspec(nrows, ncols, height_ratios=[3, 1] if nrows == 2 else [1])
     ax      = fig.add_subplot(gs[0, 0])
     ax_log  = fig.add_subplot(gs[0, 1]) if log_plot else None
     ax_res  = fig.add_subplot(gs[1, 0], sharex=ax) if show_residuals else None
@@ -650,13 +663,24 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
     if ax_res is not None:
         if sigma_fit is not None:
             r_plot, r_label = residuals / sigma_fit, r"(data − fit)/$\sigma$"
+            band, band_txt  = 1.0, "±1σ"
         else:
+            # unweighted: no per-point σ, so use the rms residual as 1σ
             r_plot, r_label = residuals, "data − fit"
+            band, band_txt  = float(np.sqrt(np.mean(residuals ** 2))), "±1σ (rms)"
+        n_out   = int(np.sum(np.abs(r_plot) > band))
+        pct_out = 100.0 * n_out / len(r_plot) if len(r_plot) else float("nan")
+        stat_txt = (f"outside {band_txt}: {pct_out:.1f}%  ({n_out}/{len(r_plot)})"
+                    f"   Gaussian ≈ 31.7%")
+        print(f"  Residuals: {pct_out:.1f}% of points outside {band_txt} "
+              f"({n_out}/{len(r_plot)}; 31.7% expected for Gaussian errors)")
         for a_r in (ax_res, ax_lres):
             if a_r is None:
                 continue
-            if sigma_fit is not None:
-                a_r.axhspan(-1, 1, color="0.85", zorder=0)
+            a_r.axhspan(-band, band, color="0.85", zorder=0)
+            a_r.text(0.995, 0.95, stat_txt, transform=a_r.transAxes, ha="right", va="top",
+                     fontsize=13, bbox=dict(boxstyle="round,pad=0.25", facecolor="white",
+                                            edgecolor="0.7", alpha=0.85))
             a_r.axhline(0, color="#dd4444", lw=1.5)
             a_r.plot(time_fit, r_plot, "o", ms=3, color="black")
             a_r.set_ylabel(r_label, fontsize=18)
@@ -674,11 +698,11 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
     # One title: over the single panel, or centred over both columns
     if ncols == 1:
         ax.set_title(format_title_mathtext(title), fontsize=22, pad=8)
-        fig.tight_layout(pad=0)
-        fig.subplots_adjust(right=0.98)
     else:
         fig.suptitle(format_title_mathtext(title), fontsize=22)
-        fig.subplots_adjust(left=0.06, right=0.99, top=0.92, bottom=0.09 if nrows == 2 else 0.12)
+    if not multi:
+        fig.tight_layout(pad=0)
+        fig.subplots_adjust(right=0.98)
     plt.show()
 
     # Console summary
