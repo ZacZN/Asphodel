@@ -1473,6 +1473,23 @@ results_tab = html.Div([
 ], style={"padding": "14px 18px", "overflowY": "auto", "height": "calc(100vh - 42px)"})
 
 
+# Peak-fit parameter table (one row per peak).  Value columns are editable;
+# uncertainties and derived quantities are not.
+FIT_COLUMNS = [
+    {"name": "peak", "id": "peak", "editable": False},
+    {"name": "centre (Hz)", "id": "centre", "type": "numeric", "editable": True},
+    {"name": "± centre", "id": "d_centre", "editable": False},
+    {"name": "amplitude", "id": "amp", "type": "numeric", "editable": True},
+    {"name": "± amp", "id": "d_amp", "editable": False},
+    {"name": "FWHM (Hz)", "id": "fwhm", "type": "numeric", "editable": True},
+    {"name": "± FWHM", "id": "d_fwhm", "editable": False},
+    {"name": "η (Lorentz fraction)", "id": "eta", "type": "numeric", "editable": True},
+    {"name": "± η", "id": "d_eta", "editable": False},
+    {"name": "area", "id": "area", "editable": False},
+    {"name": "± area", "id": "d_area", "editable": False},
+]
+
+
 # Further output: reads files saved by confirmation mode (confirmed/*.csv) for
 # further processing: a numbered file list and spectrum summing.
 further_tab = html.Div([
@@ -1517,14 +1534,87 @@ further_tab = html.Div([
                    "±5 kHz around the ion/harmonic chosen in the dropdown; with an identified peak, "
                    "spectra without that ion/harmonic are left out.  Bins not covered by every "
                    "shifted spectrum are dropped.", style=HELP_STYLE),
-        html.Div(id="sum-status", style={"fontSize": "13px", "margin": "6px 0"}),
-        dcc.Loading(dcc.Graph(id="sum-graph", figure=empty_fig("Load files and click “Sum spectra”"),
-                              # doubleClick off: a touchpad double-tap (to drag/pan)
-                              # otherwise triggers Plotly's reset/autoscale, which
-                              # redraws all ~131k points and stalls the page.
-                              config={"scrollZoom": True, "displaylogo": False,
-                                      "doubleClick": False},
-                              style={"height": "560px"}), type="circle", color=ACCENT),
+        # spinner on the status line only, so fit updates of the plot do not
+        # flash a loading overlay over the graph
+        dcc.Loading(html.Div(id="sum-status", style={"fontSize": "13px", "margin": "6px 0",
+                                                     "minHeight": "18px"}),
+                    type="dot", color=ACCENT),
+        dcc.Store(id="sum-key", data=None),
+
+        # ---- Peak fitting (on the summed spectrum) ----------------------
+        html.Div([
+            html.Button("Peak fitting", id="btn-fit-mode", className="btn btn-outline-secondary btn-sm",
+                        title="Turn on, then click peaks in the plot to add them to the fit",
+                        style={"marginRight": "12px", "fontWeight": "600"}),
+            html.Span("Shape:", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
+            dcc.Dropdown(id="fit-shape", value="gauss", clearable=False,
+                         options=[{"label": "Gaussian", "value": "gauss"},
+                                  {"label": "Lorentzian", "value": "lorentz"},
+                                  {"label": "Pseudo-Voigt", "value": "pvoigt"}],
+                         style={"width": "150px", "fontSize": "13px", "marginRight": "12px"}),
+            html.Span("Background:", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
+            dcc.RadioItems(id="fit-bg", value="const", inline=True,
+                           options=[{"label": "none", "value": "none"},
+                                    {"label": "constant", "value": "const"},
+                                    {"label": "linear", "value": "linear"}],
+                           inputStyle={"marginRight": "4px"},
+                           labelStyle={"marginRight": "10px", "fontSize": "13px"}),
+            html.Button("Fit", id="btn-fit-run", className="btn btn-sm",
+                        title="Least-squares fit over the current view, starting from the "
+                              "values in the table",
+                        style={"backgroundColor": ACCENT, "color": "white", "margin": "0 8px 0 6px",
+                               "minWidth": "60px"}),
+            html.Button("Clear peaks", id="btn-fit-clear", className="btn btn-outline-secondary btn-sm"),
+        ], id="fit-bar", style={"display": "flex", "alignItems": "center", "flexWrap": "wrap",
+                                "rowGap": "6px", "margin": "4px 0"}),
+        html.Small("Peak fitting: switch it on and click a peak to add it (the start values snap "
+                   "to the nearest maximum); edit any value in the table to adjust the curve by "
+                   "hand, or press Fit to fit over the current view.  Delete a row to remove a "
+                   "peak.  χ²/ndf uses a noise σ per bin estimated from the summed spectrum; "
+                   "uncertainties are scaled by √(χ²/ndf).", style=HELP_STYLE),
+        html.Div(id="fit-status", style={"fontSize": "13px", "margin": "4px 0"}),
+        dcc.Store(id="fit-mode", data=False),
+        dcc.Store(id="fit-click", data=None),
+        dcc.Store(id="fit-run", data=None),
+        dcc.Store(id="fit-state", data=None),
+        html.Div(id="_fit-mode-hook", style={"display": "none"}),
+
+        dcc.Graph(id="sum-graph", figure=empty_fig("Load files and click “Sum spectra”"),
+                  # doubleClick off: a touchpad double-tap (to drag/pan)
+                  # otherwise triggers Plotly's reset/autoscale, which
+                  # redraws all ~131k points and stalls the page.
+                  config={"scrollZoom": True, "displaylogo": False, "doubleClick": False},
+                  style={"height": "560px"}),
+        dcc.Graph(id="fit-resid", figure=empty_fig(),
+                  config={"scrollZoom": True, "displaylogo": False, "doubleClick": False},
+                  style={"height": "200px", "display": "none"}),
+        html.Div([
+            html.Div("Fit parameters", style={"fontWeight": "700", "fontSize": "13px",
+                                              "margin": "6px 0 4px 0"}),
+            dash_table.DataTable(
+                id="fit-table", data=[], editable=True, row_deletable=True,
+                columns=FIT_COLUMNS,
+                style_header=TABLE_HEADER, style_cell=TABLE_CELL,
+                style_data_conditional=TABLE_ODD + [
+                    {"if": {"column_editable": False}, "color": "#666"}],
+                style_table={"overflowX": "auto"}),
+            html.Div([
+                html.Span("Background  b0", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
+                dcc.Input(id="fit-b0", type="number", step="any", debounce=True,
+                          className="form-control form-control-sm",
+                          style={"width": "150px", "marginRight": "4px"}),
+                html.Span(id="fit-b0-unc", style={"fontSize": "12px", "marginRight": "16px",
+                                                  "fontFamily": "monospace"}),
+                html.Span("b1 (per Hz)", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
+                dcc.Input(id="fit-b1", type="number", step="any", debounce=True,
+                          className="form-control form-control-sm",
+                          style={"width": "150px", "marginRight": "4px"}),
+                html.Span(id="fit-b1-unc", style={"fontSize": "12px", "fontFamily": "monospace"}),
+            ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap",
+                      "marginTop": "6px"}),
+            html.Small("b1 is the slope about the centre of the fit region "
+                       "(background = b0 + b1·(f − f_mid))", style=HELP_STYLE),
+        ], id="fit-panel", style={"display": "none"}),
     ], id="further-content", className="theia-box", style={**BOX_STYLE, "padding": "8px 10px"}),
 ], style={"padding": "14px 18px", "overflowY": "auto", "height": "calc(100vh - 42px)"})
 
@@ -1549,6 +1639,10 @@ _TABLE_CSS = """
 # these rules on.  Plots are darkened with an invert + hue-rotate filter, which
 # turns the white background dark and black traces light while keeping the
 # orange accents orange, so the figure code doesn't need a second colour scheme.
+_FIT_CSS = """
+#sum-graph.fit-mode .nsewdrag { cursor: crosshair !important; }
+"""
+
 _DARK_CSS = """
 /* High-contrast dark theme: near-black backgrounds, near-white text */
 body.dark { background: #0a0a0a !important; color: #f5f5f5 !important; }
@@ -1610,7 +1704,7 @@ body.dark .current-page-shadow { color: transparent !important; }
 body.dark .js-plotly-plot { filter: invert(1) hue-rotate(180deg) contrast(1.15); }
 """
 app.index_string = app.index_string.replace(
-    "{%css%}", "{%css%}\n<style>" + _TABLE_CSS + _DARK_CSS + "</style>")
+    "{%css%}", "{%css%}\n<style>" + _TABLE_CSS + _FIT_CSS + _DARK_CSS + "</style>")
 # Spectrum graphs that get the bottom-right coordinate readout
 READOUT_GRAPHS = ["preview-graph", "snippet-graph", "refview-graph", "sum-graph"]
 TAB_STYLE = {"padding": "8px 16px", "fontWeight": "600"}
@@ -2650,9 +2744,59 @@ def toggle_sum_ion(align):
             "display": "none" if align == "none" else "block"}
 
 
+# Summed spectra are kept on the server (keyed by sum-key) so the peak-fit
+# callbacks can use the data without sending it back and forth.
+_SUM_CACHE = {}
+_SUM_CACHE_LOCK = threading.Lock()
+
+
+def _cache_sum(ff, pp):
+    key = f"{time.time():.6f}"
+    d = np.diff(pp[np.isfinite(pp)])
+    # noise sigma per bin from the bin-to-bin differences (robust to peaks)
+    sigma = float(1.4826 * np.median(np.abs(d - np.median(d))) / np.sqrt(2)) if len(d) else 1.0
+    with _SUM_CACHE_LOCK:
+        _SUM_CACHE[key] = (ff, pp, sigma or 1.0)
+        for k in list(_SUM_CACHE)[:-4]:          # keep the last few sums only
+            _SUM_CACHE.pop(k, None)
+    return key
+
+
+# Fit-overlay traces appended after the spectrum (trace 0) in the summed plot;
+# they are updated in place (Patch) so the view is not reset.
+FIT_TRACE_STYLES = [
+    dict(name="fit", mode="lines", line=dict(color=ACCENT, width=2.5)),
+    dict(name="fit components", mode="lines", line=dict(color="#555555", width=1.2, dash="dash")),
+    dict(name="fit background", mode="lines", line=dict(color="#999999", width=1.2, dash="dot")),
+    dict(name="fit peaks", mode="markers",
+         marker=dict(symbol="x-thin", size=12, color=ACCENT, line=dict(width=2.5, color=ACCENT))),
+]
+
+
+@app.callback(
+    Output("sum-graph", "figure", allow_duplicate=True),
+    Input("fit-state", "data"),
+    State("sum-key", "data"),
+    prevent_initial_call=True,
+)
+def draw_fit(fit_state, key):
+    """Update only the fit-overlay traces (Patch), so the zoom is kept.
+    (allow_duplicate: the figure itself is built by show_sum.)"""
+    with _SUM_CACHE_LOCK:
+        cached = _SUM_CACHE.get(key)
+    if cached is None or (fit_state and fit_state.get("sum_key") != key):
+        return dash.no_update
+    patch = dash.Patch()
+    for i, (x, y) in enumerate(fit_overlay(cached[0], fit_state), start=1):
+        patch["data"][i]["x"] = x
+        patch["data"][i]["y"] = y
+    return patch
+
+
 @app.callback(
     Output("sum-graph", "figure"),
     Output("sum-status", "children"),
+    Output("sum-key", "data"),
     Input("btn-sum", "n_clicks"),
     State("further-files", "data"),
     State("sum-align", "value"),
@@ -2662,11 +2806,12 @@ def toggle_sum_ion(align):
 )
 def show_sum(_, files, align, ion_key, unsure):
     if not files:
-        return empty_fig("No confirmation files loaded"), "Load at least one file first."
+        return empty_fig("No confirmation files loaded"), "Load at least one file first.", None
     try:
         ff, pp, info = sum_spectra(files, align, ion_key, bool(unsure))
     except Exception as exc:
-        return empty_fig(str(exc)), html.Span(f"Error: {exc}", style={"color": "#c0392b"})
+        return empty_fig(str(exc)), html.Span(f"Error: {exc}", style={"color": "#c0392b"}), None
+    key = _cache_sum(ff, pp)
 
     if align == "identified":
         ion, harm = ion_key.rsplit("|", 1)
@@ -2683,6 +2828,8 @@ def show_sum(_, files, align, ion_key, unsure):
     # points made every mouse move push hoverData through Dash, which is slow.
     fig.add_trace(go.Scattergl(x=ff, y=pp, mode="lines", name="Spectrum", hoverinfo="skip",
                                line=dict(shape="hvh", color="black", width=1)))
+    for st in FIT_TRACE_STYLES:                      # empty until peaks are added
+        fig.add_trace(go.Scatter(x=[], y=[], hoverinfo="skip", **st))
     if info["target"] is not None:
         fig.add_vline(x=info["target"], line=dict(color=ACCENT, width=1.5, dash="dash"),
                       annotation_text=f"aligned at {info['target']:.1f} Hz",
@@ -2698,7 +2845,9 @@ def show_sum(_, files, align, ion_key, unsure):
     fig.update_layout(title=title, xaxis_title="Frequency (Hz)",
                       yaxis_title="Summed Schottky Power (a.u.)", hovermode=False,
                       dragmode="pan", template="plotly_white", font=dict(size=14),
-                      margin=dict(l=60, r=20, t=50, b=40), showlegend=False)
+                      margin=dict(l=60, r=20, t=50, b=40), showlegend=False,
+                      # keeps the user's zoom while the fit traces are patched
+                      uirevision=key)
 
     sh = info["shifts"]
     parts = [f"Summed {info['n']} spectra ({how})"]
@@ -2720,7 +2869,473 @@ def show_sum(_, files, align, ion_key, unsure):
                                + "; ".join(info["failed"][:3])
                                + (" …" if len(info["failed"]) > 3 else ""),
                                style={"color": "#c0392b"}))
-    return fig, status
+    return fig, status, key
+
+
+# ===========================================================================
+# Further output: peak fitting on the summed spectrum
+# ===========================================================================
+#
+# Parameters per peak: centre (Hz), amplitude (peak height above background),
+# FWHM (Hz) and, for pseudo-Voigt, eta (Lorentzian fraction, 0..1).  All
+# shapes are written in terms of FWHM so switching shape keeps the width.
+# Fitting is done in offset frequency u = f - xref (xref = middle of the fit
+# region) to keep the numbers well conditioned.
+
+_FWHM_TO_SIGMA = 1.0 / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+
+
+def _peak_shape(u, c, a, w, eta, shape):
+    w = max(abs(w), 1e-9)
+    g = np.exp(-0.5 * ((u - c) / (w * _FWHM_TO_SIGMA)) ** 2)
+    if shape == "gauss":
+        return a * g
+    lor = 1.0 / (1.0 + ((u - c) / (w / 2.0)) ** 2)
+    if shape == "lorentz":
+        return a * lor
+    eta = min(max(eta, 0.0), 1.0)
+    return a * (eta * lor + (1.0 - eta) * g)
+
+
+def _peak_area(a, w, eta, shape):
+    ga = a * w * _FWHM_TO_SIGMA * np.sqrt(2 * np.pi)
+    la = a * np.pi * w / 2.0
+    if shape == "gauss":
+        return ga
+    if shape == "lorentz":
+        return la
+    return eta * la + (1 - eta) * ga
+
+
+def _n_bg(bg):
+    return {"none": 0, "const": 1, "linear": 2}.get(bg, 0)
+
+
+def _pack(state):
+    """state -> (p0, names) for the parameters; centres as offsets from xref."""
+    xref, shape = state["xref"], state["shape"]
+    p, names = [], []
+    for i, pk in enumerate(state["peaks"]):
+        p += [pk["centre"] - xref, pk["amp"], pk["fwhm"]]
+        names += [(i, "centre"), (i, "amp"), (i, "fwhm")]
+        if shape == "pvoigt":
+            p.append(pk.get("eta", 0.5))
+            names.append((i, "eta"))
+    for j in range(_n_bg(state["bg"])):
+        p.append(state["bgp"][j])
+        names.append((None, f"b{j}"))
+    return np.array(p, dtype=float), names
+
+
+def _model_from_vector(u, p, n_peaks, shape, bg):
+    k = 4 if shape == "pvoigt" else 3
+    y = np.zeros_like(u, dtype=float)
+    for i in range(n_peaks):
+        c, a, w = p[i * k: i * k + 3]
+        eta = p[i * k + 3] if shape == "pvoigt" else 0.0
+        y += _peak_shape(u, c, a, w, eta, shape)
+    nb = _n_bg(bg)
+    if nb >= 1:
+        y += p[n_peaks * k]
+    if nb == 2:
+        y += p[n_peaks * k + 1] * u
+    return y
+
+
+def fit_overlay(ff, state):
+    """(x, y) for the four overlay traces: total, components (each on top of
+    the background), background, peak markers.  Evaluated on a fine grid
+    over the fit region; all empty if there are no peaks."""
+    if not state or not state.get("peaks") or not state.get("region"):
+        return [([], [])] * len(FIT_TRACE_STYLES)
+    lo, hi = state["region"]
+    bin_hz = float(np.median(np.diff(ff))) if len(ff) > 1 else 1.0
+    n = int(min(6000, max(200, 6 * (hi - lo) / bin_hz)))
+    x = np.linspace(lo, hi, n)
+    u = x - state["xref"]
+    shape, nb = state["shape"], _n_bg(state["bg"])
+    bgp = state.get("bgp") or [0.0, 0.0]
+    back = np.zeros_like(u)
+    if nb >= 1:
+        back += bgp[0]
+    if nb == 2:
+        back += bgp[1] * u
+    total = back.copy()
+    cx, cy = [], []
+    for pk in state["peaks"]:
+        comp = _peak_shape(u, pk["centre"] - state["xref"], pk["amp"], pk["fwhm"],
+                           pk.get("eta", 0.5), shape)
+        total += comp
+        cx += x.tolist() + [None]
+        cy += (comp + back).tolist() + [None]
+    mx = [pk["centre"] for pk in state["peaks"]]
+    my = [float(np.interp(c, x, total)) for c in mx]
+    return [(x.tolist(), total.tolist()),
+            (cx, cy),
+            (x.tolist(), back.tolist()) if nb else ([], []),
+            (mx, my)]
+
+
+def _region_mask(ff, region):
+    lo, hi = region
+    return (ff >= lo) & (ff <= hi)
+
+
+def run_fit(ff, pp, sigma, state):
+    """Least-squares fit over the region, starting from the current values.
+    Returns the updated state (values, uncertainties, chi2/ndf)."""
+    from scipy.optimize import curve_fit
+    m = _region_mask(ff, state["region"]) & np.isfinite(pp)
+    u, y = ff[m] - state["xref"], pp[m]
+    p0, names = _pack(state)
+    if len(u) <= len(p0):
+        raise ValueError(f"Only {len(u)} bins in the view for {len(p0)} parameters: zoom out a little")
+    lo_u, hi_u = float(u.min()), float(u.max())
+    bin_hz = float(np.median(np.diff(ff[m])))
+    lb, ub = [], []
+    for (_, what) in names:
+        if what == "centre":
+            lb.append(lo_u); ub.append(hi_u)
+        elif what == "amp":
+            lb.append(0.0); ub.append(np.inf)
+        elif what == "fwhm":
+            lb.append(0.05 * bin_hz); ub.append(max(hi_u - lo_u, bin_hz))
+        elif what == "eta":
+            lb.append(0.0); ub.append(1.0)
+        else:
+            lb.append(-np.inf); ub.append(np.inf)
+    lb, ub = np.array(lb), np.array(ub)
+    for q in range(len(p0)):                      # start strictly inside the bounds
+        if not (lb[q] < p0[q] < ub[q]):
+            span = (ub[q] - lb[q]) if np.isfinite(ub[q] - lb[q]) else max(abs(p0[q]), 1.0)
+            p0[q] = min(max(p0[q], lb[q] + 1e-6 * span), ub[q] - 1e-6 * span)
+    n_peaks, shape, bg = len(state["peaks"]), state["shape"], state["bg"]
+
+    def f(uu, *p):
+        return _model_from_vector(uu, np.array(p), n_peaks, shape, bg)
+
+    # absolute_sigma=False: the covariance is scaled by chi2/ndf, i.e. the
+    # uncertainties are scaled by sqrt(chi2/ndf).  The noise sigma is only a
+    # rough estimate (and real peaks are not perfect line shapes), so this
+    # lets the scatter of the data about the fit set the uncertainties.
+    popt, pcov = curve_fit(f, u, y, p0=p0, sigma=np.full(len(u), sigma), absolute_sigma=False,
+                           bounds=(lb, ub), maxfev=20000)
+    ok_cov = np.all(np.isfinite(pcov))
+    perr = np.sqrt(np.clip(np.diag(pcov), 0, None)) if ok_cov else np.full(len(popt), np.nan)
+    resid = y - f(u, *popt)
+    ndf = max(len(u) - len(popt), 1)
+
+    new = dict(state)
+    new["peaks"] = [dict(pk) for pk in state["peaks"]]
+    new["bgp"] = list(state.get("bgp") or [0.0, 0.0])
+    unc = {"peaks": [{} for _ in state["peaks"]], "bgp": [None, None]}
+    for (i, what), v, e in zip(names, popt, perr):
+        if i is None:
+            j = int(what[1])
+            new["bgp"][j], unc["bgp"][j] = float(v), float(e)
+        else:
+            new["peaks"][i][what] = float(v + state["xref"]) if what == "centre" else float(v)
+            unc["peaks"][i][what] = float(e)
+    # area uncertainty: linear error propagation with a numerical gradient
+    for i in range(n_peaks):
+        idx = [k for k, (j, _) in enumerate(names) if j == i]
+        keys = [names[k][1] for k in idx]
+
+        def area_of(vec):
+            d = dict(zip(keys, vec))
+            return _peak_area(d["amp"], d["fwhm"], d.get("eta", 0.5), shape)
+        v0 = popt[idx].astype(float)
+        grad = np.zeros(len(idx))
+        for q in range(len(idx)):
+            h = 1e-6 * max(abs(v0[q]), 1.0)
+            vp = v0.copy()
+            vp[q] += h
+            grad[q] = (area_of(vp) - area_of(v0)) / h
+        sub = pcov[np.ix_(idx, idx)]
+        unc["peaks"][i]["area"] = (float(np.sqrt(max(grad @ sub @ grad, 0.0)))
+                                   if ok_cov else float("nan"))
+    new.update(unc=unc, chi2=float(np.sum((resid / sigma) ** 2) / ndf), ndf=int(ndf),
+               sigma=float(sigma), fitted=True)
+    return new
+
+
+def _snap_peak(ff, pp, x, bgp, bg):
+    """Start values for a peak clicked at x: centre and amplitude from the
+    highest bin within +-3 bins, FWHM from where the data fall to half height."""
+    k0 = int(np.clip(np.searchsorted(ff, x), 0, len(ff) - 1))
+    lo, hi = max(k0 - 3, 0), min(k0 + 4, len(ff))
+    k = lo + int(np.nanargmax(pp[lo:hi]))
+    base = bgp[0] if _n_bg(bg) >= 1 else 0.0
+    amp = max(float(pp[k] - base), 0.0)
+    half = base + amp / 2.0
+    left = k
+    while left > 0 and pp[left - 1] > half and k - left < 200:
+        left -= 1
+    right = k
+    while right < len(pp) - 1 and pp[right + 1] > half and right - k < 200:
+        right += 1
+    bin_hz = float(np.median(np.diff(ff[max(k - 5, 0):k + 6])))
+    fwhm = max((right - left + 1) * bin_hz, 1.5 * bin_hz)
+    return {"centre": float(ff[k]), "amp": amp, "fwhm": fwhm, "eta": 0.5}
+
+
+def _fmt_num(v, fmt):
+    try:
+        return "–" if v is None or not np.isfinite(v) else format(v, fmt)
+    except TypeError:
+        return "–"
+
+
+def fit_table_rows(state):
+    if not state or not state.get("peaks"):
+        return []
+    unc = (state.get("unc") or {}).get("peaks") or [{} for _ in state["peaks"]]
+    pv = state["shape"] == "pvoigt"
+    rows = []
+    for i, (pk, e) in enumerate(zip(state["peaks"], unc), start=1):
+        area = _peak_area(pk["amp"], pk["fwhm"], pk.get("eta", 0.5), state["shape"])
+        rows.append({
+            "peak": i,
+            "centre": round(pk["centre"], 2), "d_centre": _fmt_num(e.get("centre"), ".2f"),
+            "amp": float(f"{pk['amp']:.6g}"), "d_amp": _fmt_num(e.get("amp"), ".3g"),
+            "fwhm": round(pk["fwhm"], 2), "d_fwhm": _fmt_num(e.get("fwhm"), ".2f"),
+            "eta": round(pk.get("eta", 0.5), 4) if pv else None,
+            "d_eta": _fmt_num(e.get("eta"), ".3f") if pv else "",
+            "area": _fmt_num(area, ".5g"), "d_area": _fmt_num(e.get("area"), ".3g"),
+        })
+    return rows
+
+
+def _fit_status(state):
+    if not state or not state.get("peaks"):
+        return ""
+    lo, hi = state["region"]
+    reg = f"region {lo:.1f} – {hi:.1f} Hz ({hi - lo:.0f} Hz wide)"
+    if state.get("fitted"):
+        return html.Span([html.B("Fitted: "),
+                          f"{len(state['peaks'])} peak(s), {reg}  ·  χ²/ndf = "
+                          f"{state['chi2']:.3g} (ndf = {state['ndf']}, noise σ = "
+                          f"{state['sigma']:.3g} per bin; uncertainties scaled by √(χ²/ndf))"])
+    return html.Span([html.B("Start values, not fitted: "),
+                      f"{len(state['peaks'])} peak(s), {reg}  ·  edit the table or press Fit"],
+                     style={"color": "#888"})
+
+
+@app.callback(
+    Output("fit-mode", "data"),
+    Output("btn-fit-mode", "children"),
+    Output("btn-fit-mode", "style"),
+    Input("btn-fit-mode", "n_clicks"),
+    State("fit-mode", "data"),
+    prevent_initial_call=True,
+)
+def toggle_fit_mode(_, on):
+    on = not on
+    base = {"marginRight": "12px", "fontWeight": "600"}
+    if on:
+        return True, "Peak fitting: ON (click peaks)", {**base, "backgroundColor": ACCENT,
+                                                         "color": "white", "borderColor": ACCENT}
+    return False, "Peak fitting", base
+
+
+# In peak-fitting mode a click (without dragging) on the summed plot adds a
+# peak there: the browser converts the pixel position to Hz and hands it to
+# the server through the fit-click store (with the current view range, which
+# becomes the fit region).
+app.clientside_callback(
+    """
+    function(on, figure) {
+        window._theiaFitMode = !!on;
+        var box = document.getElementById('sum-graph');
+        if (box) box.classList.toggle('fit-mode', !!on);
+        setTimeout(function() {
+            var gd = document.querySelector('#sum-graph .js-plotly-plot');
+            if (!gd || gd._theiaFitClick) return;
+            gd._theiaFitClick = true;
+            var down = null;
+            gd.addEventListener('mousedown', function(e) { down = [e.clientX, e.clientY]; }, true);
+            gd.addEventListener('click', function(e) {
+                if (!window._theiaFitMode || !down) return;
+                if (Math.abs(e.clientX - down[0]) > 4 || Math.abs(e.clientY - down[1]) > 4) return;
+                var L = gd._fullLayout;
+                if (!L || !L.xaxis || !L.yaxis) return;
+                var r = gd.getBoundingClientRect();
+                var px = e.clientX - r.left - L.xaxis._offset;
+                var py = e.clientY - r.top - L.yaxis._offset;
+                if (px < 0 || px > L.xaxis._length || py < 0 || py > L.yaxis._length) return;
+                var x = L.xaxis.p2d(px);
+                if (!isFinite(x)) return;
+                window.dash_clientside.set_props('fit-click', {data: {
+                    x: x, xrange: [Number(L.xaxis.range[0]), Number(L.xaxis.range[1])],
+                    t: Date.now()}});
+            });
+        }, 200);
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("_fit-mode-hook", "children"),
+    Input("fit-mode", "data"),
+    Input("sum-graph", "figure"),
+)
+
+# "Fit": pass the current view range (the fit region) to the server
+app.clientside_callback(
+    """
+    function(n) {
+        var gd = document.querySelector('#sum-graph .js-plotly-plot');
+        if (!n || !gd || !gd._fullLayout || !gd._fullLayout.xaxis)
+            return window.dash_clientside.no_update;
+        var R = gd._fullLayout.xaxis.range;
+        return {xrange: [Number(R[0]), Number(R[1])], t: Date.now()};
+    }
+    """,
+    Output("fit-run", "data"),
+    Input("btn-fit-run", "n_clicks"),
+    prevent_initial_call=True,
+)
+
+
+@app.callback(
+    Output("fit-state", "data"),
+    Output("fit-table", "data"),
+    Output("fit-table", "columns"),
+    Output("fit-b0", "value"),
+    Output("fit-b1", "value"),
+    Output("fit-b0-unc", "children"),
+    Output("fit-b1-unc", "children"),
+    Output("fit-status", "children"),
+    Output("fit-panel", "style"),
+    Input("fit-click", "data"),
+    Input("fit-run", "data"),
+    Input("fit-table", "data_timestamp"),
+    Input("fit-shape", "value"),
+    Input("fit-bg", "value"),
+    Input("fit-b0", "value"),
+    Input("fit-b1", "value"),
+    Input("btn-fit-clear", "n_clicks"),
+    Input("sum-key", "data"),
+    State("fit-state", "data"),
+    State("fit-table", "data"),
+    prevent_initial_call=True,
+)
+def update_fit(click, run, _ts, shape, bg, b0, b1, _clear, key, state, table):
+    """Every change to the fit goes through here (one callback, because these
+    outputs also feed its inputs): clicks add peaks, table / background edits
+    change the curve by hand, Fit runs the least-squares fit."""
+    trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
+    with _SUM_CACHE_LOCK:
+        cached = _SUM_CACHE.get(key)
+    error = None
+    if cached is None:
+        state = None
+    elif (not state or state.get("sum_key") != key or trig.startswith("btn-fit-clear")
+          or trig.startswith("sum-key")):
+        state = {"sum_key": key, "peaks": [], "bgp": [0.0, 0.0], "region": None,
+                 "xref": 0.0, "fitted": False}
+    if state is not None:
+        ff, pp, sigma = cached
+        state = dict(state, shape=shape, bg=bg)
+        state["bgp"] = list(state.get("bgp") or [0.0, 0.0])
+        try:
+            if trig.startswith("fit-click") and click:
+                if not state["peaks"]:
+                    region = sorted(click["xrange"])
+                    state["region"], state["xref"] = region, 0.5 * (region[0] + region[1])
+                    # background start value: median of the data in view
+                    m = _region_mask(ff, region)
+                    state["bgp"] = [float(np.nanmedian(pp[m])) if m.any() else 0.0, 0.0]
+                state["peaks"] = state["peaks"] + [_snap_peak(ff, pp, click["x"], state["bgp"], bg)]
+                state["fitted"], state["unc"] = False, None
+            elif trig.startswith("fit-run") and run:
+                if not state["peaks"]:
+                    raise ValueError("add at least one peak first (turn on Peak fitting, then "
+                                     "click on a peak)")
+                region = sorted(run["xrange"])
+                old_ref = state["xref"]
+                state["region"], state["xref"] = region, 0.5 * (region[0] + region[1])
+                if _n_bg(bg) == 2:          # keep the same line about the new centre
+                    state["bgp"][0] += state["bgp"][1] * (state["xref"] - old_ref)
+                state = run_fit(ff, pp, sigma, state)
+            elif trig.startswith("fit-table"):
+                # hand edits (or deleted rows): rebuild the peaks from the table
+                peaks = []
+                for r in table or []:
+                    n = int(r.get("peak") or 0)
+                    old = state["peaks"][n - 1] if 0 < n <= len(state["peaks"]) else {}
+                    try:
+                        eta = r.get("eta")
+                        pk = {"centre": float(r["centre"]), "amp": float(r["amp"]),
+                              "fwhm": abs(float(r["fwhm"])),
+                              "eta": float(eta) if eta not in (None, "") else old.get("eta", 0.5)}
+                        pk["eta"] = min(max(pk["eta"], 0.0), 1.0)
+                    except (TypeError, ValueError, KeyError):
+                        pk = dict(old)
+                    if pk:
+                        peaks.append(pk)
+                state["peaks"], state["fitted"], state["unc"] = peaks, False, None
+            elif trig.startswith("fit-b0") or trig.startswith("fit-b1"):
+                if b0 is not None:
+                    state["bgp"][0] = float(b0)
+                if b1 is not None:
+                    state["bgp"][1] = float(b1)
+                state["fitted"], state["unc"] = False, None
+            elif trig.startswith("fit-shape") or trig.startswith("fit-bg"):
+                state["fitted"], state["unc"] = False, None
+        except Exception as exc:
+            traceback.print_exc()
+            error = str(exc)
+
+    pv = bool(state) and state["shape"] == "pvoigt"
+    cols = [c for c in FIT_COLUMNS if pv or c["id"] not in ("eta", "d_eta")]
+    if state is None:
+        msg = ("Sum the spectra first, then turn on peak fitting."
+               if trig.startswith(("fit-click", "fit-run")) else "")
+        return None, [], cols, None, None, "", "", msg, {"display": "none"}
+    nb = _n_bg(state["bg"])
+    bunc = (state.get("unc") or {}).get("bgp") or [None, None]
+    b0v = float(f"{state['bgp'][0]:.6g}") if nb >= 1 else None
+    b1v = float(f"{state['bgp'][1]:.6g}") if nb == 2 else None
+    status = _fit_status(state)
+    if error:
+        status = html.Span(f"Fit error: {error}", style={"color": "#c0392b"})
+    panel = {"display": "block"} if state["peaks"] else {"display": "none"}
+    return (state, fit_table_rows(state), cols, b0v, b1v,
+            ("± " + _fmt_num(bunc[0], ".3g")) if nb >= 1 and bunc[0] is not None else "",
+            ("± " + _fmt_num(bunc[1], ".3g")) if nb == 2 and bunc[1] is not None else "",
+            status, panel)
+
+
+@app.callback(
+    Output("fit-resid", "figure"),
+    Output("fit-resid", "style"),
+    Input("fit-state", "data"),
+    State("sum-key", "data"),
+)
+def show_residuals(state, key):
+    hidden = {"height": "200px", "display": "none"}
+    with _SUM_CACHE_LOCK:
+        cached = _SUM_CACHE.get(key)
+    if cached is None or not state or not state.get("peaks") or not state.get("region"):
+        return empty_fig(), hidden
+    ff, pp, sigma = cached
+    m = _region_mask(ff, state["region"])
+    x, y = ff[m], pp[m]
+    p, _ = _pack(state)
+    model = _model_from_vector(x - state["xref"], p, len(state["peaks"]), state["shape"],
+                               state["bg"])
+    fig = go.Figure()
+    fig.add_hrect(y0=-sigma, y1=sigma, fillcolor=ACCENT_PALE, opacity=0.9, line_width=0,
+                  layer="below")
+    fig.add_hline(y=0, line=dict(color="#999", width=1))
+    fig.add_trace(go.Scatter(x=x, y=y - model, mode="lines", name="data − fit",
+                             line=dict(shape="hvh", color="black", width=1),
+                             hovertemplate="f = %{x:.1f} Hz<br>data − fit = %{y:.4g}<extra></extra>"))
+    fig.update_layout(template="plotly_white", margin=dict(l=60, r=20, t=30, b=40),
+                      title=dict(text="Residuals (data − fit); shaded band: ±1σ noise",
+                                 font=dict(size=13)),
+                      xaxis_title="Frequency (Hz)", yaxis_title="data − fit", dragmode="pan",
+                      showlegend=False, font=dict(size=12), uirevision=str(state.get("region")))
+    return fig, {"height": "200px", "display": "block"}
 
 
 # Snippet: show/hide the half-life-excluded lines in the browser, so the
