@@ -425,12 +425,15 @@ def compute_sim_lines(freq, sum_all, raw):
 import re as _re
 _ION_RE  = _re.compile(r"(?<![\w>])([mnpqrx]?)(\d{1,3})([A-Z][a-z]?)(\d{1,3})\+")
 _HARM_RE = _re.compile(r"(?<!\S)h(\d+)(?!\S)")
+# "m207Tl80+ h213" -> "m207Tl80+, h213" (adds the comma if it is missing)
+_ION_HARM_RE = _re.compile(r"((?<![\w>])[mnpqrx]?\d{1,3}[A-Z][a-z]?\d{1,3}\+)(\s+)(h\d+)(?!\S)")
 
 
 def format_title_html(text):
     """Plain title -> plotly HTML: m207Tl80+ -> <sup>207m</sup>Tl<sup>80+</sup>,
     h213 -> <i>h</i> = 213 (same rules as formatTitleHtml() in the page)."""
     t = str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    t = _ION_HARM_RE.sub(r"\1,\2\3", t)
     t = _ION_RE.sub(lambda m: f"<sup>{m.group(2)}{m.group(1)}</sup>{m.group(3)}<sup>{m.group(4)}+</sup>", t)
     return _HARM_RE.sub(lambda m: f"<i>h</i> = {m.group(1)}", t)
 
@@ -893,14 +896,14 @@ async function loadAroundIon(file, l) {
   document.getElementById('ldFmax').value = fMax.toFixed(1);
   var db  = document.getElementById('dbCheck');
   var nav = document.getElementById('nAvg');
-  _srchStatus('Loading ' + l.ion + ' h' + l.h + '…');
+  _srchStatus('Loading ' + l.ion + ', h' + l.h + '…');
   try {
     var r = await fetch('/load', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({file: file, fMin: fMin, fMax: fMax,
                             linear: db ? !db.checked : false,
                             nAvg: nav ? Math.max(1, Math.round(+nav.value || 1)) : 1,
-                            ion: l.ion + ' h' + l.h})
+                            ion: l.ion + ', h' + l.h})
     });
     var d = await r.json();
     if (!r.ok) { _srchStatus('✗ ' + (d.error || 'load failed'), 'err'); return; }
@@ -1048,7 +1051,7 @@ async function suggestDecayTitle() {
     list.appendChild(hdr);
     d.hits.forEach(function(l) {
       var it = document.createElement('div'); it.className = 'item'; it.tabIndex = 0;
-      var txt = l.ion + ' h' + l.h;
+      var txt = l.ion + ', h' + l.h;
       it.title = 'Use "' + txt + '" as the title';
       [l.ion + (l.is_ref ? '  (ref)' : ''), 'h' + l.h,
        l.f.toLocaleString('en-GB', {maximumFractionDigits: 1}),
@@ -2087,6 +2090,7 @@ function _set3dStyle() {{
 // h213 -> <i>h</i> = 213 (same rules as format_title_html() in Python)
 function formatTitleHtml(text) {{
   var t = String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  t = t.replace(/((?:^|[^\\w>])[mnpqrx]?\\d{{1,3}}[A-Z][a-z]?\\d{{1,3}}\\+)(\\s+)(h\\d+)(?=\\s|$)/g, '$1,$2$3');
   t = t.replace(/(^|[^\\w>])([mnpqrx]?)(\\d{{1,3}})([A-Z][a-z]?)(\\d{{1,3}})\\+/g,
                 function(_, pre, iso, a, el, q) {{ return pre + '<sup>' + a + iso + '</sup>' + el + '<sup>' + q + '+</sup>'; }});
   return t.replace(/(^|\\s)h(\\d+)(?=\\s|$)/g, function(_, pre, n) {{ return pre + '<i>h</i> = ' + n; }});

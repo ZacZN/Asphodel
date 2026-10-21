@@ -97,6 +97,8 @@ import re as _re
 # e.g. m207Tl80+ -> ^{207m}Tl^{80+};  harmonic label h213 -> "h = 213"
 _ION_RE  = _re.compile(r"(?<![\w$])([mnpqrx]?)(\d{1,3})([A-Z][a-z]?)(\d{1,3})\+")
 _HARM_RE = _re.compile(r"(?<!\S)h(\d+)(?!\S)")
+# "m207Tl80+ h213" -> "m207Tl80+, h213" (adds the comma if it is missing)
+_ION_HARM_RE = _re.compile(r"((?<![\w$])[mnpqrx]?\d{1,3}[A-Z][a-z]?\d{1,3}\+)(\s+)(h\d+)(?!\S)")
 
 
 def format_title_mathtext(text):
@@ -104,6 +106,7 @@ def format_title_mathtext(text):
     if not text:
         return text
     text = text.replace("$", r"\$")            # literal $ in user text
+    text = _ION_HARM_RE.sub(r"\1,\2\3", text)
     # "{+}" keeps mathtext from spacing the + like an operator ("80 +")
     text = _ION_RE.sub(lambda m: (r"$^{%s%s}\mathrm{%s}^{%s{+}}$"
                                   % (m.group(2), r"\mathrm{%s}" % m.group(1) if m.group(1) else "",
