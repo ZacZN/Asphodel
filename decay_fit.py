@@ -47,6 +47,8 @@ Common options
                     and shows t½(c.o.m.) = t½(lab) / γ in the plot annotation.
   --title TEXT      Extra text appended to the auto-generated plot title
   --title-full TEXT Use TEXT as the whole plot title instead
+  --log-plot        Add a semi-log panel (data − C, fit − C) to the right
+  --residuals       Add residual panels underneath ((data − fit)/σ)
   --skip X Y        Skip the first X and last Y time bins
   --err-coeffs A B  Manual per-point error bars σ = A·I + B (single-frame
                     calibration). With --time-avg N, σ is divided by √N.
@@ -161,6 +163,13 @@ def parse_args():
                              "A·e^(-t/τ_A) + C_A, daughter as Bateman growth with no offset, τ_A shared.")
     parser.add_argument("--unweighted", action="store_true",
                         help="Single unweighted fit, no error bars")
+    parser.add_argument("--log-plot", action="store_true",
+                        help="Add a semi-log panel to the right: data − C and fit − C on a log "
+                             "axis (C = fitted constant background), so an exponential decay "
+                             "is a straight line. Single-window fits only.")
+    parser.add_argument("--residuals", action="store_true",
+                        help="Add residual panels under the plot(s): (data − fit)/σ, or "
+                             "data − fit for an unweighted fit. Single-window fits only.")
     parser.add_argument("--time-avg", type=int, metavar="N", default=None,
                         help="Average every N consecutive time frames before fitting")
     return parser.parse_args()
@@ -508,7 +517,7 @@ def make_equation_text_bateman(resolved, gamma=None):
 def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, resolved,
                with_offset, bateman, freq_min, freq_max, filename,
                gamma=None, title_suffix=None, sigma_fit=None, err_note=None,
-               title_full=None):
+               title_full=None, log_plot=False, show_residuals=False):
 
     plt.rcParams.update({"font.size": 20})
 
@@ -526,7 +535,18 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
         chi2 = float(np.sum((residuals / sigma_fit) ** 2))
         ndf  = len(time_fit) - len(popt)
 
-    fig, ax = plt.subplots(figsize=(16, 6))
+    # Layout: linear panel (+ semi-log panel to the right), each with an
+    # optional residual panel underneath sharing its time axis
+    ncols = 2 if log_plot else 1
+    nrows = 2 if show_residuals else 1
+    fig = plt.figure(figsize=(16 if ncols == 1 else 26, 6 if nrows == 1 else 8.5))
+    gs  = fig.add_gridspec(nrows, ncols, height_ratios=[3, 1] if nrows == 2 else [1],
+                           hspace=0.05, wspace=0.12)
+    ax      = fig.add_subplot(gs[0, 0])
+    ax_log  = fig.add_subplot(gs[0, 1]) if log_plot else None
+    ax_res  = fig.add_subplot(gs[1, 0], sharex=ax) if show_residuals else None
+    ax_lres = fig.add_subplot(gs[1, 1], sharex=ax_log) if (show_residuals and log_plot) else None
+
     if sigma_fit is not None:
         ax.errorbar(time_fit, intensity_fit, yerr=sigma_fit, fmt="o", ms=3,
                     color="black", ecolor="black", elinewidth=0.8,
@@ -585,14 +605,80 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
     if title_full:
         title = title_full
 
-    ax.set_xlabel("Time (s)", fontsize=22)
     ax.set_ylabel("Integrated power (arb. units)", fontsize=22)
-    ax.set_title(format_title_mathtext(title), fontsize=22, pad=8)
     ax.tick_params(labelsize=20)
-    ax.legend(fontsize=18)
+    # narrower panel next to the log plot: keep the legend clear of the
+    # parameter box (lower left is empty for a decay)
+    ax.legend(fontsize=18, loc="lower left" if log_plot else "best")
     ax.set_xlim(left=0)
-    fig.tight_layout(pad=0)
-    fig.subplots_adjust(right=0.98)
+
+    # ── Semi-log panel: data − C and fit − C, so an exponential is a straight line
+    if ax_log is not None:
+        if bateman:
+            C_bg = resolved['C'][0]
+        else:
+            C_bg = popt[2] if with_offset else 0.0
+        sub   = f" − C" if C_bg != 0 else ""
+        y_dat = intensity_fit - C_bg
+        y_fit = I_fit - C_bg
+        ok    = y_dat > 0
+        n_bad = int(np.sum(~ok))
+        if n_bad:
+            print(f"Log plot: {n_bad} point(s) with data{sub} ≤ 0 not shown")
+        if sigma_fit is not None:
+            ax_log.errorbar(time_fit[ok], y_dat[ok], yerr=sigma_fit[ok], fmt="o", ms=3,
+                            color="black", ecolor="black", elinewidth=0.8,
+                            capsize=2.5, capthick=0.8, label=f"Data{sub}")
+        else:
+            ax_log.plot(time_fit[ok], y_dat[ok], "o", ms=3, color="black", label=f"Data{sub}")
+        okf = y_fit > 0
+        ax_log.plot(t_dense[okf], y_fit[okf], "-", lw=2, color="#dd4444",
+                    label=("Bateman fit" if bateman else "Exponential fit") + sub)
+        if time_fit[0] <= t_half <= time_fit[-1]:
+            ax_log.axvline(t_half, ls="--", lw=1, color="0.5")
+        ax_log.set_yscale("log")
+        # keep error bars that reach ≤ 0 from stretching the log axis
+        if ok.any():
+            lo = np.min(y_dat[ok]); hi = max(np.max(y_dat[ok]), np.max(y_fit[okf]) if okf.any() else 0)
+            ax_log.set_ylim(lo / 2, hi * 2)
+        ax_log.set_ylabel(f"Integrated power{sub} (log)", fontsize=22)
+        ax_log.tick_params(labelsize=20)
+        ax_log.legend(fontsize=18)
+        ax_log.set_xlim(left=0)
+
+    # ── Residual panels: (data − fit)/σ, or data − fit for an unweighted fit
+    if ax_res is not None:
+        if sigma_fit is not None:
+            r_plot, r_label = residuals / sigma_fit, r"(data − fit)/$\sigma$"
+        else:
+            r_plot, r_label = residuals, "data − fit"
+        for a_r in (ax_res, ax_lres):
+            if a_r is None:
+                continue
+            if sigma_fit is not None:
+                a_r.axhspan(-1, 1, color="0.85", zorder=0)
+            a_r.axhline(0, color="#dd4444", lw=1.5)
+            a_r.plot(time_fit, r_plot, "o", ms=3, color="black")
+            a_r.set_ylabel(r_label, fontsize=18)
+            a_r.set_xlabel("Time (s)", fontsize=22)
+            a_r.tick_params(labelsize=18)
+            a_r.set_xlim(left=0)
+        plt.setp(ax.get_xticklabels(), visible=False)
+        if ax_log is not None and ax_lres is not None:
+            plt.setp(ax_log.get_xticklabels(), visible=False)
+    else:
+        ax.set_xlabel("Time (s)", fontsize=22)
+        if ax_log is not None:
+            ax_log.set_xlabel("Time (s)", fontsize=22)
+
+    # One title: over the single panel, or centred over both columns
+    if ncols == 1:
+        ax.set_title(format_title_mathtext(title), fontsize=22, pad=8)
+        fig.tight_layout(pad=0)
+        fig.subplots_adjust(right=0.98)
+    else:
+        fig.suptitle(format_title_mathtext(title), fontsize=22)
+        fig.subplots_adjust(left=0.06, right=0.99, top=0.92, bottom=0.09 if nrows == 2 else 0.12)
     plt.show()
 
     # Console summary
@@ -936,6 +1022,9 @@ def main():
         halflife_groundstate_lab = None
 
     if args.parent_window is not None:
+        if args.log_plot or args.residuals:
+            print("Note: --log-plot / --residuals apply to single-window fits only; "
+                  "ignored for the joint parent/daughter fit.")
         run_joint(args, halflife_isomer_lab, halflife_groundstate_lab)
         return
 
@@ -1072,6 +1161,8 @@ def main():
         gamma=args.gamma,
         title_suffix=args.title,
         title_full=args.title_full,
+        log_plot=args.log_plot,
+        show_residuals=args.residuals,
         sigma_fit=sigma_fit,
         err_note=err_note,
     )

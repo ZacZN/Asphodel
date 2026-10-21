@@ -1256,6 +1256,8 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
     _saved_pmax   = str(_prefs.get("parentMax", ""))
     _chk_bateman    = "checked" if _prefs.get("bateman")    else ""
     _chk_unweighted = "checked" if _prefs.get("unweighted") else ""
+    _chk_logplot    = "checked" if _prefs.get("logPlot")    else ""
+    _chk_resid      = "checked" if _prefs.get("residuals")  else ""
     _chk_bars3d     = "" if _prefs.get("bars3d") == "0" else "checked"   # bars by default
     _chk_surface3d  = "" if _chk_bars3d else "checked"
     _cs_all  = colorscales_dict()
@@ -1564,19 +1566,21 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
       <input type="checkbox" id="batemanChk" {_chk_bateman}
              onchange="savePref('bateman', this.checked ? '1' : ''); _syncDecayControls()">
       <label for="batemanChk" title="Bateman two-member chain A→B→C instead of a single exponential">Bateman</label>
+      <div id="grpNoOffset" style="display:contents;">
       <input type="checkbox" id="noOffset">
       <label for="noOffset" title="Simple decay only: fit A·exp(-t/τ) with no constant background">no offset</label>
+      </div>
     </div>
-    <div class="opt-grp" title="Bateman only. Frequency window of the PARENT peak (Hz). When set, parent and daughter are fitted together with a shared τ_A: parent = A·e^(-t/τ_A) + C_A (with offset), daughter = the frequency-slider window, Bateman growth with no offset. Leave blank for a single-window Bateman fit.">
+    <div class="opt-grp" id="grpParent" title="Bateman only. Frequency window of the PARENT peak (Hz). When set, parent and daughter are fitted together with a shared τ_A: parent = A·e^(-t/τ_A) + C_A (with offset), daughter = the frequency-slider window, Bateman growth with no offset. Leave blank for a single-window Bateman fit.">
       <span>Parent window</span>
       <input type="number" id="parentMin" step="any" placeholder="f min"
-             style="width:84px;" value="{_saved_pmin}" oninput="savePref('parentMin', this.value)">
+             style="width:120px;" value="{_saved_pmin}" oninput="savePref('parentMin', this.value); _syncDecayControls()">
       <input type="number" id="parentMax" step="any" placeholder="f max"
-             style="width:84px;" value="{_saved_pmax}" oninput="savePref('parentMax', this.value)">
+             style="width:120px;" value="{_saved_pmax}" oninput="savePref('parentMax', this.value); _syncDecayControls()">
       <button id="parentFromSliders" onclick="_parentFromSliders()"
               title="Copy the current frequency-slider range into the parent window">← sliders</button>
     </div>
-    <div class="opt-grp" title="Known c.o.m.-frame half-lives (s), converted to lab frame with γ. Fixes the corresponding τ in the Bateman fit. Requires γ.">
+    <div class="opt-grp" id="grpFixedHl" title="Known c.o.m.-frame half-lives (s), converted to lab frame with γ. Fixes the corresponding τ in the Bateman fit. Requires γ.">
       <span>Fixed t½ (s)</span>
       <input type="number" id="hlIso" min="0" step="any" placeholder="isomer"
              style="width:72px;" value="{_saved_hl_iso}" oninput="savePref('hlIso', this.value)">
@@ -1611,6 +1615,16 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
              style="width:56px;" value="{_saved_skip0}" oninput="savePref('skipStart', this.value)">
       <input type="number" id="skipEnd" min="0" step="1" placeholder="last"
              style="width:56px;" value="{_saved_skip1}" oninput="savePref('skipEnd', this.value)">
+    </div>
+    <div class="opt-grp" id="grpPlots" title="Extra panels in the fit plot (single-window fits only)">
+      <span>Plots</span>
+      <input type="checkbox" id="logPlotChk" {_chk_logplot}
+             onchange="savePref('logPlot', this.checked ? '1' : '')">
+      <label for="logPlotChk" title="Semi-log panel to the right: data − C and fit − C on a log axis (C = fitted background), so an exponential decay is a straight line">log (data − C)</label>
+      <input type="checkbox" id="residChk" {_chk_resid}
+             onchange="savePref('residuals', this.checked ? '1' : '')">
+      <label for="residChk" title="Residual panel under each plot: (data − fit)/σ, or data − fit for an unweighted fit">residuals</label>
+      <label id="plotsNote" style="color:#fbbf24; font-size:11px;"></label>
     </div>
     <div class="opt-grp">
       <button onclick="runDecayFit()">Run</button>
@@ -1923,14 +1937,19 @@ function _renderSpec1d() {{
 function _syncDecayControls() {{
   var bateman    = document.getElementById('batemanChk').checked;
   var unweighted = document.getElementById('unweightedChk').checked;
-  document.getElementById('noOffset').disabled = bateman;   // Bateman always fits C
-  document.getElementById('hlIso').disabled    = !bateman;
-  document.getElementById('hlGs').disabled     = !bateman;
-  document.getElementById('parentMin').disabled = !bateman;
-  document.getElementById('parentMax').disabled = !bateman;
-  document.getElementById('parentFromSliders').disabled = !bateman;
+  // Bateman-only options are shown only in Bateman mode; "no offset" only for
+  // the simple exponential (Bateman always fits C)
+  document.getElementById('grpParent').style.display   = bateman ? '' : 'none';
+  document.getElementById('grpFixedHl').style.display  = bateman ? '' : 'none';
+  document.getElementById('grpNoOffset').style.display = bateman ? 'none' : 'contents';
   document.getElementById('errA').disabled     = unweighted;
   document.getElementById('errB').disabled     = unweighted;
+  // log / residual panels: single-window fits only (not the parent/daughter fit)
+  var joint = bateman && (document.getElementById('parentMin').value.trim() !== '' ||
+                          document.getElementById('parentMax').value.trim() !== '');
+  document.getElementById('logPlotChk').disabled = joint;
+  document.getElementById('residChk').disabled   = joint;
+  document.getElementById('plotsNote').textContent = joint ? 'not available for the parent/daughter fit' : '';
 }}
 
 function _parentFromSliders() {{
@@ -2053,6 +2072,8 @@ async function runDecayFit() {{
       noOffset: !bateman && document.getElementById('noOffset').checked,
       errCoeffs: unweighted ? null : errCoeffs,
       unweighted: unweighted,
+      logPlot:   document.getElementById('logPlotChk').checked,
+      residuals: document.getElementById('residChk').checked,
       bateman:  bateman,
       hlIso:    (bateman && hlIsoRaw !== '') ? +hlIsoRaw : null,
       hlGs:     (bateman && hlGsRaw  !== '') ? +hlGsRaw  : null,
@@ -2511,6 +2532,10 @@ def serve(html, state):
                     if body.get("errCoeffs") is not None:
                         ea, eb = body["errCoeffs"]
                         cmd += ["--err-coeffs", str(float(ea)), str(float(eb))]
+                    if body.get("logPlot") and not body.get("parentWindow"):
+                        cmd += ["--log-plot"]
+                    if body.get("residuals") and not body.get("parentWindow"):
+                        cmd += ["--residuals"]
                     if body.get("unweighted"):
                         cmd += ["--unweighted"]
                     if body.get("bateman"):
@@ -2629,7 +2654,8 @@ def serve(html, state):
                     pref_val = body.get("value", "")
                     if pref_key not in ("gamma", "errA", "errB", "hlIso", "hlGs",
                                         "skipStart", "skipEnd", "bateman", "unweighted",
-                                        "parentMin", "parentMax", "bars3d", "fullOpen", "colorscale", "decayRegion"):
+                                        "parentMin", "parentMax", "bars3d", "fullOpen", "colorscale", "decayRegion",
+                                        "logPlot", "residuals"):
                         raise ValueError(f"unknown pref key: {pref_key!r}")
                     with _PREFS_LOCK:
                         prefs = read_prefs()
