@@ -1942,6 +1942,10 @@ function _initHeatmap(h, rebinned, mm) {{
               color: '#9ca3af', gridcolor: '#374151', zerolinecolor: '#374151' }},
     paper_bgcolor: '#111827', plot_bgcolor: '#1f2937',
     font: {{ color: '#e5e7eb' }},
+    // one tooltip: the nearest item only (older plotly.js defaults to 'x',
+    // which shows every line at that time); sim lines win within 10 px,
+    // otherwise the heatmap cell under the mouse is shown
+    hovermode: 'closest', hoverdistance: 10,
     margin: {{ l: 110, r: 20, t: 120, b: 60 }},
     height: h,     // fills the window (plotHeight); refit on resize by fitPlots()
   }}, {{ responsive: true }});
