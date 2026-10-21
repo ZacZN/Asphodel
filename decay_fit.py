@@ -88,6 +88,30 @@ from scipy.optimize import curve_fit
 # CLI
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Title formatting: ion names and harmonic labels
+# ---------------------------------------------------------------------------
+import re as _re
+
+# NUBASE-style ion name: optional isomer letter, mass number, element, charge,
+# e.g. m207Tl80+ -> ^{207m}Tl^{80+};  harmonic label h213 -> "h = 213"
+_ION_RE  = _re.compile(r"(?<![\w$])([mnpqrx]?)(\d{1,3})([A-Z][a-z]?)(\d{1,3})\+")
+_HARM_RE = _re.compile(r"(?<!\S)h(\d+)(?!\S)")
+
+
+def format_title_mathtext(text):
+    """Plain title text -> matplotlib mathtext with formatted ions/harmonics."""
+    if not text:
+        return text
+    text = text.replace("$", r"\$")            # literal $ in user text
+    # "{+}" keeps mathtext from spacing the + like an operator ("80 +")
+    text = _ION_RE.sub(lambda m: (r"$^{%s%s}\mathrm{%s}^{%s{+}}$"
+                                  % (m.group(2), r"\mathrm{%s}" % m.group(1) if m.group(1) else "",
+                                     m.group(3), m.group(4))), text)
+    text = _HARM_RE.sub(lambda m: r"$h$ = %s" % m.group(1), text)
+    return text
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Integrate ESR power over a frequency band and fit exponential decay or Bateman chain"
@@ -560,7 +584,7 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
 
     ax.set_xlabel("Time (s)", fontsize=22)
     ax.set_ylabel("Integrated power (arb. units)", fontsize=22)
-    ax.set_title(title, fontsize=22, pad=8)
+    ax.set_title(format_title_mathtext(title), fontsize=22, pad=8)
     ax.tick_params(labelsize=20)
     ax.legend(fontsize=18)
     ax.set_xlim(left=0)
@@ -847,7 +871,7 @@ def plot_joint(args, tP, IP, tD, ID, sigmaP, sigmaD, vals, errs,
         title += f"   {args.title}"
     if args.title_full:
         title = args.title_full
-    axP.set_title(title, fontsize=18, pad=8)
+    axP.set_title(format_title_mathtext(title), fontsize=18, pad=8)
     axD.set_xlabel("Time (s)", fontsize=22)
     axD.set_xlim(left=0)
     fig.tight_layout()

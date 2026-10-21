@@ -422,6 +422,19 @@ def compute_sim_lines(freq, sum_all, raw):
             "n_ions": int(len(ion_db)), "lines": lines}
 
 
+import re as _re
+_ION_RE  = _re.compile(r"(?<![\w>])([mnpqrx]?)(\d{1,3})([A-Z][a-z]?)(\d{1,3})\+")
+_HARM_RE = _re.compile(r"(?<!\S)h(\d+)(?!\S)")
+
+
+def format_title_html(text):
+    """Plain title -> plotly HTML: m207Tl80+ -> <sup>207m</sup>Tl<sup>80+</sup>,
+    h213 -> <i>h</i> = 213 (same rules as formatTitleHtml() in the page)."""
+    t = str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    t = _ION_RE.sub(lambda m: f"<sup>{m.group(2)}{m.group(1)}</sup>{m.group(3)}<sup>{m.group(4)}+</sup>", t)
+    return _HARM_RE.sub(lambda m: f"<i>h</i> = {m.group(1)}", t)
+
+
 def make_title(path, fmin, fmax, linear=False, ion=None):
     return (f"{os.path.basename(path)}   "
             f"[{fmin:,.0f} – {fmax:,.0f} Hz]   "
@@ -1359,7 +1372,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
         _scene["xaxis"]["range"] = [t_sel_min, t_sel_max]
 
     fig.update_layout(
-        title=dict(text=title, x=0.5, xanchor="center", font_size=14),
+        title=dict(text=format_title_html(title), x=0.5, xanchor="center", font_size=14),
         scene=_scene,
         margin=dict(l=0, r=0, t=60, b=0),
         height=680,
@@ -1797,7 +1810,7 @@ function _initHeatmap() {{
     line: {{ color: 'rgba(255,255,255,1)', width: 1.8 }}
   }}], {{
     template: {{}},
-    title: {{ text: document.getElementById('plotTitle').value,
+    title: {{ text: formatTitleHtml(document.getElementById('plotTitle').value),
               x: 0.5, xanchor: 'center', y: 0.985, yanchor: 'top',
               font: {{ size: 14, color: '#e5e7eb' }} }},
     xaxis2: {{ overlaying: 'x', side: 'top', title: {{ text: '', standoff: 4 }},
@@ -2070,8 +2083,17 @@ function _set3dStyle() {{
   _renderSurface();
 }}
 
+// Ion names / harmonic labels in titles: m207Tl80+ -> <sup>207m</sup>Tl<sup>80+</sup>,
+// h213 -> <i>h</i> = 213 (same rules as format_title_html() in Python)
+function formatTitleHtml(text) {{
+  var t = String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  t = t.replace(/(^|[^\\w>])([mnpqrx]?)(\\d{{1,3}})([A-Z][a-z]?)(\\d{{1,3}})\\+/g,
+                function(_, pre, iso, a, el, q) {{ return pre + '<sup>' + a + iso + '</sup>' + el + '<sup>' + q + '+</sup>'; }});
+  return t.replace(/(^|\\s)h(\\d+)(?=\\s|$)/g, function(_, pre, n) {{ return pre + '<i>h</i> = ' + n; }});
+}}
+
 function updateTitle() {{
-  var t = document.getElementById('plotTitle').value;
+  var t = formatTitleHtml(document.getElementById('plotTitle').value);
   Plotly.relayout('specPlot', {{'title.text': t}});
   if (_heatReady) Plotly.relayout('heatPlot', {{'title.text': t}});
   saveSession();
