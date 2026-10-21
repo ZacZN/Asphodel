@@ -641,6 +641,9 @@ SIM_CSS = """
   .sim-body .opt-grp { flex-wrap: wrap; }
   .file-dialog { width: min(1000px, calc(100vw - 32px)); }
   .srch-hint { color: #9ca3af; font-size: 12px; }
+  .opt-grp button.quit-btn { background: #b91c1c; color: #fef2f2; }
+  .opt-grp button.quit-btn:hover { background: #dc2626; }
+  .opt-grp button.quit-btn.armed { background: #fef2f2; color: #b91c1c; }
   .reg-banner { display: none; position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
                 z-index: 900; background: #f97316; color: #111827; font-weight: 700; font-size: 13px;
                 padding: 8px 16px; border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
@@ -806,15 +809,26 @@ function _renderSim() {
     var showEx = document.getElementById('sim_show_excluded').checked;
     var fMin = +document.getElementById('fMin').value;
     var fMax = +document.getElementById('fMax').value;
-    var t0 = T_RAW[0], t1 = T_RAW[T_RAW.length - 1], N = 20;
-    SIM.lines.forEach(function(l) {
-      if (l.f < fMin || l.f > fMax) return;
-      if (l.excluded && !l.is_ref && !showEx) return;
+    // Plotly only shows a tooltip near a data point, so each line gets a
+    // point every few pixels across the visible time window (plus the ends
+    // of the full time range so the line still spans the data when zoomed out)
+    var t0 = T_RAW[0], t1 = T_RAW[T_RAW.length - 1];
+    var v0 = Math.max(t0, +document.getElementById('tMin').value);
+    var v1 = Math.min(t1, +document.getElementById('tMax').value);
+    if (!(v1 > v0)) { v0 = t0; v1 = t1; }
+    var gd = document.getElementById('heatPlot');
+    var wPx = (gd && gd._fullLayout && gd._fullLayout.xaxis) ? gd._fullLayout.xaxis._length : 800;
+    var vis = SIM.lines.filter(function(l) {
+      return l.f >= fMin && l.f <= fMax && !(l.excluded && !l.is_ref && !showEx);
+    });
+    var N = Math.max(20, Math.ceil(wPx / 6));                     // ~every 6 px
+    N = Math.min(N, Math.max(20, Math.floor(60000 / Math.max(vis.length, 1))));
+    var xs = [t0];
+    for (var i = 0; i < N; i++) xs.push(v0 + (v1 - v0) * i / (N - 1));
+    xs.push(t1);
+    vis.forEach(function(l) {
       var g = groups[l.is_ref ? 2 : (l.excluded ? 1 : 0)];
-      // several points along each line so the tooltip works anywhere on it
-      for (var i = 0; i < N; i++) {
-        g.x.push(t0 + (t1 - t0) * i / (N - 1)); g.y.push(l.f); g.h.push(l.label);
-      }
+      for (var i = 0; i < xs.length; i++) { g.x.push(xs[i]); g.y.push(l.f); g.h.push(l.label); }
       g.x.push(null); g.y.push(null); g.h.push(null);
     });
   }
@@ -1070,6 +1084,30 @@ async function suggestDecayTitle() {
   } catch (e) { _sugStatus('✗ ' + e.message, 'err'); }
 }
 
+// ── Quit: stop the Python server and close the tab ──────────────────────────
+// First click arms the button (avoids quitting by accident); second click quits.
+var _quitTimer = null;
+async function quitApp() {
+  var b = document.getElementById('quitBtn');
+  if (!b.classList.contains('armed')) {
+    b.classList.add('armed'); b.textContent = 'Click again to quit';
+    _quitTimer = setTimeout(function() { b.classList.remove('armed'); b.textContent = 'Quit'; }, 3000);
+    return;
+  }
+  clearTimeout(_quitTimer);
+  try {   // save the current view straight away (saveSession() is delayed)
+    await fetch('/save-session', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                  body: JSON.stringify(_sessionState())});
+  } catch (e) {}
+  try { await fetch('/quit', {method: 'POST'}); } catch (e) {}
+  window.close();          // works only for tabs a script opened; otherwise...
+  setTimeout(function() {  // ...leave a clear message in the tab instead
+    document.body.innerHTML =
+      '<div style="font-family:system-ui,sans-serif;color:#e5e7eb;padding:40px;font-size:16px;">' +
+      'plot_spectrogram.py has stopped. You can close this tab.</div>';
+  }, 300);
+}
+
 // ── Popout dialogs (simulated ions, decay fit) ──────────────────────────────
 var _modalLastFocus = null;
 function modalOpen(id, focusId) {
@@ -1138,6 +1176,7 @@ function fitPlots() {
       setH('heatPlot', h - over);
       setH('specPlot', h - over);
     }
+    _renderSim();     // hover-point spacing depends on the plot width
   });
 }
 window.addEventListener('resize', function() {
@@ -1171,7 +1210,10 @@ function _renderFull() {
   var pLabel = useDb ? 'Summed power (dB)' : 'Summed power (linear)';
 
   // vertical simulated lines over the whole file (sliders ignored)
-  var N = 20, ys = [];
+  // a point every few pixels up each line so its tooltip works anywhere on it
+  var fp = document.getElementById('fullPlot');
+  var hPx = (fp && fp._fullLayout && fp._fullLayout.yaxis) ? fp._fullLayout.yaxis._length : 300;
+  var N = Math.max(20, Math.ceil(hPx / 6)), ys = [];
   for (var k = 0; k < N; k++) ys.push(y0 + (y1 - y0) * k / (N - 1));
   var groups = [{x: [], y: [], h: []}, {x: [], y: [], h: []}, {x: [], y: [], h: []}];
   if (document.getElementById('sim_show').checked && SIM) {
@@ -1560,6 +1602,10 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
     <div class="title-row">
       <label for="plotTitle">Title</label>
       <input type="text" id="plotTitle" value="{title_html}" oninput="updateTitle()">
+    </div>
+    <div class="opt-grp">
+      <button id="quitBtn" class="quit-btn" onclick="quitApp()"
+              title="Stop plot_spectrogram.py and close this tab">Quit</button>
     </div>
   </div>
   <div id="decayModal" class="sim-modal" onclick="if(event.target===this) modalClose('decayModal')">
@@ -2438,6 +2484,7 @@ def serve(html, state):
     from urllib.parse import urlparse, parse_qs
 
     STATE = dict(state or {})
+    STOP  = threading.Event()          # set by the page's Quit button
     STATE["html"] = html
 
     with socket.socket() as _s:
@@ -2663,6 +2710,11 @@ def serve(html, state):
                 except Exception as exc:
                     self._send(400, {"error": str(exc)})
 
+            elif self.path == "/quit":
+                # Quit button: reply first, then let the main loop shut down
+                self._send(200, {"status": "stopping"})
+                STOP.set()
+
             elif self.path == "/save-session":
                 # GUI view state for the current file (see saveSession() in the page)
                 try:
@@ -2723,10 +2775,13 @@ def serve(html, state):
     webbrowser.open(url)
 
     try:
-        while True:
-            time.sleep(1)
+        while not STOP.is_set():
+            time.sleep(0.2)
+        time.sleep(0.3)                # let the reply / last saves finish
+        print("Stopped from the browser (Quit).")
     except KeyboardInterrupt:
-        _srv.shutdown()
+        pass
+    _srv.shutdown()
 
 
 # ---------------------------------------------------------------------------
