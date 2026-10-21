@@ -624,6 +624,12 @@ SIM_CSS = """
   .sim-body .opt-grp { flex-wrap: wrap; }
   .file-dialog { width: min(1000px, calc(100vw - 32px)); }
   .srch-hint { color: #9ca3af; font-size: 12px; }
+  .reg-banner { display: none; position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
+                z-index: 900; background: #f97316; color: #111827; font-weight: 700; font-size: 13px;
+                padding: 8px 16px; border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
+  #heatDiv.drawing { outline: 2px dashed #f97316; outline-offset: 2px; }
+  #heatDiv.drawing .nsewdrag { cursor: crosshair !important; }
+  .opt-grp button:disabled { opacity: .35; cursor: not-allowed; }
   .srch-list { background: #111827; border: 1px solid #374151; border-radius: 6px;
                max-height: 360px; overflow-y: auto; }
   .srch-list:empty { display: none; }
@@ -886,6 +892,119 @@ async function loadAroundIon(file, l) {
   } catch (e) { _srchStatus('✗ ' + e.message, 'err'); }
 }
 
+// ── Decay-fit region: slider window or a box dragged on the 2-D heatmap ─────
+// Drawing uses the heatmap's normal drag-to-zoom: while drawing, the zoom
+// ranges are captured as the box and the view is put back to the sliders.
+var _regDrawing = false;
+var _regLoaded  = false;   // saved region read back from the server yet?
+
+function _regBoxValues() {
+  var v = ['regT0', 'regT1', 'regF0', 'regF1'].map(function(id) {
+    var x = document.getElementById(id).value.trim();
+    return x === '' ? NaN : +x;
+  });
+  return v.every(isFinite) ? v : null;
+}
+function _regIsBox() { return document.getElementById('regBox').checked; }
+
+function _regSetFields(v) {
+  ['regT0', 'regT1', 'regF0', 'regF1'].forEach(function(id, i) {
+    document.getElementById(id).value = v ? (i < 2 ? (+v[i]).toFixed(3) : (+v[i]).toFixed(1)) : '';
+  });
+}
+
+function _regSync() {
+  var box = _regIsBox();
+  ['regT0', 'regT1', 'regF0', 'regF1'].forEach(function(id) { document.getElementById(id).disabled = !box; });
+  document.getElementById('regDrawBtn').disabled = !box;
+  _regDrawShape();
+}
+
+// orange outline of the fit region on the heatmap (box mode only)
+function _regDrawShape() {
+  if (typeof _heatReady === 'undefined' || !_heatReady) return;
+  var v = _regBoxValues(), shapes = [];
+  if (_regIsBox() && v) {
+    shapes.push({type: 'rect', xref: 'x', yref: 'y',
+                 x0: Math.min(v[0], v[1]), x1: Math.max(v[0], v[1]),
+                 y0: Math.min(v[2], v[3]), y1: Math.max(v[2], v[3]),
+                 line: {color: '#f97316', width: 2}, fillcolor: 'rgba(249,115,22,0.08)'});
+  }
+  Plotly.relayout('heatPlot', {shapes: shapes});
+}
+
+function setRegionMode() {
+  savePref('decayRegion', _regIsBox() ? 'box' : 'sliders');
+  _regSync();
+}
+function regFieldsChanged() { _regDrawShape(); saveSession(); }
+function clearRegionBox() { _regSetFields(null); _regDrawShape(); saveSession(); }
+
+function _initRegion(v) {
+  _regSetFields(v);
+  _regSync();
+  var gd = document.getElementById('heatPlot');
+  if (gd && gd.on) gd.on('plotly_relayout', _regOnRelayout);
+  // the page is built once per server start; re-read the saved state so a
+  // browser refresh keeps the mode and the box
+  fetch('/get-region').then(function(r) { return r.json(); }).then(function(d) {
+    document.getElementById(d.mode === 'box' ? 'regBox' : 'regSliders').checked = true;
+    if (d.box) _regSetFields(d.box);
+    _regSync();
+    _regLoaded = true;
+  }).catch(function() { _regLoaded = true; });
+}
+
+function startRegionDraw() {
+  document.getElementById('regBox').checked = true;
+  setRegionMode();
+  modalClose('decayModal');
+  _regDrawing = true;
+  Plotly.relayout('heatPlot', {dragmode: 'zoom'});
+  document.getElementById('regBanner').style.display = 'block';
+  document.getElementById('heatDiv').classList.add('drawing');
+}
+function _regStopDrawing() {
+  _regDrawing = false;
+  document.getElementById('regBanner').style.display = 'none';
+  document.getElementById('heatDiv').classList.remove('drawing');
+}
+function cancelRegionDraw() {
+  if (!_regDrawing) return;
+  _regStopDrawing();
+  modalOpen('decayModal', 'regDrawBtn');
+}
+
+function _regOnRelayout(ev) {
+  if (!_regDrawing || !ev) return;
+  var hasX = ev['xaxis.range[0]'] !== undefined, hasY = ev['yaxis.range[0]'] !== undefined;
+  if (!hasX && !hasY) return;              // not a zoom on the heatmap axes
+  var gd = document.getElementById('heatPlot');
+  var xr = hasX ? [ev['xaxis.range[0]'], ev['xaxis.range[1]']] : gd._fullLayout.xaxis.range.slice();
+  var yr = hasY ? [ev['yaxis.range[0]'], ev['yaxis.range[1]']] : gd._fullLayout.yaxis.range.slice();
+  _regStopDrawing();
+  _regSetFields([Math.min(xr[0], xr[1]), Math.max(xr[0], xr[1]),
+                 Math.min(yr[0], yr[1]), Math.max(yr[0], yr[1])]);
+  update();                                // put the view back to the slider window
+  _regDrawShape();
+  saveSession();
+  modalOpen('decayModal', 'regT0');
+}
+
+// window used by the fit: sliders, or the drawn box
+function decayWindow() {
+  if (!_regIsBox()) {
+    return {fMin: +document.getElementById('fMin').value, fMax: +document.getElementById('fMax').value,
+            tMin: +document.getElementById('tMin').value, tMax: +document.getElementById('tMax').value};
+  }
+  var v = _regBoxValues();
+  if (!v) throw new Error('draw a region first (or choose "sliders")');
+  var w = {tMin: Math.min(v[0], v[1]), tMax: Math.max(v[0], v[1]),
+           fMin: Math.min(v[2], v[3]), fMax: Math.max(v[2], v[3])};
+  if (!(w.tMax > w.tMin) || !(w.fMax > w.fMin)) throw new Error('region box has zero size');
+  return w;
+}
+
 // ── Popout dialogs (simulated ions, decay fit) ──────────────────────────────
 var _modalLastFocus = null;
 function modalOpen(id, focusId) {
@@ -903,6 +1022,7 @@ function simOpen()  { modalOpen('simModal', 'sim_ref_name'); }
 function simClose() { modalClose('simModal'); }
 document.addEventListener('keydown', function(e) {
   if (e.key !== 'Escape') return;
+  if (_regDrawing) { cancelRegionDraw(); return; }
   var m = document.querySelector('.sim-modal.open');
   if (m) modalClose(m.id);
 });
@@ -1086,6 +1206,12 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
     if isinstance(_vt, str) and _vt.strip():
         title = _vt
     _chk_show1d = "" if _view.get("show1d") is False else "checked"
+    _reg_box_mode     = _prefs.get("decayRegion") == "box"
+    _chk_reg_box      = "checked" if _reg_box_mode else ""
+    _chk_reg_sliders  = "" if _reg_box_mode else "checked"
+    _rb = _view.get("regBox")
+    _reg_init_js = json.dumps([float(v) for v in _rb]
+                              if isinstance(_rb, list) and len(_rb) == 4 else None)
     _sim_panel = sim_panel_html()
     _full_open_js = "false" if _prefs.get("fullOpen") == "0" else "true"
 
@@ -1337,6 +1463,28 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
       <button class="sim-x" onclick="modalClose('decayModal')" title="Close (Esc)">×</button>
     </div>
     <div class="sim-body">
+    <div class="opt-grp" title="Which time/frequency window the fit uses">
+      <span>Region</span>
+      <input type="radio" name="decayRegion" id="regSliders" value="sliders" {_chk_reg_sliders}
+             onchange="setRegionMode()">
+      <label for="regSliders">sliders</label>
+      <input type="radio" name="decayRegion" id="regBox" value="box" {_chk_reg_box}
+             onchange="setRegionMode()">
+      <label for="regBox">drawn box</label>
+      <button id="regDrawBtn" onclick="startRegionDraw()"
+              title="Close this dialog and drag a box on the 2-D plot">Draw region</button>
+    </div>
+    <div class="opt-grp" id="regFields" title="Fit region from the drawn box (editable)">
+      <span>t (s)</span>
+      <input type="number" id="regT0" step="any" style="width:80px;" oninput="regFieldsChanged()">
+      <label>–</label>
+      <input type="number" id="regT1" step="any" style="width:80px;" oninput="regFieldsChanged()">
+      <span>f (Hz)</span>
+      <input type="number" id="regF0" step="any" style="width:120px;" oninput="regFieldsChanged()">
+      <label>–</label>
+      <input type="number" id="regF1" step="any" style="width:120px;" oninput="regFieldsChanged()">
+      <button onclick="clearRegionBox()" title="Remove the drawn box">Clear</button>
+    </div>
     <div class="opt-grp">
       <span>Model</span>
       <input type="checkbox" id="batemanChk" {_chk_bateman}
@@ -1453,6 +1601,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
   </div>
 {_sim_panel}
 </div>
+<div id="regBanner" class="reg-banner">Drag a box on the 2-D plot to set the decay-fit region · Esc to cancel</div>
 <div id="plots">
   <div id="heatDiv"><div id="heatPlot"></div></div>
   <div id="surfDiv">{plot_div}</div>
@@ -1743,6 +1892,8 @@ function _sessionState() {{
       tMax:   +document.getElementById('tMax').value,
       title:  title !== DEFAULT_TITLE ? title : '',
       show1d: document.getElementById('show1d').checked,
+      // undefined (= keep the saved box) until the saved region has been read back
+      regBox: _regLoaded ? _regBoxValues() : undefined,
       camera: cam
     }}
   }};
@@ -1796,6 +1947,7 @@ async function runDecayFit() {{
     var hlGsRaw  = document.getElementById('hlGs').value.trim();
     var skip0    = Math.max(0, Math.round(+document.getElementById('skipStart').value || 0));
     var skip1    = Math.max(0, Math.round(+document.getElementById('skipEnd').value || 0));
+    var win = decayWindow();   // sliders or drawn box (throws if the box is invalid)
     if (bateman && (hlIsoRaw !== '' || hlGsRaw !== '') && gammaRaw === '') {{
       throw new Error('fixed half-lives need γ (they are c.o.m. values)');
     }}
@@ -1817,10 +1969,10 @@ async function runDecayFit() {{
     var errCoeffs = (errARaw === '' && errBRaw === '') ? null
                   : [errARaw === '' ? 0 : +errARaw, errBRaw === '' ? 0 : +errBRaw];
     var payload = {{
-      fMin:  +document.getElementById('fMin').value,
-      fMax:  +document.getElementById('fMax').value,
-      tMin:  +document.getElementById('tMin').value,
-      tMax:  +document.getElementById('tMax').value,
+      fMin:  win.fMin,
+      fMax:  win.fMax,
+      tMin:  win.tMin,
+      tMax:  win.tMax,
       nAvg:  Math.max(1, Math.round(+document.getElementById('nAvg').value || 1)),
       gamma:    gammaRaw !== '' ? +gammaRaw : null,
       noOffset: !bateman && document.getElementById('noOffset').checked,
@@ -2065,6 +2217,7 @@ _fetchFull();
   _rescaleToWindow(rebinned.Z, rebinned.t);
 }})();
 _hookCamera();
+_initRegion({_reg_init_js});
 if (document.getElementById('sim_show').checked) runSim();
 </script>
 </body>
@@ -2155,9 +2308,18 @@ def serve(html, state):
             if url.path in ("/", "/spectrogram.html"):
                 self._send(200, STATE["html"], "text/html; charset=utf-8")
 
+            elif url.path == "/get-region":
+                # saved decay-fit region mode + drawn box for the loaded file/crop
+                sess = read_prefs().get("session") or {}
+                view = saved_view(STATE.get("npz_path"), sess.get("fMin"), sess.get("fMax")) \
+                    if STATE.get("npz_path") else {}
+                rb = view.get("regBox")
+                self._send(200, {"mode": read_prefs().get("decayRegion") or "sliders",
+                                 "box": rb if isinstance(rb, list) and len(rb) == 4 else None})
+
             elif url.path == "/get-pref":
                 key = q.get("key", [""])[0]
-                if key not in ("fullOpen",):
+                if key not in ("fullOpen", "decayRegion"):
                     return self._send(400, {"error": f"unknown pref key: {key!r}"})
                 self._send(200, {"value": read_prefs().get(key)})
 
@@ -2323,7 +2485,11 @@ def serve(html, state):
                         if (isinstance(sess, dict) and STATE.get("npz_path")
                                 and sess.get("file") == STATE["npz_path"]):
                             if isinstance(body.get("view"), dict):
-                                sess["view"] = body["view"]
+                                new_view = dict(body["view"])
+                                old_view = sess.get("view") if isinstance(sess.get("view"), dict) else {}
+                                if "regBox" not in new_view and "regBox" in old_view:
+                                    new_view["regBox"] = old_view["regBox"]   # page not ready yet
+                                sess["view"] = new_view
                             if "linear" in body:
                                 sess["linear"] = bool(body["linear"])
                             if body.get("nAvg") is not None:
@@ -2340,7 +2506,7 @@ def serve(html, state):
                     pref_val = body.get("value", "")
                     if pref_key not in ("gamma", "errA", "errB", "hlIso", "hlGs",
                                         "skipStart", "skipEnd", "bateman", "unweighted",
-                                        "parentMin", "parentMax", "bars3d", "fullOpen", "colorscale"):
+                                        "parentMin", "parentMax", "bars3d", "fullOpen", "colorscale", "decayRegion"):
                         raise ValueError(f"unknown pref key: {pref_key!r}")
                     with _PREFS_LOCK:
                         prefs = read_prefs()
