@@ -422,10 +422,11 @@ def compute_sim_lines(freq, sum_all, raw):
             "n_ions": int(len(ion_db)), "lines": lines}
 
 
-def make_title(path, fmin, fmax, linear=False):
+def make_title(path, fmin, fmax, linear=False, ion=None):
     return (f"{os.path.basename(path)}   "
             f"[{fmin:,.0f} – {fmax:,.0f} Hz]   "
-            f"({'linear' if linear else 'dB'})")
+            f"({'linear' if linear else 'dB'})"
+            + (f"   ·   {ion}" if ion else ""))
 
 
 # Plain strings (not f-strings) so CSS/JS braces need no escaping.
@@ -884,7 +885,8 @@ async function loadAroundIon(file, l) {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({file: file, fMin: fMin, fMax: fMax,
                             linear: db ? !db.checked : false,
-                            nAvg: nav ? Math.max(1, Math.round(+nav.value || 1)) : 1})
+                            nAvg: nav ? Math.max(1, Math.round(+nav.value || 1)) : 1,
+                            ion: l.ion + ' h' + l.h})
     });
     var d = await r.json();
     if (!r.ok) { _srchStatus('✗ ' + (d.error || 'load failed'), 'err'); return; }
@@ -2233,18 +2235,28 @@ if (document.getElementById('sim_show').checked) runSim();
 # Local server: serves the current page, loads files, runs decay fits
 # ---------------------------------------------------------------------------
 
-def load_dataset(path, fmin=None, fmax=None, linear=False, n_avg=1):
-    """Load + crop a file and build its page. Returns (html, state)."""
+def load_dataset(path, fmin=None, fmax=None, linear=False, n_avg=1, ion=None):
+    """Load + crop a file and build its page. Returns (html, state).
+
+    ion: label added to the title (set by Search ions, e.g. "m186Hf72+ h213").
+    If not given, it is kept from the saved session when the same file and
+    crop are reloaded (bare re-run, refresh), and dropped otherwise.
+    """
     path = os.path.abspath(os.path.expanduser(path))
     if not os.path.isfile(path):
         raise FileNotFoundError(f"file not found — {path}")
+    if not ion:
+        prev = read_prefs().get("session") or {}
+        if (isinstance(prev, dict) and prev.get("file") == path
+                and _same_crop(prev.get("fMin"), fmin) and _same_crop(prev.get("fMax"), fmax)):
+            ion = prev.get("ion") or None
     freq, time, power = load(path)
     lo = float(freq.min()) if fmin is None else float(fmin)
     hi = float(freq.max()) if fmax is None else float(fmax)
     freq_s, power_s = slice_freq(freq, power, lo, hi)
     print(f"Loaded {os.path.basename(path)}: {power_s.shape[1]} freq bins × "
           f"{power_s.shape[0]} time bins  [{lo:,.0f} – {hi:,.0f} Hz]")
-    html, state = build_page(freq_s, time, power_s, make_title(path, lo, hi, linear),
+    html, state = build_page(freq_s, time, power_s, make_title(path, lo, hi, linear, ion),
                              log_scale=not linear, n_avg=max(1, int(n_avg)),
                              file_path=path, fmin_req=fmin, fmax_req=fmax)
     # Whole (uncropped) file, summed over all frames: used for the simulated-
@@ -2263,6 +2275,7 @@ def load_dataset(path, fmin=None, fmax=None, linear=False, n_avg=1):
         fMax=None if fmax is None else float(fmax),
         linear=bool(linear),
         nAvg=max(1, int(n_avg)),
+        ion=ion or None,
         view=saved_view(path, fmin, fmax),
     )
     try:
@@ -2385,7 +2398,8 @@ def serve(html, state):
                 try:
                     b = self._body()
                     html_new, st = load_dataset(b.get("file", ""), b.get("fMin"), b.get("fMax"),
-                                                bool(b.get("linear")), int(b.get("nAvg") or 1))
+                                                bool(b.get("linear")), int(b.get("nAvg") or 1),
+                                                ion=(str(b["ion"]).strip() or None) if b.get("ion") else None)
                     STATE.clear(); STATE.update(st); STATE["html"] = html_new
                     self._send(200, {"status": "loaded"})
                 except Exception as exc:
