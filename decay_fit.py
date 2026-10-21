@@ -514,6 +514,110 @@ def make_equation_text_bateman(resolved, gamma=None):
 # Plotting
 # ---------------------------------------------------------------------------
 
+def _box_extent(artist, renderer):
+    """Window extent of a legend, or of a text's background box if it has one."""
+    patch = artist.get_bbox_patch() if hasattr(artist, "get_bbox_patch") else None
+    return (patch or artist).get_window_extent(renderer)
+
+
+def place_boxes(fig, ax, xy_sets, fixed=(), legend_kw=None, locs=None, log=False,
+                max_iter=8, pad_px=6, min_fontsize=10):
+    """Wrapper: if the legend can't be placed clear of everything with at most
+    `max_iter` headroom steps, retry with a smaller legend font."""
+    fig.canvas.draw()          # one full draw; later steps reuse its layout
+    if legend_kw is None:
+        return _place_boxes_once(fig, ax, xy_sets, fixed, None, log, max_iter, pad_px)
+    y0 = ax.get_ylim()
+    fs0 = legend_kw.get("fontsize", 18)
+    for fs in sorted({fs0, max(min_fontsize, fs0 - 3), max(min_fontsize, fs0 - 6)}, reverse=True):
+        if ax.get_legend() is not None:
+            ax.get_legend().remove()
+        ax.set_ylim(y0)
+        if _place_boxes_once(fig, ax, xy_sets, fixed, dict(legend_kw, fontsize=fs),
+                             log, max_iter, pad_px):
+            return True
+    # no room inside the panel: one row of legend entries just above it
+    if ax.get_legend() is not None:
+        ax.get_legend().remove()
+    n = len(ax.get_legend_handles_labels()[0])
+    ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=max(n, 1),
+              borderaxespad=0.3, **dict(legend_kw, fontsize=max(min_fontsize, fs0 - 6)))
+    return False
+
+
+def _place_boxes_once(fig, ax, xy_sets, fixed, legend_kw, log, max_iter, pad_px):
+    """Keep legend / text boxes from covering data on `ax`.
+
+    xy_sets : list of (x, y) arrays in data coordinates (points, error-bar
+              ends, fit-curve samples) that must stay visible.
+    fixed   : text artists with fixed positions (e.g. the parameter box).
+    The legend is put at the first clear spot found by scanning the panel
+    (top rows first, left to right) - clear of the data and the fixed boxes.
+    Only if no spot exists (or a fixed box covers data) is headroom added
+    above the data, a little at a time. `locs` is unused (kept for callers).
+    """
+    xs = np.concatenate([np.asarray(x, float).ravel() for x, _ in xy_sets]) if xy_sets else np.array([])
+    ys = np.concatenate([np.asarray(y, float).ravel() for _, y in xy_sets]) if xy_sets else np.array([])
+    good = np.isfinite(xs) & np.isfinite(ys) & ((ys > 0) if log else True)
+    xy = np.column_stack([xs[good], ys[good]])
+
+    def covers(bb, pts, pad=0):
+        return bool(np.any((pts[:, 0] >= bb.x0 - pad) & (pts[:, 0] <= bb.x1 + pad) &
+                           (pts[:, 1] >= bb.y0 - pad) & (pts[:, 1] <= bb.y1 + pad)))
+
+    leg = None
+    if legend_kw is not None:
+        leg = ax.legend(loc="upper left", **legend_kw)
+    r = fig.canvas.get_renderer()
+    for _ in range(max_iter + 1):
+        pts = ax.transData.transform(xy) if len(xy) else np.empty((0, 2))
+        fixed_bb = [_box_extent(t, r) for t in fixed]
+        if not any(covers(b, pts, pad_px) for b in fixed_bb):
+            if leg is None:
+                return True
+            # scan candidate positions for the legend's upper-left corner
+            axb = ax.get_window_extent(r)
+            lb  = _box_extent(leg, r)
+            w, h = lb.width + 2 * pad_px, lb.height + 2 * pad_px
+            fx = np.linspace(0.0, 1.0, 51)
+            cx0 = axb.x0 + fx * axb.width                    # candidate left edges
+            cy1 = axb.y0 + fx[::-1] * axb.height             # candidate top edges, top first
+            X0, Y1 = np.meshgrid(cx0, cy1)                   # rows: top -> bottom
+            X0, Y1 = X0.ravel(), Y1.ravel()
+            inside = (X0 + w <= axb.x1) & (Y1 - h >= axb.y0)
+            free = inside.copy()
+            for b in fixed_bb:                               # not on a fixed box
+                free &= ~((X0 < b.x1) & (X0 + w > b.x0) & (Y1 > b.y0) & (Y1 - h < b.y1))
+            idx = np.nonzero(free)[0]
+            if len(idx) and len(pts):
+                # drop candidates that contain any data point (chunked)
+                keep = np.ones(len(idx), bool)
+                for k in range(0, len(idx), 400):
+                    c = idx[k:k + 400]
+                    hit = ((pts[None, :, 0] >= X0[c, None]) & (pts[None, :, 0] <= X0[c, None] + w) &
+                           (pts[None, :, 1] <= Y1[c, None]) & (pts[None, :, 1] >= Y1[c, None] - h))
+                    keep[k:k + 400] = ~hit.any(axis=1)
+                idx = idx[keep]
+            if len(idx):
+                c = idx[0]
+                # place the legend frame (pad_px inside the candidate rectangle)
+                ax_xy = ax.transAxes.inverted().transform((X0[c] + pad_px, Y1[c] - pad_px))
+                leg.remove()
+                leg = ax.legend(loc="upper left", bbox_to_anchor=tuple(ax_xy),
+                                borderaxespad=0.0, **legend_kw)
+                return True
+        if _ == max_iter:
+            break
+        # nothing fits: add headroom above the data (transforms update
+        # immediately; box sizes in pixels don't change)
+        lo, hi = ax.get_ylim()
+        if log:
+            ax.set_ylim(lo, hi * (hi / lo) ** 0.08)
+        else:
+            ax.set_ylim(lo, hi + 0.08 * (hi - lo))
+    return leg is None   # fixed boxes alone may still overlap after max_iter
+
+
 def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, resolved,
                with_offset, bateman, freq_min, freq_max, filename,
                gamma=None, title_suffix=None, sigma_fit=None, err_note=None,
@@ -540,7 +644,7 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
     ncols = 2 if log_plot else 1
     nrows = 2 if show_residuals else 1
     multi = ncols > 1 or nrows > 1
-    figsize = (16 if ncols == 1 else 26, 6 if nrows == 1 else 8.5)
+    figsize = (16 if ncols == 1 else 20, 6 if nrows == 1 else 9.5)
     if multi:
         # constrained layout keeps axis labels/titles inside the figure,
         # also when the window is smaller than figsize or is resized
@@ -549,9 +653,9 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
         except TypeError:                                   # matplotlib < 3.5
             fig = plt.figure(figsize=figsize, constrained_layout=True)
         try:
-            fig.get_layout_engine().set(h_pad=0.04, w_pad=0.04, hspace=0.0, wspace=0.03)
+            fig.get_layout_engine().set(h_pad=0.2, w_pad=0.25, hspace=0.0, wspace=0.04)
         except AttributeError:
-            fig.set_constrained_layout_pads(h_pad=0.04, w_pad=0.04, hspace=0.0, wspace=0.03)
+            fig.set_constrained_layout_pads(h_pad=0.2, w_pad=0.25, hspace=0.0, wspace=0.04)
     else:
         fig = plt.figure(figsize=figsize)
     gs  = fig.add_gridspec(nrows, ncols, height_ratios=[3, 1] if nrows == 2 else [1])
@@ -584,7 +688,7 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
         chi2_red = chi2 / ndf if ndf > 0 else float("nan")
         eq_text += f"\n\n$\\chi^2/ndf$ = {chi2:.4g}/{ndf} = {chi2_red:.3g}"
 
-    ax.text(
+    par_box = ax.text(
         0.97, 0.97, eq_text,
         transform=ax.transAxes,
         va="top", ha="right",
@@ -622,10 +726,11 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
     ax.tick_params(labelsize=20)
     # narrower panel next to the log plot: keep the legend clear of the
     # parameter box (lower left is empty for a decay)
-    ax.legend(fontsize=18, loc="lower left" if log_plot else "best")
+    # legend is placed at the end (place_boxes) so it avoids data and the box
     ax.set_xlim(left=0)
 
     # ── Semi-log panel: data − C and fit − C, so an exponential is a straight line
+    log_pts = []
     if ax_log is not None:
         if bateman:
             C_bg = resolved['C'][0]
@@ -656,10 +761,15 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
             ax_log.set_ylim(lo / 2, hi * 2)
         ax_log.set_ylabel(f"Integrated power{sub} (log)", fontsize=22)
         ax_log.tick_params(labelsize=20)
-        ax_log.legend(fontsize=18)
+        log_pts = [(time_fit[ok], y_dat[ok]), (t_dense[okf], y_fit[okf])]
+        if sigma_fit is not None:
+            up = (y_dat + sigma_fit)[ok]
+            lo_e = (y_dat - sigma_fit)[ok]
+            log_pts += [(time_fit[ok], up), (time_fit[ok][lo_e > 0], lo_e[lo_e > 0])]
         ax_log.set_xlim(left=0)
 
     # ── Residual panels: (data − fit)/σ, or data − fit for an unweighted fit
+    res_boxes = []
     if ax_res is not None:
         if sigma_fit is not None:
             r_plot, r_label = residuals / sigma_fit, r"(data − fit)/$\sigma$"
@@ -678,9 +788,9 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
             if a_r is None:
                 continue
             a_r.axhspan(-band, band, color="0.85", zorder=0)
-            a_r.text(0.995, 0.95, stat_txt, transform=a_r.transAxes, ha="right", va="top",
+            res_boxes.append((a_r, a_r.text(0.995, 0.95, stat_txt, transform=a_r.transAxes, ha="right", va="top",
                      fontsize=13, bbox=dict(boxstyle="round,pad=0.25", facecolor="white",
-                                            edgecolor="0.7", alpha=0.85))
+                                            edgecolor="0.7", alpha=0.85))))
             a_r.axhline(0, color="#dd4444", lw=1.5)
             a_r.plot(time_fit, r_plot, "o", ms=3, color="black")
             a_r.set_ylabel(r_label, fontsize=18)
@@ -701,8 +811,38 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
     else:
         fig.suptitle(format_title_mathtext(title), fontsize=22)
     if not multi:
-        fig.tight_layout(pad=0)
-        fig.subplots_adjust(right=0.98)
+        fig.tight_layout(pad=0.6)
+
+    # ── Keep legends / text boxes off the data: try legend positions, and add
+    #    headroom above the data until nothing overlaps
+    lin_pts = [(time_fit, intensity_fit), (t_dense, I_fit)]
+    if sigma_fit is not None:
+        lin_pts += [(time_fit, intensity_fit + sigma_fit), (time_fit, intensity_fit - sigma_fit)]
+    jobs = [dict(ax=ax, xy_sets=lin_pts, fixed=[par_box], legend_kw=dict(fontsize=18),
+                 locs=("upper center", "upper left", "center right", "lower left",
+                       "lower center", "center"))]
+    if ax_log is not None:
+        jobs.append(dict(ax=ax_log, xy_sets=log_pts, legend_kw=dict(fontsize=18), log=True,
+                         locs=("upper right", "lower left", "upper center", "lower center",
+                               "center right")))
+    for a_r, t_box in res_boxes:
+        jobs.append(dict(ax=a_r, xy_sets=[(time_fit, r_plot)], fixed=[t_box]))
+    orig_ylim = [j["ax"].get_ylim() for j in jobs]
+
+    def relayout_boxes(*_):
+        # positions depend on the on-screen size: redo from the original
+        # y-ranges whenever the window is (re)sized
+        for j, yl in zip(jobs, orig_ylim):
+            if j["ax"].get_legend() is not None:
+                j["ax"].get_legend().remove()
+            j["ax"].set_ylim(yl)
+        for j in jobs:
+            place_boxes(fig, **j)
+        fig.canvas.draw_idle()
+
+    relayout_boxes()
+    fig._relayout_boxes = relayout_boxes
+    fig.canvas.mpl_connect("resize_event", relayout_boxes)
     plt.show()
 
     # Console summary
