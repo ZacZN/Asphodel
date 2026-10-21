@@ -1103,8 +1103,46 @@ function toggleFull() {
   var open = !_fullOpen();
   _setFull(open);
   savePref('fullOpen', open ? '1' : '0');
-  if (open) _renderFull();
+  if (open) {
+    _renderFull();
+    document.getElementById('fullDiv').scrollIntoView({behavior: 'smooth', block: 'end'});
+  }
 }
+
+// ── 2-D / 3-D plots fill the window height above the "Whole-file spectrum"
+//    bar (the bar sits at the bottom of the window; the expanded 1-D plot
+//    is below it and the page scrolls) ─────────────────────────────────────
+var _fitTimer = null;
+function fitPlots() {
+  var plots = document.getElementById('plots');
+  var bar   = document.getElementById('fullToggle');
+  if (!plots || !bar || typeof Plotly === 'undefined') return;
+  var top   = plots.getBoundingClientRect().top + window.scrollY;
+  var boxV  = 2 * 6 + 2;                                  // panel padding + border
+  var below = 8 + bar.offsetHeight + 4 + 8;               // gap, bar, gap, body padding
+  var h = Math.max(420, Math.floor(window.innerHeight - top - boxV - below));
+  var setH = function(id, hh) {
+    var gd = document.getElementById(id);
+    if (!gd || !gd.layout) return null;
+    gd.style.height = hh + 'px';        // the exported 3-D div has a fixed 680px style
+    var wrap = gd.parentElement;        // ...and so does plotly's wrapper around it
+    if (wrap && wrap.id !== 'heatDiv' && wrap.id !== 'surfDiv') wrap.style.height = hh + 'px';
+    return gd.layout.height !== hh ? Plotly.relayout(id, {height: hh}) : null;
+  };
+  var jobs = ['heatPlot', 'specPlot'].map(function(id) { return setH(id, h); }).filter(Boolean);
+  Promise.all(jobs).then(function() {
+    // trim any remaining overflow so the bar sits exactly at the bottom
+    var over = document.documentElement.scrollHeight - window.innerHeight
+               - (_fullOpen() ? document.getElementById('fullPlot').offsetHeight : 0);
+    if (over > 0 && h - over >= 420) {
+      setH('heatPlot', h - over);
+      setH('specPlot', h - over);
+    }
+  });
+}
+window.addEventListener('resize', function() {
+  clearTimeout(_fitTimer); _fitTimer = setTimeout(fitPlots, 150);
+});
 
 // Built the same way as scanner.py's spectrum figure so it stays responsive:
 // the spectrum is one WebGL trace with hover switched off, and each line group
@@ -1164,7 +1202,7 @@ function _renderFull() {
     title: {text: 'Whole file: all ' + FULL.n + ' frames, ' +
                   Math.round(FULL.f[0]).toLocaleString('en-GB') + ' – ' +
                   Math.round(FULL.f[FULL.f.length - 1]).toLocaleString('en-GB') + ' Hz',
-            x: 0.5, xanchor: 'center', font: {size: 13, color: '#e5e7eb'}},
+            x: 0.5, xanchor: 'center', font: {size: 18, color: '#e5e7eb'}},
     xaxis: {title: {text: 'Frequency (Hz)'}, tickformat: ',d',
             color: '#9ca3af', gridcolor: '#374151', zerolinecolor: '#374151'},
     yaxis: {title: {text: pLabel}, range: [y0, y1],
@@ -1377,7 +1415,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
         _scene["xaxis"]["range"] = [t_sel_min, t_sel_max]
 
     fig.update_layout(
-        title=dict(text=format_title_html(title), x=0.5, xanchor="center", font_size=14),
+        title=dict(text=format_title_html(title), x=0.5, xanchor="center", font_size=18),
         scene=_scene,
         margin=dict(l=0, r=0, t=60, b=0),
         height=680,
@@ -1450,9 +1488,10 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
   #discardMsg {{ font-size: 11px; color: #fbbf24; margin-left: 4px; }}
   .opt-grp span#decayStatus {{ font-size: 11px; margin-left: 4px; text-transform: none;
                                letter-spacing: normal; font-weight: 400; }}
-  #plots {{ display: flex; gap: 8px; align-items: flex-start; }}
-  #heatDiv {{ flex: 1; min-width: 0; }}
-  #surfDiv {{ flex: 1; min-width: 0; }}
+  #plots {{ display: flex; gap: 10px; align-items: stretch; }}
+  #heatDiv, #surfDiv {{ flex: 1; min-width: 0; border: 1px solid #374151; border-radius: 8px;
+                        padding: 6px; background: #111827; overflow: hidden; }}
+  #heatDiv.drawing {{ outline: 2px dashed #f97316; outline-offset: 2px; }}
 {LOADER_CSS}
 {SIM_CSS}
 </style>
@@ -1829,20 +1868,21 @@ function _initHeatmap() {{
     template: {{}},
     title: {{ text: formatTitleHtml(document.getElementById('plotTitle').value),
               x: 0.5, xanchor: 'center', y: 0.985, yanchor: 'top',
-              font: {{ size: 14, color: '#e5e7eb' }} }},
+              font: {{ size: 18, color: '#e5e7eb' }} }},
     xaxis2: {{ overlaying: 'x', side: 'top', title: {{ text: '', standoff: 4 }},
                showgrid: false, zeroline: false,
                color: 'rgb(56,189,248)', tickfont: {{ size: 10 }} }},
     xaxis: {{ title: {{ text: 'Time (s)' }},
               range: [+document.getElementById('tMin').value, +document.getElementById('tMax').value],
               color: '#9ca3af', gridcolor: '#374151', zerolinecolor: '#374151' }},
-    yaxis: {{ title: {{ text: 'Frequency (Hz)' }}, tickformat: ',d', autorange: false,
+    yaxis: {{ title: {{ text: 'Frequency (Hz)', standoff: 18 }}, automargin: true,
+              tickformat: ',d', autorange: false,
               range: [+document.getElementById('fMax').value, +document.getElementById('fMin').value],
               color: '#9ca3af', gridcolor: '#374151', zerolinecolor: '#374151' }},
     paper_bgcolor: '#111827', plot_bgcolor: '#1f2937',
     font: {{ color: '#e5e7eb' }},
-    margin: {{ l: 90, r: 20, t: 110, b: 60 }},
-    height: 680,
+    margin: {{ l: 110, r: 20, t: 120, b: 60 }},
+    height: 680,   // resized to fill the window by fitPlots()
   }}, {{ responsive: true }});
 }}
 
@@ -2315,6 +2355,7 @@ fetch('/get-pref?key=fullOpen').then(function(r) {{ return r.json(); }}).then(fu
   if (open !== _fullOpen()) {{ _setFull(open); if (open) _renderFull(); }}
 }}).catch(function() {{}});
 _fetchFull();
+fitPlots();
 // Align colorscale max across both plots using full data range
 (function() {{
   var n = Math.max(1, Math.round(+document.getElementById('nAvg').value || 1));
