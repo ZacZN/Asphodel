@@ -1570,11 +1570,12 @@ further_tab = html.Div([
         html.Small("Peak fitting: switch it on and click a peak to add it (the start values snap "
                    "to the nearest maximum); edit any value in the table to adjust the curve by "
                    "hand, or press Fit to fit over the current view.  Delete a row to remove a "
-                   "peak.  χ²/ndf uses a noise σ per bin estimated from the summed spectrum; "
+                   "peak.  Drag a peak's centre (the × marker, cursor ↔) sideways to move it.  χ²/ndf uses a noise σ per bin estimated from the summed spectrum; "
                    "uncertainties are scaled by √(χ²/ndf).", style=HELP_STYLE),
         html.Div(id="fit-status", style={"fontSize": "13px", "margin": "4px 0"}),
         dcc.Store(id="fit-mode", data=False),
         dcc.Store(id="fit-click", data=None),
+        dcc.Store(id="fit-drag", data=None),
         dcc.Store(id="fit-run", data=None),
         dcc.Store(id="fit-state", data=None),
         html.Div(id="_fit-mode-hook", style={"display": "none"}),
@@ -1641,6 +1642,7 @@ _TABLE_CSS = """
 # orange accents orange, so the figure code doesn't need a second colour scheme.
 _FIT_CSS = """
 #sum-graph.fit-mode .nsewdrag { cursor: crosshair !important; }
+#sum-graph.fit-grab .nsewdrag { cursor: ew-resize !important; }
 """
 
 _DARK_CSS = """
@@ -3153,8 +3155,102 @@ app.clientside_callback(
             if (!gd || gd._theiaFitClick) return;
             gd._theiaFitClick = true;
             var down = null;
-            gd.addEventListener('mousedown', function(e) { down = [e.clientX, e.clientY]; }, true);
+            gd.addEventListener('mousedown', function(e) {
+                down = [e.clientX, e.clientY]; window._theiaSkipClick = false; }, true);
+
+            // ---- drag a fitted peak sideways to move its centre ----------
+            // Grabbing within a few pixels of a peak's centre (the x marker)
+            // starts a drag instead of a pan.  While dragging, the peak's
+            // curve is shifted in the browser; on release the new centre is
+            // sent to the server (fit-drag store).
+            function traceIdx(name) {
+                for (var i = 0; i < gd.data.length; i++) if (gd.data[i].name === name) return i;
+                return -1;
+            }
+            function hitPeak(e) {
+                var L = gd._fullLayout, ip = traceIdx('fit peaks');
+                if (!L || !L.xaxis || ip < 0) return -1;
+                var mx = gd.data[ip].x || [], my = gd.data[ip].y || [];
+                var r = gd.getBoundingClientRect();
+                var px = e.clientX - r.left - L.xaxis._offset;
+                var py = e.clientY - r.top - L.yaxis._offset;
+                if (px < 0 || px > L.xaxis._length || py < 0 || py > L.yaxis._length) return -1;
+                var best = -1, bestd = 9;
+                for (var k = 0; k < mx.length; k++) {
+                    var d = Math.abs(L.xaxis.d2p(mx[k]) - px);
+                    var top = L.yaxis.d2p(my[k]);
+                    if (d < bestd && py >= top - 15) { best = k; bestd = d; }
+                }
+                return best;
+            }
+            var drag = null;
+            gd.addEventListener('mousedown', function(e) {
+                if (e.button !== 0) return;
+                var k = hitPeak(e);
+                if (k < 0) return;
+                e.stopPropagation(); e.preventDefault();      // no pan
+                var it = traceIdx('fit'), ic = traceIdx('fit components'),
+                    ib = traceIdx('fit background'), ip = traceIdx('fit peaks');
+                var X = (gd.data[it].x || []).map(Number), T = (gd.data[it].y || []).map(Number);
+                var n = X.length;
+                var cx = gd.data[ic].x, cy = gd.data[ic].y;
+                var seg = k * (n + 1);                            // segments split by null
+                var B = (gd.data[ib].x && gd.data[ib].x.length) ? gd.data[ib].y.map(Number)
+                                                               : X.map(function() { return 0; });
+                var C = [];
+                for (var j = 0; j < n; j++) C.push(Number(cy[seg + j]) - B[j]);
+                drag = {k: k, x0: e.clientX, X: X, T: T, C: C, B: B, seg: seg, n: n,
+                        it: it, ic: ic, ip: ip, cx: cx.slice(), cy: cy.slice(),
+                        mx: gd.data[ip].x.slice(), my: gd.data[ip].y.slice(), dx: 0};
+                window._theiaSkipClick = true;
+            }, true);
+            // redraw at most once per animation frame while dragging
+            var pendingX = null;
+            document.addEventListener('mousemove', function(e) {
+                if (!drag) return;
+                var first = (pendingX === null);
+                pendingX = e.clientX;
+                if (first) requestAnimationFrame(function() {
+                    var cxp = pendingX; pendingX = null;
+                    if (drag) dragTo(cxp);
+                });
+            });
+            function dragTo(clientX) {
+                var L = gd._fullLayout;
+                var dx = L.xaxis.p2d(L.xaxis.d2p(drag.mx[drag.k]) + (clientX - drag.x0))
+                         - drag.mx[drag.k];
+                drag.dx = dx;
+                var X = drag.X, n = drag.n, step = (X[n - 1] - X[0]) / (n - 1);
+                var newT = [], cx = drag.cx.slice(), cy = drag.cy.slice();
+                for (var j = 0; j < n; j++) {
+                    var f = (X[j] - dx - X[0]) / step, i0 = Math.floor(f), w = f - i0;
+                    var c = (i0 >= 0 && i0 < n - 1) ? drag.C[i0] * (1 - w) + drag.C[i0 + 1] * w : 0;
+                    newT.push(drag.T[j] - drag.C[j] + c);
+                    cx[drag.seg + j] = X[j];
+                    cy[drag.seg + j] = c + drag.B[j];
+                }
+                var mx = drag.mx.slice(), my = drag.my.slice();
+                mx[drag.k] = drag.mx[drag.k] + dx;
+                Plotly.restyle(gd, {x: [X, cx, mx], y: [newT, cy, my]}, [drag.it, drag.ic, drag.ip]);
+            }
+            document.addEventListener('mouseup', function(e) {
+                if (!drag) return;
+                var d = drag; drag = null;
+                if (Math.abs(e.clientX - d.x0) < 2) return;     // no real move
+                var L = gd._fullLayout;                          // final position
+                d.dx = L.xaxis.p2d(L.xaxis.d2p(d.mx[d.k]) + (e.clientX - d.x0)) - d.mx[d.k];
+                window.dash_clientside.set_props('fit-drag', {data: {
+                    peak: d.k, centre: d.mx[d.k] + d.dx, t: Date.now()}});
+            });
+            // cursor: left-right arrow when over a draggable peak centre
+            gd.addEventListener('mousemove', function(e) {
+                if (drag) return;
+                var box = document.getElementById('sum-graph');
+                if (box) box.classList.toggle('fit-grab', hitPeak(e) >= 0);
+            });
+
             gd.addEventListener('click', function(e) {
+                if (window._theiaSkipClick) { window._theiaSkipClick = false; return; }
                 if (!window._theiaFitMode || !down) return;
                 if (Math.abs(e.clientX - down[0]) > 4 || Math.abs(e.clientY - down[1]) > 4) return;
                 var L = gd._fullLayout;
@@ -3206,6 +3302,7 @@ app.clientside_callback(
     Output("fit-status", "children"),
     Output("fit-panel", "style"),
     Input("fit-click", "data"),
+    Input("fit-drag", "data"),
     Input("fit-run", "data"),
     Input("fit-table", "data_timestamp"),
     Input("fit-shape", "value"),
@@ -3218,7 +3315,7 @@ app.clientside_callback(
     State("fit-table", "data"),
     prevent_initial_call=True,
 )
-def update_fit(click, run, _ts, shape, bg, b0, b1, _clear, key, state, table):
+def update_fit(click, dragged, run, _ts, shape, bg, b0, b1, _clear, key, state, table):
     """Every change to the fit goes through here (one callback, because these
     outputs also feed its inputs): clicks add peaks, table / background edits
     change the curve by hand, Fit runs the least-squares fit."""
@@ -3246,6 +3343,12 @@ def update_fit(click, run, _ts, shape, bg, b0, b1, _clear, key, state, table):
                     state["bgp"] = [float(np.nanmedian(pp[m])) if m.any() else 0.0, 0.0]
                 state["peaks"] = state["peaks"] + [_snap_peak(ff, pp, click["x"], state["bgp"], bg)]
                 state["fitted"], state["unc"] = False, None
+            elif trig.startswith("fit-drag") and dragged:
+                k = int(dragged["peak"])
+                if 0 <= k < len(state["peaks"]):
+                    state["peaks"] = [dict(pk) for pk in state["peaks"]]
+                    state["peaks"][k]["centre"] = float(dragged["centre"])
+                    state["fitted"], state["unc"] = False, None
             elif trig.startswith("fit-run") and run:
                 if not state["peaks"]:
                     raise ValueError("add at least one peak first (turn on Peak fitting, then "
