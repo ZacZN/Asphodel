@@ -521,12 +521,17 @@ def _box_extent(artist, renderer):
 
 
 def place_boxes(fig, ax, xy_sets, fixed=(), legend_kw=None, locs=None, log=False,
-                max_iter=8, pad_px=6, min_fontsize=10):
+                max_iter=8, pad_px=6, min_fontsize=10, prefer=None):
     """Wrapper: if the legend can't be placed clear of everything with at most
-    `max_iter` headroom steps, retry with a smaller legend font."""
+    `max_iter` headroom steps, retry with a smaller legend font.
+
+    prefer: preferred legend position - "top_right" (top-right corner of the
+    panel) or "below_fixed_right" (right-aligned just under the first fixed
+    box). The clear spot nearest to it is used; None = first clear spot from
+    the top-left."""
     fig.canvas.draw()          # one full draw; later steps reuse its layout
     if legend_kw is None:
-        return _place_boxes_once(fig, ax, xy_sets, fixed, None, log, max_iter, pad_px)
+        return _place_boxes_once(fig, ax, xy_sets, fixed, None, log, max_iter, pad_px, prefer)
     y0 = ax.get_ylim()
     fs0 = legend_kw.get("fontsize", 18)
     for fs in sorted({fs0, max(min_fontsize, fs0 - 3), max(min_fontsize, fs0 - 6)}, reverse=True):
@@ -534,7 +539,7 @@ def place_boxes(fig, ax, xy_sets, fixed=(), legend_kw=None, locs=None, log=False
             ax.get_legend().remove()
         ax.set_ylim(y0)
         if _place_boxes_once(fig, ax, xy_sets, fixed, dict(legend_kw, fontsize=fs),
-                             log, max_iter, pad_px):
+                             log, max_iter, pad_px, prefer):
             return True
     # no room inside the panel: one row of legend entries just above it
     if ax.get_legend() is not None:
@@ -545,7 +550,7 @@ def place_boxes(fig, ax, xy_sets, fixed=(), legend_kw=None, locs=None, log=False
     return False
 
 
-def _place_boxes_once(fig, ax, xy_sets, fixed, legend_kw, log, max_iter, pad_px):
+def _place_boxes_once(fig, ax, xy_sets, fixed, legend_kw, log, max_iter, pad_px, prefer=None):
     """Keep legend / text boxes from covering data on `ax`.
 
     xy_sets : list of (x, y) arrays in data coordinates (points, error-bar
@@ -584,6 +589,16 @@ def _place_boxes_once(fig, ax, xy_sets, fixed, legend_kw, log, max_iter, pad_px)
             cy1 = axb.y0 + fx[::-1] * axb.height             # candidate top edges, top first
             X0, Y1 = np.meshgrid(cx0, cy1)                   # rows: top -> bottom
             X0, Y1 = X0.ravel(), Y1.ravel()
+            # preferred spot (candidate rectangle includes pad_px all round)
+            target = None
+            if prefer == "top_right":
+                target = (axb.x1 - w, axb.y1)
+            elif prefer == "below_fixed_right" and fixed_bb:
+                b0 = fixed_bb[0]
+                target = (b0.x1 - w + pad_px, b0.y0)
+            if target is not None:
+                X0 = np.concatenate([[target[0]], X0])
+                Y1 = np.concatenate([[target[1]], Y1])
             inside = (X0 + w <= axb.x1) & (Y1 - h >= axb.y0)
             free = inside.copy()
             for b in fixed_bb:                               # not on a fixed box
@@ -599,7 +614,10 @@ def _place_boxes_once(fig, ax, xy_sets, fixed, legend_kw, log, max_iter, pad_px)
                     keep[k:k + 400] = ~hit.any(axis=1)
                 idx = idx[keep]
             if len(idx):
-                c = idx[0]
+                if target is not None:   # clear spot nearest the preferred one
+                    c = idx[np.argmin((X0[idx] - target[0]) ** 2 + (Y1[idx] - target[1]) ** 2)]
+                else:
+                    c = idx[0]
                 # place the legend frame (pad_px inside the candidate rectangle)
                 ax_xy = ax.transAxes.inverted().transform((X0[c] + pad_px, Y1[c] - pad_px))
                 leg.remove()
@@ -819,10 +837,12 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
     if sigma_fit is not None:
         lin_pts += [(time_fit, intensity_fit + sigma_fit), (time_fit, intensity_fit - sigma_fit)]
     jobs = [dict(ax=ax, xy_sets=lin_pts, fixed=[par_box], legend_kw=dict(fontsize=18),
+                 prefer="below_fixed_right",
                  locs=("upper center", "upper left", "center right", "lower left",
                        "lower center", "center"))]
     if ax_log is not None:
         jobs.append(dict(ax=ax_log, xy_sets=log_pts, legend_kw=dict(fontsize=18), log=True,
+                         prefer="top_right",
                          locs=("upper right", "lower left", "upper center", "lower center",
                                "center right")))
     for a_r, t_box in res_boxes:
