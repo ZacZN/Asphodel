@@ -403,8 +403,14 @@ def compute_sim_lines(freq, sum_all, raw):
     names = ion_db["ion"].to_numpy()[rows]
     hover = ion_db["hover"].to_numpy()[rows]
     lines = []
-    for name, h, f, hv, ok in zip(names, sims["harmonic"], sims["f_sim"], hover, allowed[rows]):
+    def _hl_txt(t, u):
+        t = "" if t is None or (isinstance(t, float) and np.isnan(t)) else str(t).strip()
+        u = "" if u is None or (isinstance(u, float) and np.isnan(u)) else str(u).strip()
+        return (t + (" " + u if u else "")).strip()
+    hl_txt = [_hl_txt(t, u) for t, u in zip(ion_db["T"].to_numpy()[rows], ion_db["T_unit"].to_numpy()[rows])]
+    for name, h, f, hv, ok, ht in zip(names, sims["harmonic"], sims["f_sim"], hover, allowed[rows], hl_txt):
         lines.append({
+            "t_half": ht,
             "f": float(f),
             "ion": str(name),
             "h": int(h),
@@ -608,7 +614,8 @@ SIM_CSS = """
                 max-height: calc(100vh - 32px); overflow-y: auto; }
   .sim-head { display: flex; align-items: center; justify-content: space-between;
               padding: 10px 16px; border-bottom: 1px solid #374151; }
-  .sim-head #simTitle, .sim-head #decayTitle, .sim-head #generalTitle, .sim-head #fileTitle { font-size: 13px; font-weight: 600; text-transform: uppercase;
+  .sim-head #simTitle, .sim-head #decayTitle, .sim-head #generalTitle, .sim-head #fileTitle,
+  .sim-head #searchTitle { font-size: 13px; font-weight: 600; text-transform: uppercase;
                         letter-spacing: .06em; color: #f97316; }
   .sim-x { background: none; border: none; color: #9ca3af; font-size: 20px; line-height: 1;
            cursor: pointer; padding: 0 4px; }
@@ -616,6 +623,19 @@ SIM_CSS = """
   .sim-body { display: flex; flex-direction: column; gap: 12px; padding: 14px 16px 16px; }
   .sim-body .opt-grp { flex-wrap: wrap; }
   .file-dialog { width: min(1000px, calc(100vw - 32px)); }
+  .srch-hint { color: #9ca3af; font-size: 12px; }
+  .srch-list { background: #111827; border: 1px solid #374151; border-radius: 6px;
+               max-height: 360px; overflow-y: auto; }
+  .srch-list:empty { display: none; }
+  .srch-list .item { display: grid; grid-template-columns: 1.2fr .6fr 1.6fr 1fr; gap: 12px;
+                     padding: 5px 12px; cursor: pointer; font-variant-numeric: tabular-nums; }
+  .srch-list .item:hover, .srch-list .item:focus { background: #7c2d12; outline: none; }
+  .srch-list .hdr { display: grid; grid-template-columns: 1.2fr .6fr 1.6fr 1fr; gap: 12px;
+                    padding: 5px 12px; position: sticky; top: 0; background: #1f2937;
+                    color: #9ca3af; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+  .srch-list .ex { color: #9ca3af; }
+  .opt-grp span#srchStatus { font-size: 11px; text-transform: none; letter-spacing: normal;
+                             font-weight: 400; }
   .file-dialog .loader-row { border-bottom: none; padding-bottom: 0; }
   .full-toggle { background: #1f2937; border: 1px solid #374151; border-radius: 6px;
                  color: #e5e7eb; font-size: 12px; font-weight: 600; text-transform: uppercase;
@@ -794,6 +814,76 @@ async function _fetchFull() {
     FULL = d;
     _renderFull();
   } catch (e) { console.log('[full1d] ' + e.message); }
+}
+
+// ── Search ions: list an ion's simulated lines, load ±10 kHz around one ─────
+var SEARCH_HALF_WIDTH_HZ = 10000;
+var _srchTimer = null, _srchSeq = 0;
+function _srchStatus(msg, kind) {
+  var s = document.getElementById('srchStatus');
+  s.textContent = msg;
+  s.style.color = kind === 'err' ? '#f87171' : kind === 'ok' ? '#4ade80' : '#fbbf24';
+}
+function searchIonsSoon() { clearTimeout(_srchTimer); _srchTimer = setTimeout(searchIons, 350); }
+async function searchIons() {
+  clearTimeout(_srchTimer);
+  var q = document.getElementById('srchIon').value.trim();
+  var list = document.getElementById('srchList');
+  if (!q) { list.innerHTML = ''; _srchStatus(''); return; }
+  var seq = ++_srchSeq;
+  _srchStatus('Searching…');
+  try {
+    var r = await fetch('/search-ion', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                        body: JSON.stringify({q: q})});
+    var d = await r.json();
+    if (seq !== _srchSeq) return;
+    list.innerHTML = '';
+    if (!r.ok) { _srchStatus('✗ ' + (d.error || 'error'), 'err'); return; }
+    if (!d.hits.length) { _srchStatus('No simulated lines for "' + q + '" in this file', 'err'); return; }
+    _srchStatus(d.n + ' line' + (d.n === 1 ? '' : 's') + (d.n > d.hits.length ? ' (first ' + d.hits.length + ' shown)' : ''), 'ok');
+    var hdr = document.createElement('div'); hdr.className = 'hdr';
+    ['Ion', 'Harmonic', 'f_sim (Hz)', 'T½'].forEach(function(t) {
+      var c = document.createElement('span'); c.textContent = t; hdr.appendChild(c);
+    });
+    list.appendChild(hdr);
+    d.hits.forEach(function(l) {
+      var it = document.createElement('div');
+      it.className = 'item' + (l.excluded ? ' ex' : '');
+      it.tabIndex = 0;
+      it.title = 'Load ' + Math.round(l.f - SEARCH_HALF_WIDTH_HZ).toLocaleString('en-GB') + ' – ' +
+                 Math.round(l.f + SEARCH_HALF_WIDTH_HZ).toLocaleString('en-GB') + ' Hz' +
+                 (l.excluded ? '  (below the T½ cut)' : '');
+      [l.ion + (l.is_ref ? '  (ref)' : ''), 'h' + l.h,
+       l.f.toLocaleString('en-GB', {maximumFractionDigits: 1}), l.t_half || '?'].forEach(function(t) {
+        var c = document.createElement('span'); c.textContent = t; it.appendChild(c);
+      });
+      it.onclick = function() { loadAroundIon(d.file, l); };
+      it.onkeydown = function(e) { if (e.key === 'Enter') loadAroundIon(d.file, l); };
+      list.appendChild(it);
+    });
+  } catch (e) { if (seq === _srchSeq) _srchStatus('✗ ' + e.message, 'err'); }
+}
+// Load the same file cropped to f ± 10 kHz through the same /load request as
+// File Settings → Load (keeps the current dB / time-avg); errors shown here
+async function loadAroundIon(file, l) {
+  var fMin = l.f - SEARCH_HALF_WIDTH_HZ, fMax = l.f + SEARCH_HALF_WIDTH_HZ;
+  document.getElementById('ldPath').value = file;
+  document.getElementById('ldFmin').value = fMin.toFixed(1);
+  document.getElementById('ldFmax').value = fMax.toFixed(1);
+  var db  = document.getElementById('dbCheck');
+  var nav = document.getElementById('nAvg');
+  _srchStatus('Loading ' + l.ion + ' h' + l.h + '…');
+  try {
+    var r = await fetch('/load', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({file: file, fMin: fMin, fMax: fMax,
+                            linear: db ? !db.checked : false,
+                            nAvg: nav ? Math.max(1, Math.round(+nav.value || 1)) : 1})
+    });
+    var d = await r.json();
+    if (!r.ok) { _srchStatus('✗ ' + (d.error || 'load failed'), 'err'); return; }
+    window.location.href = '/spectrogram.html?t=' + Date.now();
+  } catch (e) { _srchStatus('✗ ' + e.message, 'err'); }
 }
 
 // ── Popout dialogs (simulated ions, decay fit) ──────────────────────────────
@@ -1232,6 +1322,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
       <button onclick="modalOpen('generalModal', 'colorscaleSel')" title="Colour scheme, dB scale, 3-D style, 1-D overlay">General Settings…</button>
       <button onclick="modalOpen('fileModal', 'ldPath')" title="Load a file / change the frequency crop">File Settings…</button>
       <button onclick="simOpen()" title="Particle-identification settings: simulated ion lines">PID Settings…</button>
+      <button onclick="modalOpen('searchModal', 'srchIon')" title="Find an ion's simulated lines and load ±10 kHz around one">Search ions…</button>
       <button onclick="modalOpen('decayModal', 'batemanChk')" title="Decay-fit settings and Run">Decay fit…</button>
     </div>
     <div class="title-row">
@@ -1337,6 +1428,26 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
       <input type="checkbox" id="show1d" {_chk_show1d} onchange="_renderSpec1d(); saveSession()">
       <label for="show1d">show</label>
     </div>
+    </div>
+   </div>
+  </div>
+  <div id="searchModal" class="sim-modal" onclick="if(event.target===this) modalClose('searchModal')">
+   <div class="sim-dialog sim-row" role="dialog" aria-modal="true" aria-labelledby="searchTitle">
+    <div class="sim-head">
+      <span id="searchTitle">Search ions</span>
+      <button class="sim-x" onclick="modalClose('searchModal')" title="Close (Esc)">×</button>
+    </div>
+    <div class="sim-body">
+    <div class="opt-grp">
+      <span>Ion</span>
+      <input type="text" id="srchIon" placeholder="e.g. 186Hf or m186Hf72+" style="width:220px;"
+             oninput="searchIonsSoon()" onkeydown="if(event.key==='Enter') searchIons()">
+      <button onclick="searchIons()">Search</button>
+      <span id="srchStatus"></span>
+    </div>
+    <div class="srch-hint">Simulated lines across the whole file (current PID settings). Click one to load
+      ±10 kHz around it.</div>
+    <div id="srchList" class="srch-list"></div>
     </div>
    </div>
   </div>
@@ -2160,6 +2271,28 @@ def serve(html, state):
                     self._send(200, {"status": "launched"})
                 except Exception as exc:
                     self._send(500, {"error": str(exc)})
+
+            elif self.path == "/search-ion":
+                # simulated lines (current PID settings, whole file) whose ion
+                # name contains the query, case-insensitive
+                try:
+                    q = str(self._body().get("q", "")).strip().lower()
+                    if not q:
+                        raise ValueError("enter an ion, e.g. 186Hf")
+                    if STATE.get("file_sum") is None:
+                        raise ValueError("no file loaded")
+                    res = compute_sim_lines(STATE["file_freq"], STATE["file_sum"], sim_prefs())
+                    hits = sorted((l for l in res["lines"] if q in l["ion"].lower()),
+                                  key=lambda l: l["f"])
+                    for l in hits:
+                        l.pop("label", None)
+                    self._send(200, {"file": STATE.get("npz_path", ""), "hits": hits[:300],
+                                     "n": len(hits), "ref_freq": res["ref_freq"]})
+                except ImportError as exc:
+                    self._send(400, {"error": f"{exc} (needs pandas, and nubase_reader.py + "
+                                              f"nubase_4.mas20 next to this script)"})
+                except Exception as exc:
+                    self._send(400, {"error": str(exc)})
 
             elif self.path == "/simulate":
                 try:
