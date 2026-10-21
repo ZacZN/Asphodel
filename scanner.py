@@ -1724,7 +1724,7 @@ READOUT_GRAPHS = ["preview-graph", "snippet-graph", "refview-graph", "sum-graph"
 TAB_STYLE = {"padding": "8px 16px", "fontWeight": "600"}
 TAB_SEL = {**TAB_STYLE, "borderTop": f"3px solid {ACCENT}"}
 
-app.layout = html.Div([
+_BASE_LAYOUT = html.Div([
     # Settings button at the right-hand end of the tab bar (visible on every
     # page); opens a small popup menu holding display options such as dark
     # mode.  Opening/closing is done in the browser (clientside callback
@@ -1761,7 +1761,53 @@ app.layout = html.Div([
     html.Div(id="_snippet-resize-hook", style={"display": "none"}),
     html.Div(id="_snippet-width-saved", style={"display": "none"}),
     html.Div(id="_snippet-excluded-hook", style={"display": "none"}),
+    # Further output tab: saved state handed to the restore logic on page load
+    dcc.Store(id="further-restore", data=None),
+    dcc.Store(id="sum-view", data=None),
+    html.Div(id="_sum-view-hook", style={"display": "none"}),
+    html.Div(id="_further-saved", style={"display": "none"}),
 ], style={"position": "relative"})
+
+
+def _find_component(node, cid):
+    """Depth-first search of the layout tree for the component with id cid."""
+    if getattr(node, "id", None) == cid:
+        return node
+    kids = getattr(node, "children", None)
+    if kids is None:
+        return None
+    for kid in (kids if isinstance(kids, (list, tuple)) else [kids]):
+        if hasattr(kid, "to_plotly_json"):
+            hit = _find_component(kid, cid)
+            if hit is not None:
+                return hit
+    return None
+
+
+def serve_layout():
+    """Layout served on every page load, with the Further output tab's
+    controls set to the state saved last time (scanner_config.json ->
+    further_state).  The summed plot and the fit are rebuilt by show_sum /
+    update_fit from the further-restore store."""
+    st = load_config().get("further_state") or {}
+    files = [f for f in (st.get("files") or []) if os.path.isfile(f)]
+    fit = st.get("fit") or {}
+    for cid, prop, value in [
+        ("further-files", "data", files),
+        ("sum-align", "value", st.get("align") or "none"),
+        ("sum-ion", "value", st.get("ion")),
+        ("sum-unsure", "value", st.get("unsure") if st.get("unsure") is not None else ["on"]),
+        ("fit-shape", "value", fit.get("shape") or "gauss"),
+        ("fit-bg", "value", fit.get("bg") or "const"),
+        ("further-restore", "data", (dict(st, files=files) if st.get("summed") and files else None)),
+    ]:
+        comp = _find_component(_BASE_LAYOUT, cid)
+        if comp is not None:
+            setattr(comp, prop, value)
+    return _BASE_LAYOUT
+
+
+app.layout = serve_layout
 
 # ---------------------------------------------------------------------------
 # Coordinate readout (bottom-right) for the spectrum graphs
@@ -2762,6 +2808,8 @@ def toggle_sum_ion(align):
 # callbacks can use the data without sending it back and forth.
 _SUM_CACHE = {}
 _SUM_CACHE_LOCK = threading.Lock()
+# fit saved last session, waiting for its restored sum (sum key -> fit state)
+_RESTORE_FIT = {}
 
 
 def _cache_sum(ff, pp):
@@ -2816,13 +2864,23 @@ def draw_fit(fit_state, key):
     Output("sum-status", "children"),
     Output("sum-key", "data"),
     Input("btn-sum", "n_clicks"),
+    Input("further-restore", "data"),
     State("further-files", "data"),
     State("sum-align", "value"),
     State("sum-ion", "value"),
     State("sum-unsure", "value"),
-    prevent_initial_call=True,
 )
-def show_sum(_, files, align, ion_key, unsure):
+def show_sum(_, restore, files, align, ion_key, unsure):
+    """'Sum spectra' button, or (on page load) rebuild the sum saved last time
+    with its zoom; the saved fit is then picked up by update_fit."""
+    trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
+    restoring = not trig.startswith("btn-sum")
+    if restoring:
+        if not restore or not restore.get("summed"):
+            return dash.no_update, dash.no_update, dash.no_update
+        files, align = restore.get("files") or files, restore.get("align") or align
+        ion_key = restore.get("ion") or ion_key
+        unsure = restore.get("unsure") if restore.get("unsure") is not None else unsure
     if not files:
         return empty_fig("No confirmation files loaded"), "Load at least one file first.", None
     try:
@@ -2830,6 +2888,8 @@ def show_sum(_, files, align, ion_key, unsure):
     except Exception as exc:
         return empty_fig(str(exc)), html.Span(f"Error: {exc}", style={"color": "#c0392b"}), None
     key = _cache_sum(ff, pp)
+    if restoring and restore.get("fit"):
+        _RESTORE_FIT[key] = restore["fit"]
 
     if align == "identified":
         ion, harm = ion_key.rsplit("|", 1)
@@ -2860,6 +2920,10 @@ def show_sum(_, files, align, ion_key, unsure):
         if m.any():
             ylo, yhi = float(np.nanmin(pp[m])), float(np.nanmax(pp[m]))
             fig.update_yaxes(range=[ylo - 0.05 * (yhi - ylo or 1), yhi + 0.12 * (yhi - ylo or 1)])
+    view = restore.get("view") if restoring else None
+    if view and view.get("x") and view.get("y"):          # zoom saved last time
+        fig.update_xaxes(range=view["x"], autorange=False)
+        fig.update_yaxes(range=view["y"], autorange=False)
     fig.update_layout(title=title, xaxis_title="Frequency (Hz)",
                       yaxis_title="Summed Schottky Power (a.u.)", hovermode=False,
                       dragmode="pan", template="plotly_white", font=dict(size=14),
@@ -3303,6 +3367,63 @@ app.clientside_callback(
     Input("sum-graph", "figure"),
 )
 
+# Current zoom of the summed plot (saved with the Further output state)
+# (read shortly after a zoom/pan or a new figure, once Plotly has drawn it)
+app.clientside_callback(
+    """
+    function(rd, fig) {
+        setTimeout(function() {
+            var gd = document.querySelector('#sum-graph .js-plotly-plot');
+            if (!gd || !gd._fullLayout || !gd._fullLayout.xaxis || !gd.data || !gd.data.length)
+                return;
+            var L = gd._fullLayout;
+            var v = {x: [Number(L.xaxis.range[0]), Number(L.xaxis.range[1])],
+                     y: [Number(L.yaxis.range[0]), Number(L.yaxis.range[1])]};
+            var key = JSON.stringify(v);
+            if (key === window._theiaLastView) return;
+            window._theiaLastView = key;
+            window.dash_clientside.set_props('sum-view', {data: v});
+        }, 400);
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("_sum-view-hook", "children"),
+    Input("sum-graph", "relayoutData"),
+    Input("sum-graph", "figure"),
+    prevent_initial_call=True,
+)
+
+
+@app.callback(
+    Output("_further-saved", "children"),
+    Input("further-files", "data"),
+    Input("sum-align", "value"),
+    Input("sum-ion", "value"),
+    Input("sum-unsure", "value"),
+    Input("sum-key", "data"),
+    Input("sum-view", "data"),
+    Input("fit-state", "data"),
+    prevent_initial_call=True,
+)
+def save_further_state(files, align, ion, unsure, key, view, fit):
+    """Save the Further output tab after every change, so it is restored the
+    next time scanner.py runs (scanner_config.json -> further_state)."""
+    trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
+    old = load_config().get("further_state") or {}
+    st = {"files": files or [], "align": align, "ion": ion, "unsure": unsure or [],
+          "summed": key is not None, "view": view or old.get("view"), "fit": old.get("fit")}
+    if trig.startswith("sum-key"):
+        st["view"] = view if view else old.get("view")
+    if trig.startswith("fit-state"):
+        st["fit"] = ({k: v for k, v in fit.items() if k != "sum_key"}
+                     if fit and fit.get("peaks") else None)
+    if key is None and not trig.startswith("sum-key"):
+        # page just loaded and the restored sum is not back yet: keep it
+        st["summed"] = old.get("summed", False)
+    save_config({"further_state": st})
+    return dash.no_update
+
+
 # "Fit": pass the current view range (the fit region) to the server
 app.clientside_callback(
     """
@@ -3352,8 +3473,11 @@ def update_fit(click, dragged, run, _ts, shape, bg, b0, b1, _clear, key, state, 
     with _SUM_CACHE_LOCK:
         cached = _SUM_CACHE.get(key)
     error = None
+    restored = _RESTORE_FIT.pop(key, None) if trig.startswith("sum-key") else None
     if cached is None:
         state = None
+    elif restored:
+        state = dict(restored, sum_key=key)              # fit saved last session
     elif (not state or state.get("sum_key") != key or trig.startswith("btn-fit-clear")
           or trig.startswith("sum-key")):
         state = {"sum_key": key, "peaks": [], "bgp": [0.0, 0.0], "region": None,
