@@ -2,14 +2,14 @@
 scanner.py  –  Theia: spectrum viewer and batch scanner
 
 Tabs: Viewer (one spectrum with the simulated ion frequencies overlaid; was
-viewer.py), Scan, Results and Further output.
+viewer.py), Scan, Scan Results and Further output.
 
 The scanner loops over every 1-D Schottky spectrum (.npz, same format as viewer.py) in a
 directory, detects peaks in the raw data, tracks the (drifting) reference peak
 from spectrum to spectrum, simulates the NUBASE ion frequencies from that
 reference and identifies every detected peak lying within ±x Hz of a simulated
 ion.  All results go into a new SQLite database per run, which can be loaded
-and searched in the "Results" tab.
+and searched in the "Scan Results" tab.
 
 Usage
 -----
@@ -1791,6 +1791,9 @@ align_fit_tab = html.Div([
         html.Div([
         html.Div([
         # ---- Energy calculation (frequency -> energy from two known peaks) ----
+        # outer box always shown (mode button); the content below it only when
+        # the mode is on or there is a calibration / picks
+        html.Div([
         html.Div([
             html.Button("Energy calculation", id="btn-energy-mode",
                         className="btn btn-outline-secondary btn-sm",
@@ -1799,7 +1802,7 @@ align_fit_tab = html.Div([
                         style={"marginRight": "12px", "fontWeight": "600"}),
             info_button("energy", {"marginRight": "12px"}),
             html.Span(id="energy-status", style={"fontSize": "13px"}),
-        ], style={"display": "flex", "alignItems": "center", "margin": "4px 0"}),
+        ], style={"display": "flex", "alignItems": "center", "marginBottom": "8px"}),
         html.Div([
             # calibration peaks: name (typed or suggested), NUBASE mass excess,
             # fitted frequency and FWHM
@@ -1850,8 +1853,10 @@ align_fit_tab = html.Div([
                 style_cell_conditional=[{"if": {"column_id": "src"}, "textAlign": "left",
                                          "fontFamily": "inherit", "color": "#666"}],
                 style_table={"overflowX": "auto"}),
-        ], id="energy-panel", className="theia-box",
-           style={**BOX_STYLE, "display": "none", "padding": "8px 10px", "margin": "4px 0 8px 0"}),
+        ], id="energy-panel", style={"display": "none"}),
+        ], className="theia-box",
+           style={**BOX_STYLE, "padding": "8px 10px", "margin": "4px 0 8px 0",
+                  "width": "fit-content", "maxWidth": "100%"}),
         ], style={"minWidth": "0", "flex": "0 1 auto"}),
         # ---- Peak fitting (on the summed spectrum) ----------------------
         html.Div([
@@ -2381,7 +2386,7 @@ _BASE_LAYOUT = html.Div([
         dcc.Tab(label="Scan", value="scan", style=TAB_STYLE, selected_style=TAB_SEL, children=[
             html.Div([sidebar, scan_main], style={"display": "flex"}),
         ]),
-        dcc.Tab(label="Results", value="results", style=TAB_STYLE, selected_style=TAB_SEL,
+        dcc.Tab(label="Scan Results", value="results", style=TAB_STYLE, selected_style=TAB_SEL,
                 children=[results_tab]),
         dcc.Tab(label="Further output", value="further", style=TAB_STYLE, selected_style=TAB_SEL,
                 children=[further_tab]),
@@ -5022,8 +5027,7 @@ def render_energy(est, name1, name2, on):
             for i, p in enumerate(est.get("pairs") or [], start=1)]
     # panel shown while the mode is on, or whenever there is something in it
     has = bool(calib or est.get("pairs") or est.get("k") is not None)
-    panel = {**BOX_STYLE, "display": "block" if (on or has) else "none", "padding": "8px 10px",
-             "margin": "4px 0 8px 0", "width": "fit-content", "maxWidth": "100%"}
+    panel = {"display": "block" if (on or has) else "none"}
     return (info, sugg(0), sugg(1), check(name1), check(name2), freq(0), freq(1), fwhm(0),
             fwhm(1), status, rows, panel)
 
