@@ -1583,11 +1583,13 @@ FIT_COLUMNS = [
 # Further output: reads files saved by confirmation mode (confirmed/*.csv) for
 # further processing.  Sub-tabs: "Aligning and fitting" (file list, summing,
 # peak fitting) and "Isochronicity Curve" (to come).
-CALIB_TH = {"fontSize": "11px", "fontWeight": "700", "color": "#888", "textTransform": "uppercase",
-            "letterSpacing": "0.04em", "padding": "2px 14px 4px 0", "textAlign": "left",
-            "borderBottom": "1px solid #dddddd"}
-CALIB_TD = {"fontSize": "13px", "padding": "4px 14px 4px 0", "verticalAlign": "middle"}
-SUGG_BOX_STYLE = {"marginLeft": "18px", "marginTop": "4px", "width": "620px", "maxWidth": "90%",
+CALIB_BORDER = "1px solid #999999"
+CALIB_TH = {"fontSize": "11px", "fontWeight": "700", "color": "#666", "textTransform": "uppercase",
+            "letterSpacing": "0.04em", "padding": "4px 10px", "textAlign": "left",
+            "border": CALIB_BORDER, "background": "#f9f9f9"}
+CALIB_TD = {"fontSize": "13px", "padding": "5px 10px", "verticalAlign": "middle",
+            "border": CALIB_BORDER}
+SUGG_BOX_STYLE = {"marginLeft": "0", "marginTop": "4px", "width": "620px", "maxWidth": "90%",
                   "border": "1px solid #dddddd", "borderRadius": "6px", "background": "white",
                   "padding": "4px 0", "boxShadow": "0 4px 12px rgba(0,0,0,0.12)"}
 
@@ -1825,11 +1827,13 @@ align_fit_tab = html.Div([
         html.Div([
             # calibration peaks: name (typed or suggested), NUBASE mass excess,
             # fitted frequency and FWHM
+            html.Div("Calibrant Ions", style={"fontWeight": "700", "fontSize": "14px",
+                                              "margin": "2px 0 6px 0"}),
             html.Table([
                 html.Thead(html.Tr([html.Th("", style=CALIB_TH)] + [
                     html.Th(h, style=CALIB_TH) for h in
                     ("Name", "Mass excess (keV)", "Frequency (Hz)", "FWHM (Hz)")])),
-                html.Tbody([row for i in (1, 2) for row in (
+                html.Tbody([
                     html.Tr([
                         html.Td(f"{i}", style={**CALIB_TD, "fontWeight": "700", "color": ACCENT}),
                         html.Td(html.Div([
@@ -1845,13 +1849,12 @@ align_fit_tab = html.Div([
                         html.Td(id=f"energy-name-{i}-check", style=CALIB_TD),
                         html.Td(id=f"energy-f-{i}", style={**CALIB_TD, "fontFamily": "monospace"}),
                         html.Td(id=f"energy-fwhm-{i}", style={**CALIB_TD, "fontFamily": "monospace"}),
-                    ]),
-                    # suggestion list, opened by "Suggest"; a click on a row fills the name
-                    html.Tr(html.Td(html.Div(id=f"energy-sugg-{i}", className="theia-box",
-                                             style={**SUGG_BOX_STYLE, "display": "none"}),
-                                    colSpan=5, style={"padding": "0"})),
-                )]),
-            ], style={"borderCollapse": "collapse", "marginBottom": "6px"}),
+                    ]) for i in (1, 2)]),
+            ], className="theia-calib-table",
+               style={"borderCollapse": "collapse", "border": CALIB_BORDER, "marginBottom": "6px"}),
+            # suggestion lists, opened by "Suggest"; a click on a row fills the name
+            *[html.Div(id=f"energy-sugg-{i}", className="theia-box",
+                       style={**SUGG_BOX_STYLE, "display": "none"}) for i in (1, 2)],
             html.Div(id="energy-calib-info", style={"fontSize": "13px", "marginBottom": "4px"}),
             html.Div([
                 html.Button("Calibrate", id="btn-energy-calibrate", className="btn btn-sm",
@@ -2252,6 +2255,12 @@ _FB_CSS = """
 body.dark .theia-fb-row:hover { background: #33220f !important; }
 """
 
+_CALIB_CSS = """
+body.dark .theia-calib-table th { background: #1c1c1c !important; color: #d0d0d0 !important; }
+body.dark .theia-calib-table th, body.dark .theia-calib-table td,
+body.dark .theia-calib-table { border-color: #6a6a6a !important; }
+"""
+
 _FIT_CSS = """
 #sum-graph.fit-mode .nsewdrag { cursor: crosshair !important; }
 #sum-graph.fit-grab .nsewdrag { cursor: ew-resize !important; }
@@ -2318,7 +2327,7 @@ body.dark .current-page-shadow { color: transparent !important; }
 body.dark .js-plotly-plot { filter: invert(1) hue-rotate(180deg) contrast(1.15); }
 """
 app.index_string = app.index_string.replace(
-    "{%css%}", "{%css%}\n<style>" + _TABLE_CSS + _FB_CSS + _FIT_CSS + _DARK_CSS + "</style>")
+    "{%css%}", "{%css%}\n<style>" + _TABLE_CSS + _FB_CSS + _CALIB_CSS + _FIT_CSS + _DARK_CSS + "</style>")
 # Spectrum graphs that get the bottom-right coordinate readout
 READOUT_GRAPHS = ["viewer-graph", "preview-graph", "snippet-graph", "refview-graph", "sum-graph"]
 TAB_STYLE = {"padding": "8px 16px", "fontWeight": "600"}
@@ -4935,8 +4944,7 @@ def render_energy(est, name1, name2, on):
         try:
             r = lookup_mass_excess(name)
             out = [html.Span(f"{r['me']:.1f} ± {r['dme']:.1f}" + (" #" if r["sys"] else ""),
-                             style={"fontFamily": "monospace"}),
-                   html.Span(f"  {r['name']}", style={"color": "#2e7d32", "fontSize": "12px"})]
+                             style={"fontFamily": "monospace"})]
             if r["iso"]:
                 out.append(html.Div(f"E_x = {r['ex']:.2f} ± {r['dex']:.2f}",
                                     style={"fontSize": "12px", "color": "#666",
@@ -4950,14 +4958,19 @@ def render_energy(est, name1, name2, on):
             return html.Span("click the peak on the plot", style={"color": "#888",
                                                                "fontFamily": "inherit"})
         p = calib[i]
+        src = re.sub(r"\s*\(FWHM [^)]*\)", "", p["src"])     # FWHM goes in its own column
         return [html.Span(_fmt_pm(p["f"], p["df"])),
-                html.Div(p["src"], style={"fontSize": "11px", "color": "#888",
-                                          "fontFamily": "inherit"})]
+                html.Div(src, style={"fontSize": "11px", "color": "#888", "fontFamily": "inherit"})]
 
     def fwhm(i):
-        if i >= len(calib) or p_get(calib[i], "fwhm") is None:
+        if i >= len(calib):
             return html.Span("–", style={"color": "#888"})
-        return _fmt_pm(calib[i]["fwhm"], calib[i].get("dfwhm"))
+        p = calib[i]
+        if p_get(p, "fwhm") is None:
+            # peaks picked by an older version only have it in the source text
+            m = re.search(r"FWHM ([\d.]+) Hz", p.get("src", ""))
+            return m.group(1) if m else html.Span("–", style={"color": "#888"})
+        return _fmt_pm(p["fwhm"], p.get("dfwhm"))
 
     def p_get(p, k):
         v = p.get(k)
