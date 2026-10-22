@@ -1652,6 +1652,77 @@ info_modal = html.Div([
           "background": "rgba(0,0,0,0.35)", "alignItems": "center", "justifyContent": "center"})
 
 
+PID_FIELDS = [   # key, label
+    ("ref_name", "Reference ion"), ("ref_harmonic", "Reference harmonic"),
+    ("z_lims", "Z limits  [min, max]"), ("n_lims", "N limits  [min, max]"),
+    ("el1", "el1  [A, Z]"), ("el2", "el2  [A, Z]"),
+    ("mq_width", "m/q window (± value)"), ("gamma_t", "γ_t"),
+    ("harmonics", "Harmonics (comma-separated)"),
+    ("corr_a", "a  (f² coefficient)"), ("corr_b", "b  (f coefficient)"),
+    ("corr_c", "c  (constant)"),
+    ("min_half_life", "Exclude half-life below  [0 = off]"),
+]
+PID_KEYS = [k for k, _ in PID_FIELDS] + ["min_half_life_unit", "correction_enabled",
+                                         "exclude_unknown_hl"]
+
+def _pid_field(key, label):
+    return html.Div([
+        html.Label(label, style=LABEL_STYLE),
+        dcc.Input(id=f"pid-{key}", type="text", debounce=False,
+                  className="form-control form-control-sm", style={"fontSize": "13px"}),
+    ], style={"marginBottom": "8px"})
+
+
+pid_modal = html.Div([
+    html.Div([
+        html.Div([
+            html.Span("PID Settings – simulated ion lines",
+                      style={"fontWeight": "700", "fontSize": "15px"}),
+            html.Button("✕", id="pid-cancel", className="btn btn-outline-secondary btn-sm"),
+        ], style={"display": "flex", "justifyContent": "space-between", "alignItems": "center",
+                  "marginBottom": "4px"}),
+        html.Small("The reference position is always the strongest peak of the summed spectrum.  "
+                   "Values start from the scan settings of the first loaded file.",
+                   style={**HELP_STYLE, "marginBottom": "8px"}),
+        html.Div([
+            html.Div([_pid_field(k, lab) for k, lab in PID_FIELDS[:7]]),
+            html.Div([_pid_field(k, lab) for k, lab in PID_FIELDS[7:9]] + [
+                dcc.Checklist(id="pid-correction_enabled",
+                              options=[{"label": " Second order correction", "value": "on"}],
+                              style={"fontSize": "13px", "marginBottom": "6px"}),
+            ] + [_pid_field(k, lab) for k, lab in PID_FIELDS[9:12]] + [
+                html.Label("Exclude half-life below  [0 = off]", style=LABEL_STYLE),
+                html.Div([
+                    dcc.Input(id="pid-min_half_life", type="text",
+                              className="form-control form-control-sm",
+                              style={"flex": "1", "fontSize": "13px", "marginRight": "6px"}),
+                    dcc.Dropdown(id="pid-min_half_life_unit", clearable=False,
+                                 options=[{"label": u, "value": u} for u in HL_CUT_UNITS],
+                                 style={"width": "80px", "fontSize": "13px"}),
+                ], style={"display": "flex", "alignItems": "center", "marginBottom": "6px"}),
+                dcc.Checklist(id="pid-exclude_unknown_hl",
+                              options=[{"label": " Also exclude unknown half-life", "value": "on"}],
+                              style={"fontSize": "13px"}),
+            ]),
+        ], style={"display": "grid", "gridTemplateColumns": "1fr 1fr", "columnGap": "18px"}),
+        html.Div(id="pid-error", style={"fontSize": "13px", "margin": "6px 0"}),
+        html.Div([
+            html.Button("Reset to file", id="pid-reset", className="btn btn-outline-secondary btn-sm",
+                        title="Use the scan settings stored in the first loaded file",
+                        style={"marginRight": "auto"}),
+            html.Button("Apply", id="pid-apply", className="btn btn-sm",
+                        style={"backgroundColor": ACCENT, "color": "white", "fontWeight": "600",
+                               "minWidth": "80px"}),
+        ], style={"display": "flex", "alignItems": "center", "marginTop": "6px"}),
+    ], className="theia-box",
+       style={"border": "1px solid #dddddd", "borderRadius": "6px", "background": "white",
+              "width": "640px", "maxWidth": "94vw", "maxHeight": "92vh", "overflowY": "auto",
+              "padding": "14px 16px", "boxShadow": "0 8px 30px rgba(0,0,0,0.3)"}),
+], id="pid-modal",
+   style={"display": "none", "position": "fixed", "inset": "0", "zIndex": "1000",
+          "background": "rgba(0,0,0,0.35)", "alignItems": "center", "justifyContent": "center"})
+
+
 align_fit_tab = html.Div([
     html.H5("Aligning and fitting", style={"fontWeight": "700"}),
     # Numbered list of loaded confirmation files (any number); "+ Add file"
@@ -1689,7 +1760,9 @@ align_fit_tab = html.Div([
                         style={"backgroundColor": ACCENT, "color": "white", "marginRight": "14px"}),
             dcc.Checklist(id="sum-show-sims", value=["on"],
                           options=[{"label": " show simulated ions", "value": "on"}],
-                          style={"fontSize": "13px"}),
+                          style={"fontSize": "13px", "marginRight": "10px"}),
+            html.Button("PID Settings", id="btn-pid", className="btn btn-outline-secondary btn-sm",
+                        title="Settings used for the simulated ion lines"),
         ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap", "rowGap": "6px",
                   "marginBottom": "6px"}),
         # spinner on the status line only, so fit updates of the plot do not
@@ -1697,7 +1770,9 @@ align_fit_tab = html.Div([
         dcc.Loading(html.Div(id="sum-status", style={"fontSize": "13px", "margin": "6px 0",
                                                      "minHeight": "18px"}),
                     type="dot", color=ACCENT),
+        html.Div(id="sum-sim-info", style={"fontSize": "12px", "marginBottom": "4px"}),
         dcc.Store(id="sum-key", data=None),
+        dcc.Store(id="pid-settings", data=None),
 
         # ---- Peak fitting (on the summed spectrum) ----------------------
         html.Div([
@@ -2270,6 +2345,7 @@ _BASE_LAYOUT = html.Div([
     # Further output tab: saved state handed to the restore logic on page load
     folder_browser,
     info_modal,
+    pid_modal,
     dcc.Store(id="further-restore", data=None),
     dcc.Store(id="sum-view", data=None),
     html.Div(id="_sum-view-hook", style={"display": "none"}),
@@ -2318,6 +2394,7 @@ def serve_layout():
         ("fit-shape", "value", fit.get("shape") or "gauss"),
         ("fit-bg", "value", fit.get("bg") or "const"),
         ("further-restore", "data", (dict(st, files=files) if st.get("summed") and files else None)),
+        ("pid-settings", "data", st.get("pid")),
     ]:
         comp = _find_component(_BASE_LAYOUT, cid)
         if comp is not None:
@@ -3477,18 +3554,54 @@ _SUM_ANNOTATIONS = {}   # sum key -> the figure's own annotations (energy labels
 _SUM_SIMS = {}      # sum key -> simulated lines (ion, harmonic, f_sim), for name suggestions
 
 
-def add_sum_sim_lines(fig, ff, pp, files, include_unsure, visible, key=None):
-    """Simulated ion lines on the summed spectrum, exactly as in the scanner:
-    ion database, harmonics, gamma_t, second-order correction and half-life cut
-    from the scan settings stored in the (first) loaded confirmation file, with
-    the strongest peak of the summed spectrum taken as the reference ion at its
-    reference harmonic.  Ions/harmonics in the loaded files are drawn as
-    'identified'.  Returns a one-line description for the status."""
-    header, table = read_confirmed(files[0])
+# ---------------------------------------------------------------------------
+# PID settings: the settings used for the simulated lines on the summed plot
+# ---------------------------------------------------------------------------
+# By default they are the scan settings stored in the first loaded
+# confirmation file; anything changed in the "PID Settings" popup overrides
+# them (saved with the tab).  The reference position is always the strongest
+# peak of the summed spectrum.
+SIM_TRACE_NAMES = ["Simulated (no peak)", "Simulated (identified)", EXCLUDED_TRACE]
+SIM_TRACE_STYLES = [dict(color="#bbbbbb", width=1, dash="dash"),
+                    dict(color="#555555", width=1.5, dash="dash"),
+                    dict(color="#c8c8c8", width=1, dash="dot")]
+
+
+def file_scan_settings(files):
+    """Scan settings stored in the header of the first loaded file (raw dict)."""
+    if not files:
+        raise ValueError("no confirmation files loaded")
+    header, _ = read_confirmed(files[0])
     st = header.get("scan_settings")
     if not isinstance(st, dict):
-        return "simulated lines not drawn: no scan settings in the file header"
-    s = parse_settings(st)
+        raise ValueError("no scan settings in the file header")
+    return st
+
+
+def pid_settings(files, overrides):
+    """Parsed settings for the simulated lines: file settings + overrides."""
+    return parse_settings({**file_scan_settings(files), **(overrides or {})})
+
+
+def _pid_display(raw, key):
+    """A settings value as shown in the popup's fields."""
+    v = raw.get(key)
+    if key in ("correction_enabled", "exclude_unknown_hl"):
+        return ["on"] if (v and v != []) else []
+    if key == "min_half_life_unit":
+        return v if v in HL_UNITS else "ms"
+    if isinstance(v, (list, tuple)):
+        return ", ".join(str(x) for x in v)
+    if v is None:
+        return "0" if key == "min_half_life" else ""
+    return str(v)
+
+
+def sum_sim_traces(ff, pp, files, include_unsure, overrides, key=None):
+    """(x, y, hovertext) for the three simulated-line traces of the summed plot
+    (no peak / identified / half-life excluded) and a one-line description.
+    Same calculation as the scanner; the strongest peak is the reference."""
+    s = pid_settings(files, overrides)
     k = int(np.nanargmax(pp))
     ref_f = float(ff[k])
     ion_db, ref_mq = build_ion_database(*s["ion_key"])
@@ -3502,30 +3615,32 @@ def add_sum_sim_lines(fig, ff, pp, files, include_unsure, visible, key=None):
                                        "f_sim": sims["f_sim"].to_numpy()})
         for k_old in list(_SUM_SIMS)[:-4]:
             _SUM_SIMS.pop(k_old, None)
-    rows = [read_confirmed(f)[1] for f in files]
-    t = pd.concat(rows, ignore_index=True)
+    t = pd.concat([read_confirmed(f)[1] for f in files], ignore_index=True)
     if not include_unsure and "decision" in t:
         t = t[t["decision"] != "unsure"]
     listed = t[["ion", "harmonic"]].drop_duplicates() if len(t) else \
         pd.DataFrame(columns=["ion", "harmonic"])
-    n0 = len(fig.data)
     finite = pp[np.isfinite(pp)]
     ylo, yhi = float(finite.min()), float(finite.max())
     pad = 0.05 * (yhi - ylo or 1)
-    add_sim_lines(fig, sims, ion_db, listed, ylo - pad, yhi + pad,
+    tmp = go.Figure()
+    add_sim_lines(tmp, sims, ion_db, listed, ylo - pad, yhi + pad,
                   excluded=~hl_allowed(ion_db, s))
-    for tr in fig.data[n0:]:
-        tr.meta = "sim"                          # for the show/hide tick box
-        tr.visible = bool(visible)
+    by_name = {tr.name: tr for tr in tmp.data}
+    out = []
+    for name in SIM_TRACE_NAMES:
+        tr = by_name.get(name)
+        out.append(([] if tr is None else list(tr.x), [] if tr is None else list(tr.y),
+                    [] if tr is None else list(tr.hovertext)))
     cut = hl_cut_text(s)
-    others = ""
-    if len(files) > 1:
-        others = f" (settings from file 1 of {len(files)})"
-    return (f"Simulated lines: reference {s['ref_name']} (h={s['ref_harmonic']}) taken as the "
+    src = "PID settings (edited)" if overrides else (
+        "settings of file 1" + (f" of {len(files)}" if len(files) > 1 else ""))
+    text = (f"Simulated lines: reference {s['ref_name']} (h={s['ref_harmonic']}) taken as the "
             f"strongest peak at {ref_f:.1f} Hz · harmonics {', '.join(map(str, s['harmonics']))}"
             f" · correction {'on' if s['correction_enabled'] else 'off'}"
-            + (f" · half-life cut: {cut}" if cut else "") + others
+            + (f" · half-life cut: {cut}" if cut else "") + f" · from {src}"
             + " · dark dashed: ions in the loaded files")
+    return out, text
 
 
 # Summed spectra are kept on the server (keyed by sum-key) so the peak-fit
@@ -3575,6 +3690,7 @@ def _fit_into_patch(patch, fit_state, cached):
     Output("sum-graph", "figure"),
     Output("sum-status", "children"),
     Output("sum-key", "data"),
+    Output("sum-sim-info", "children"),
     Input("btn-sum", "n_clicks"),
     Input("further-restore", "data"),
     State("further-files", "data"),
@@ -3582,24 +3698,26 @@ def _fit_into_patch(patch, fit_state, cached):
     State("sum-ion", "value"),
     State("sum-unsure", "value"),
     State("sum-show-sims", "value"),
+    State("pid-settings", "data"),
 )
-def show_sum(_, restore, files, align, ion_key, unsure, show_sims):
+def show_sum(_, restore, files, align, ion_key, unsure, show_sims, pid_over):
     """'Sum spectra' button, or (on page load) rebuild the sum saved last time
     with its zoom; the saved fit is then picked up by update_fit."""
     trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
     restoring = not trig.startswith("btn-sum")
     if restoring:
         if not restore or not restore.get("summed"):
-            return dash.no_update, dash.no_update, dash.no_update
+            return dash.no_update, dash.no_update, dash.no_update, dash.no_update
         files, align = restore.get("files") or files, restore.get("align") or align
         ion_key = restore.get("ion") or ion_key
         unsure = restore.get("unsure") if restore.get("unsure") is not None else unsure
     if not files:
-        return empty_fig("No confirmation files loaded"), "Load at least one file first.", None
+        return empty_fig("No confirmation files loaded"), "Load at least one file first.", None, ""
     try:
         ff, pp, info = sum_spectra(files, align, ion_key, bool(unsure))
     except Exception as exc:
-        return empty_fig(str(exc)), html.Span(f"Error: {exc}", style={"color": "#c0392b"}), None
+        return (empty_fig(str(exc)), html.Span(f"Error: {exc}", style={"color": "#c0392b"}),
+                None, "")
     key = _cache_sum(ff, pp)
     if restoring and restore.get("fit"):
         _RESTORE_FIT[key] = restore["fit"]
@@ -3630,12 +3748,18 @@ def show_sum(_, restore, files, align, ion_key, unsure, show_sims):
     # bracket over each calculated pair, labelled with its energy difference
     fig.add_trace(go.Scatter(x=[], y=[], hoverinfo="skip", name=ENERGY_PAIR_TRACE,
                              mode="lines", line=dict(color="black", width=1.5)))
-    # simulated ion lines (after the fit traces, whose positions are fixed)
+    # simulated ion lines: three fixed traces (no peak / identified / half-life
+    # excluded) after the fit and energy traces, so "PID Settings" can redraw
+    # them in place
     try:
-        sim_text = add_sum_sim_lines(fig, ff, pp, files, bool(unsure), bool(show_sims), key=key)
+        sim_traces, sim_text = sum_sim_traces(ff, pp, files, bool(unsure), pid_over, key=key)
     except Exception as exc:
         traceback.print_exc()
-        sim_text = f"simulated lines not drawn: {exc}"
+        sim_traces, sim_text = [([], [], [])] * 3, f"simulated lines not drawn: {exc}"
+    for name, style, (x, y, h) in zip(SIM_TRACE_NAMES, SIM_TRACE_STYLES, sim_traces):
+        fig.add_trace(go.Scattergl(x=x, y=y, mode="lines", name=name, line=style, meta="sim",
+                                   hoverinfo="text", hovertext=h, connectgaps=False,
+                                   visible=bool(show_sims)))
     if info["target"] is not None:
         fig.add_vline(x=info["target"], line=dict(color=ACCENT, width=1.5, dash="dash"),
                       annotation_text=f"aligned at {info['target']:.1f} Hz",
@@ -3678,13 +3802,13 @@ def show_sum(_, restore, files, align, ion_key, unsure, show_sims):
                      f"{zi} h={zh} not in the summed spectra, view centred on the strongest peak")
     if info["n_dirs"] > 1:
         parts.append(f"from {info['n_dirs']} spectra directories")
-    status = [html.Span("  ·  ".join(parts)), html.Div(sim_text, style={"fontSize": "12px"})]
+    status = [html.Span("  ·  ".join(parts))]
     if info["failed"]:
         status.append(html.Div(f"Could not load {len(info['failed'])}: "
                                + "; ".join(info["failed"][:3])
                                + (" …" if len(info["failed"]) > 3 else ""),
                                style={"color": "#c0392b"}))
-    return fig, status, key
+    return fig, status, key, sim_text
 
 
 # ===========================================================================
@@ -4168,16 +4292,17 @@ app.clientside_callback(
     Input("energy-state", "data"),
     Input("energy-name-1", "value"),
     Input("energy-name-2", "value"),
+    Input("pid-settings", "data"),
     prevent_initial_call=True,
 )
-def save_further_state(files, align, ion, unsure, key, view, fit, energy, name1, name2):
+def save_further_state(files, align, ion, unsure, key, view, fit, energy, name1, name2, pid):
     """Save the Further output tab after every change, so it is restored the
     next time scanner.py runs (scanner_config.json -> further_state)."""
     trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
     old = load_config().get("further_state") or {}
     st = {"files": files or [], "align": align, "ion": ion, "unsure": unsure or [],
           "summed": key is not None, "view": view or old.get("view"), "fit": old.get("fit"),
-          "energy": old.get("energy")}
+          "energy": old.get("energy"), "pid": pid}
     if trig.startswith("sum-key"):
         st["view"] = view if view else old.get("view")
     if trig.startswith("fit-state"):
@@ -4473,6 +4598,9 @@ app.clientside_callback(
 
 ENERGY_TRACE = "energy picks"
 ENERGY_PAIR_TRACE = "energy pairs"
+# index of the first simulated-line trace in the summed figure: spectrum,
+# 4 fit traces, energy picks, energy pairs, then the 3 simulated-line traces
+SIM_TRACE_INDEX = 1 + 4 + 2
 
 
 @lru_cache(maxsize=1)
@@ -4866,6 +4994,88 @@ def _energy_into_patch(patch, est, fit_state, view, key, cached, trig):
             patch["layout"]["yaxis"]["range"] = [min(view["y"]), need]
             patch["layout"]["yaxis"]["autorange"] = False
     return patch
+
+
+@app.callback(
+    Output("pid-modal", "style"),
+    *[Output(f"pid-{k}", "value") for k in PID_KEYS],
+    Output("pid-error", "children"),
+    Output("pid-settings", "data"),
+    Input("btn-pid", "n_clicks"),
+    Input("pid-apply", "n_clicks"),
+    Input("pid-reset", "n_clicks"),
+    Input("pid-cancel", "n_clicks"),
+    *[State(f"pid-{k}", "value") for k in PID_KEYS],
+    State("further-files", "data"),
+    State("pid-settings", "data"),
+    prevent_initial_call=True,
+)
+def pid_popup(_open, _apply, _reset, _cancel, *args):
+    """PID Settings popup: opens filled with the settings in use (file +
+    edits); Apply validates and stores the edits; Reset to file drops them."""
+    values, (files, overrides) = list(args[:len(PID_KEYS)]), args[len(PID_KEYS):]
+    shown = {"display": "flex", "position": "fixed", "inset": "0", "zIndex": "1000",
+             "background": "rgba(0,0,0,0.35)", "alignItems": "center", "justifyContent": "center"}
+    hidden = {**shown, "display": "none"}
+    nu = dash.no_update
+    keep = [nu] * len(PID_KEYS)
+    trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
+
+    def filled(over):
+        raw = {**file_scan_settings(files), **(over or {})}
+        return [_pid_display(raw, k) for k in PID_KEYS]
+
+    if trig.startswith("pid-cancel"):
+        return (hidden, *keep, "", nu)
+    try:
+        if trig.startswith("btn-pid"):
+            return (shown, *filled(overrides), "", nu)
+        if trig.startswith("pid-reset"):
+            return (shown, *filled(None), "Reset to the settings of the loaded file.", None)
+        if trig.startswith("pid-apply"):
+            new = dict(zip(PID_KEYS, values))
+            s = pid_settings(files, new)                     # validates the numbers
+            build_ion_database(*s["ion_key"])                # ...and the reference ion
+            return (hidden, *keep, "", new)
+    except Exception as exc:
+        msg = html.Span(f"⚠ {exc}", style={"color": "#c0392b"})
+        if trig.startswith("btn-pid"):
+            return (shown, *keep, msg, nu)
+        return (nu, *keep, msg, nu)
+    return (nu, *keep, nu, nu)
+
+
+@app.callback(
+    Output("sum-graph", "figure", allow_duplicate=True),
+    Output("sum-sim-info", "children", allow_duplicate=True),
+    Input("pid-settings", "data"),
+    State("sum-key", "data"),
+    State("further-files", "data"),
+    State("sum-unsure", "value"),
+    State("sum-show-sims", "value"),
+    prevent_initial_call=True,
+)
+def apply_pid(overrides, key, files, unsure, show_sims):
+    """Redraw only the simulated lines with the new PID settings (no re-sum;
+    the zoom is kept)."""
+    with _SUM_CACHE_LOCK:
+        cached = _SUM_CACHE.get(key)
+    if cached is None:
+        return dash.no_update, dash.no_update
+    ff, pp, _ = cached
+    try:
+        traces, text = sum_sim_traces(ff, pp, files, bool(unsure), overrides, key=key)
+    except Exception as exc:
+        traceback.print_exc()
+        return dash.no_update, f"simulated lines not drawn: {exc}"
+    patch = dash.Patch()
+    base = SIM_TRACE_INDEX
+    for i, (x, y, h) in enumerate(traces):
+        patch["data"][base + i]["x"] = x
+        patch["data"][base + i]["y"] = y
+        patch["data"][base + i]["hovertext"] = h
+        patch["data"][base + i]["visible"] = bool(show_sims)
+    return patch, text
 
 
 @app.callback(
