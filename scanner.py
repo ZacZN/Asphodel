@@ -1787,33 +1787,9 @@ align_fit_tab = html.Div([
         dcc.Store(id="sum-key", data=None),
         dcc.Store(id="pid-settings", data=None),
 
-        # ---- Peak fitting (on the summed spectrum) ----------------------
+        # Two columns: energy calculation (left), peak-fitting controls (right)
         html.Div([
-            html.Button("Peak fitting", id="btn-fit-mode", className="btn btn-outline-secondary btn-sm",
-                        title="Turn on, then click peaks in the plot to add them to the fit",
-                        style={"marginRight": "12px", "fontWeight": "600"}),
-            info_button("fit", {"marginRight": "12px"}),
-            html.Span("Shape for new peaks:", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
-            dcc.Dropdown(id="fit-shape", value="gauss", clearable=False,
-                         options=[{"label": "Gaussian", "value": "gauss"},
-                                  {"label": "Lorentzian", "value": "lorentz"},
-                                  {"label": "Pseudo-Voigt", "value": "pvoigt"}],
-                         style={"width": "150px", "fontSize": "13px", "marginRight": "12px"}),
-            html.Span("Background:", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
-            dcc.RadioItems(id="fit-bg", value="const", inline=True,
-                           options=[{"label": "none", "value": "none"},
-                                    {"label": "constant", "value": "const"},
-                                    {"label": "linear", "value": "linear"}],
-                           inputStyle={"marginRight": "4px"},
-                           labelStyle={"marginRight": "10px", "fontSize": "13px"}),
-            html.Button("Fit", id="btn-fit-run", className="btn btn-sm",
-                        title="Least-squares fit over the current view, starting from the "
-                              "values in the table",
-                        style={"backgroundColor": ACCENT, "color": "white", "margin": "0 8px 0 6px",
-                               "minWidth": "60px"}),
-            html.Button("Clear peaks", id="btn-fit-clear", className="btn btn-outline-secondary btn-sm"),
-        ], id="fit-bar", style={"display": "flex", "alignItems": "center", "flexWrap": "wrap",
-                                "rowGap": "6px", "margin": "4px 0"}),
+        html.Div([
         # ---- Energy calculation (frequency -> energy from two known peaks) ----
         html.Div([
             html.Button("Energy calculation", id="btn-energy-mode",
@@ -1876,10 +1852,51 @@ align_fit_tab = html.Div([
                 style_table={"overflowX": "auto"}),
         ], id="energy-panel", className="theia-box",
            style={**BOX_STYLE, "display": "none", "padding": "8px 10px", "margin": "4px 0 8px 0"}),
+        ], style={"minWidth": "0", "flex": "0 1 auto"}),
+        # ---- Peak fitting (on the summed spectrum) ----------------------
+        html.Div([
+            html.Div([
+                html.Button("Peak fitting", id="btn-fit-mode",
+                            className="btn btn-outline-secondary btn-sm",
+                            title="Turn on, then click peaks in the plot to add them to the fit",
+                            style={"marginRight": "12px", "fontWeight": "600"}),
+                info_button("fit"),
+            ], style={"display": "flex", "alignItems": "center", "marginBottom": "8px"}),
+            html.Div([
+                html.Span("Shape for new peaks:", style={**LABEL_STYLE, "margin": "0 6px 0 0",
+                                                         "minWidth": "135px"}),
+                dcc.Dropdown(id="fit-shape", value="gauss", clearable=False,
+                             options=[{"label": "Gaussian", "value": "gauss"},
+                                      {"label": "Lorentzian", "value": "lorentz"},
+                                      {"label": "Pseudo-Voigt", "value": "pvoigt"}],
+                             style={"width": "160px", "fontSize": "13px"}),
+            ], style={"display": "flex", "alignItems": "center", "marginBottom": "8px"}),
+            html.Div([
+                html.Span("Background:", style={**LABEL_STYLE, "margin": "0 6px 0 0",
+                                                "minWidth": "135px"}),
+                dcc.RadioItems(id="fit-bg", value="const", inline=True,
+                               options=[{"label": "none", "value": "none"},
+                                        {"label": "constant", "value": "const"},
+                                        {"label": "linear", "value": "linear"}],
+                               inputStyle={"marginRight": "4px"},
+                               labelStyle={"marginRight": "10px", "fontSize": "13px"}),
+            ], style={"display": "flex", "alignItems": "center", "marginBottom": "8px"}),
+            html.Div([
+                html.Button("Fit", id="btn-fit-run", className="btn btn-sm",
+                            title="Least-squares fit over the current view, starting from the "
+                                  "values in the table",
+                            style={"backgroundColor": ACCENT, "color": "white",
+                                   "marginRight": "8px", "minWidth": "70px"}),
+                html.Button("Clear peaks", id="btn-fit-clear",
+                            className="btn btn-outline-secondary btn-sm"),
+            ], style={"display": "flex", "alignItems": "center", "marginBottom": "6px"}),
+            html.Div(id="fit-status", style={"fontSize": "12px"}),
+        ], id="fit-bar", className="theia-box",
+           style={**BOX_STYLE, "padding": "8px 10px", "margin": "4px 0 8px 0", "flex": "0 0 430px"}),
+        ], style={"display": "flex", "alignItems": "flex-start", "columnGap": "16px"}),
         dcc.Store(id="energy-mode", data=False),
         dcc.Store(id="energy-click", data=None),
         dcc.Store(id="energy-state", data=None),
-        html.Div(id="fit-status", style={"fontSize": "13px", "margin": "4px 0"}),
         dcc.Store(id="fit-mode", data=False),
         dcc.Store(id="fit-click", data=None),
         dcc.Store(id="fit-drag", data=None),
@@ -5006,7 +5023,7 @@ def render_energy(est, name1, name2, on):
     # panel shown while the mode is on, or whenever there is something in it
     has = bool(calib or est.get("pairs") or est.get("k") is not None)
     panel = {**BOX_STYLE, "display": "block" if (on or has) else "none", "padding": "8px 10px",
-             "margin": "4px 0 8px 0"}
+             "margin": "4px 0 8px 0", "width": "fit-content", "maxWidth": "100%"}
     return (info, sugg(0), sugg(1), check(name1), check(name2), freq(0), freq(1), fwhm(0),
             fwhm(1), status, rows, panel)
 
