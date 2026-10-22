@@ -4711,13 +4711,19 @@ def render_energy(est, name1, name2, on):
 @app.callback(
     Output("sum-graph", "figure", allow_duplicate=True),
     Input("energy-state", "data"),
-    Input("sum-view", "data"),
     Input("fit-state", "data"),
+    State("sum-view", "data"),
     State("sum-key", "data"),
     prevent_initial_call=True,
 )
-def draw_energy(est, view, fit_state, key):
-    """Mark the picked peaks on the summed plot (C1, C2, A1/B1, ...)."""
+def draw_energy(est, fit_state, view, key):
+    """Mark the picked peaks on the summed plot (C1, C2, A1/B1, ...).
+
+    Runs only when the picks or the fit change - never on zoom/pan: patching
+    the 131k-point figure during a zoom makes the plot fight the zoom."""
+    trig0 = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
+    if trig0.startswith("fit-state") and not (est and est.get("pairs")):
+        return dash.no_update            # fit changes only move existing brackets
     with _SUM_CACHE_LOCK:
         cached = _SUM_CACHE.get(key)
     if cached is None:
