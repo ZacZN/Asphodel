@@ -3583,7 +3583,7 @@ def show_sum(_, restore, files, align, ion_key, unsure, show_sims):
     # bracket over each calculated pair, labelled with its energy difference
     fig.add_trace(go.Scatter(x=[], y=[], hoverinfo="skip", name=ENERGY_PAIR_TRACE,
                              mode="lines+text", textposition="top center",
-                             textfont=dict(color="#2e7d32", size=13),
+                             textfont=dict(color="#2e7d32", size=26),
                              line=dict(color="#2e7d32", width=1.5)))
     # simulated ion lines (after the fit traces, whose positions are fixed)
     try:
@@ -4711,10 +4711,12 @@ def render_energy(est, name1, name2, on):
 @app.callback(
     Output("sum-graph", "figure", allow_duplicate=True),
     Input("energy-state", "data"),
+    Input("sum-view", "data"),
+    Input("fit-state", "data"),
     State("sum-key", "data"),
     prevent_initial_call=True,
 )
-def draw_energy(est, key):
+def draw_energy(est, view, fit_state, key):
     """Mark the picked peaks on the summed plot (C1, C2, A1/B1, ...)."""
     with _SUM_CACHE_LOCK:
         cached = _SUM_CACHE.get(key)
@@ -4737,18 +4739,28 @@ def draw_energy(est, key):
     patch["data"][idx]["y"] = [float(np.interp(p[0], ff, pp)) for p in pts]
     patch["data"][idx]["text"] = [p[1] for p in pts]
 
-    # a bracket above each pair, from centre A to centre B, with dE +- sigma
+    # a bracket above each pair, from centre A to centre B, with dE +- sigma.
+    # Offsets are fractions of the current view's height, so the bracket
+    # clears the peak markers and their labels whatever the zoom.
+    if view and view.get("y"):
+        yspan = abs(view["y"][1] - view["y"][0]) or 1.0
+    else:
+        finite = pp[np.isfinite(pp)]
+        yspan = float(finite.max() - finite.min()) or 1.0
+    fx, fy = fit_overlay(ff, fit_state)[0] if fit_state else ([], [])
+    fx, fy = np.asarray(fx, dtype=float), np.asarray(fy, dtype=float)
     bx, by, bt = [], [], []
     for i, pr in enumerate(est.get("pairs") or []):
         fa, fb = pr["a"]["f"], pr["b"]["f"]
         lo, hi = min(fa, fb), max(fa, fb)
         ya, yb = float(np.interp(fa, ff, pp)), float(np.interp(fb, ff, pp))
         m = (ff >= lo) & (ff <= hi)
-        floor = float(np.nanmin(pp[m])) if m.any() else min(ya, yb)
         top = max(ya, yb, float(np.nanmax(pp[m])) if m.any() else ya)   # clear the data
-        span = max(top - floor, abs(top) * 0.05, 1e-9)
-        y = top + span * (0.15 + 0.12 * i)          # stagger successive pairs
-        tick = span * 0.05
+        mf = (fx >= lo) & (fx <= hi)
+        if mf.any():                                                    # ... and the fit
+            top = max(top, float(np.nanmax(fy[mf])))
+        y = top + yspan * (0.14 + 0.10 * i)        # stagger successive pairs
+        tick = yspan * 0.025
         label = f"ΔE = {_fmt_pm(pr['de'], pr['dde'], '.2f')} keV"
         bx += [fa, fa, 0.5 * (fa + fb), fb, fb, None]
         by += [y - tick, y, y, y, y - tick, None]
@@ -4756,6 +4768,15 @@ def draw_energy(est, key):
     patch["data"][idx + 1]["x"] = bx
     patch["data"][idx + 1]["y"] = by
     patch["data"][idx + 1]["text"] = bt
+    # when a pair is added, raise the top of the view if its bracket + label
+    # would be above it (the x zoom is left alone)
+    trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
+    ys = [v for v in by if v is not None]
+    if trig.startswith("energy-state") and ys and view and view.get("y"):
+        need = max(ys) + 0.12 * yspan                     # room for the label
+        if need > max(view["y"]):
+            patch["layout"]["yaxis"]["range"] = [min(view["y"]), need]
+            patch["layout"]["yaxis"]["autorange"] = False
     return patch
 
 
