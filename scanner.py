@@ -1583,7 +1583,11 @@ FIT_COLUMNS = [
 # Further output: reads files saved by confirmation mode (confirmed/*.csv) for
 # further processing.  Sub-tabs: "Aligning and fitting" (file list, summing,
 # peak fitting) and "Isochronicity Curve" (to come).
-SUGG_BOX_STYLE = {"marginLeft": "116px", "marginTop": "4px", "width": "620px", "maxWidth": "90%",
+CALIB_TH = {"fontSize": "11px", "fontWeight": "700", "color": "#888", "textTransform": "uppercase",
+            "letterSpacing": "0.04em", "padding": "2px 14px 4px 0", "textAlign": "left",
+            "borderBottom": "1px solid #dddddd"}
+CALIB_TD = {"fontSize": "13px", "padding": "4px 14px 4px 0", "verticalAlign": "middle"}
+SUGG_BOX_STYLE = {"marginLeft": "18px", "marginTop": "4px", "width": "620px", "maxWidth": "90%",
                   "border": "1px solid #dddddd", "borderRadius": "6px", "background": "white",
                   "padding": "4px 0", "boxShadow": "0 4px 12px rgba(0,0,0,0.12)"}
 
@@ -1819,26 +1823,36 @@ align_fit_tab = html.Div([
             html.Span(id="energy-status", style={"fontSize": "13px"}),
         ], style={"display": "flex", "alignItems": "center", "margin": "4px 0"}),
         html.Div([
-            html.Div(id="energy-calib-info", style={"fontSize": "13px", "marginBottom": "6px"}),
-            *[html.Div([
-                html.Div([
-                    html.Span(f"Name of peak {i}:", style={**LABEL_STYLE, "margin": "0 6px 0 0",
-                                                           "minWidth": "110px"}),
-                    dcc.Input(id=f"energy-name-{i}", type="text", debounce=True, value="",
-                              placeholder="type a name, e.g. 207Tl81+ or m207Tl",
-                              className="form-control form-control-sm",
-                              style={"width": "260px", "marginRight": "6px"}),
-                    html.Button("Suggest ▾", id=f"energy-suggest-btn-{i}", className="btn btn-sm",
-                                title="Simulated ions near this peak",
-                                style={"backgroundColor": ACCENT, "color": "white",
-                                       "fontWeight": "600", "marginRight": "10px",
-                                       "whiteSpace": "nowrap"}),
-                    html.Span(id=f"energy-name-{i}-check", style={"fontSize": "12px"}),
-                ], style={"display": "flex", "alignItems": "center"}),
-                # suggestion list, opened by "Suggest"; a click on a row fills the name
-                html.Div(id=f"energy-sugg-{i}", className="theia-box",
-                         style={**SUGG_BOX_STYLE, "display": "none"}),
-            ], style={"marginBottom": "4px"}) for i in (1, 2)],
+            # calibration peaks: name (typed or suggested), NUBASE mass excess,
+            # fitted frequency and FWHM
+            html.Table([
+                html.Thead(html.Tr([html.Th("", style=CALIB_TH)] + [
+                    html.Th(h, style=CALIB_TH) for h in
+                    ("Name", "Mass excess (keV)", "Frequency (Hz)", "FWHM (Hz)")])),
+                html.Tbody([row for i in (1, 2) for row in (
+                    html.Tr([
+                        html.Td(f"{i}", style={**CALIB_TD, "fontWeight": "700", "color": ACCENT}),
+                        html.Td(html.Div([
+                            dcc.Input(id=f"energy-name-{i}", type="text", debounce=True, value="",
+                                      placeholder="type a name, e.g. 207Tl81+ or m207Tl",
+                                      className="form-control form-control-sm",
+                                      style={"width": "240px", "marginRight": "6px"}),
+                            html.Button("Suggest ▾", id=f"energy-suggest-btn-{i}",
+                                        className="btn btn-sm", title="Simulated ions near this peak",
+                                        style={"backgroundColor": ACCENT, "color": "white",
+                                               "fontWeight": "600", "whiteSpace": "nowrap"}),
+                        ], style={"display": "flex", "alignItems": "center"}), style=CALIB_TD),
+                        html.Td(id=f"energy-name-{i}-check", style=CALIB_TD),
+                        html.Td(id=f"energy-f-{i}", style={**CALIB_TD, "fontFamily": "monospace"}),
+                        html.Td(id=f"energy-fwhm-{i}", style={**CALIB_TD, "fontFamily": "monospace"}),
+                    ]),
+                    # suggestion list, opened by "Suggest"; a click on a row fills the name
+                    html.Tr(html.Td(html.Div(id=f"energy-sugg-{i}", className="theia-box",
+                                             style={**SUGG_BOX_STYLE, "display": "none"}),
+                                    colSpan=5, style={"padding": "0"})),
+                )]),
+            ], style={"borderCollapse": "collapse", "marginBottom": "6px"}),
+            html.Div(id="energy-calib-info", style={"fontSize": "13px", "marginBottom": "4px"}),
             html.Div([
                 html.Button("Calibrate", id="btn-energy-calibrate", className="btn btn-sm",
                             style={"backgroundColor": ACCENT, "color": "white", "marginRight": "8px"}),
@@ -4680,7 +4694,8 @@ def local_peak_fit(ff, pp, sigma, x, shape):
     res = run_fit(ff, pp, sigma, st)
     c = res["peaks"][0]["centre"]
     dc = res["unc"]["peaks"][0].get("centre", np.nan)
-    return float(c), float(dc), float(res["peaks"][0]["fwhm"])
+    dw = res["unc"]["peaks"][0].get("fwhm", np.nan)
+    return float(c), float(dc), float(res["peaks"][0]["fwhm"]), float(dw)
 
 
 def pick_peak(ff, pp, sigma, x, fit_state, shape):
@@ -4699,10 +4714,12 @@ def pick_peak(ff, pp, sigma, x, fit_state, shape):
             pk = fit_state["peaks"][i]
             du = unc[i].get("centre") if i < len(unc) else None
             src = f"main fit, peak {i + 1}" + ("" if fit_state.get("fitted") else " (not fitted)")
+            dw = unc[i].get("fwhm") if i < len(unc) else None
             return {"f": float(pk["centre"]), "df": float(du) if du is not None else np.nan,
+                    "fwhm": float(pk["fwhm"]), "dfwhm": float(dw) if dw is not None else np.nan,
                     "src": src}
-    c, dc, w = local_peak_fit(ff, pp, sigma, x, shape)
-    return {"f": c, "df": dc, "src": f"local fit (FWHM {w:.0f} Hz)"}
+    c, dc, w, dw = local_peak_fit(ff, pp, sigma, x, shape)
+    return {"f": c, "df": dc, "fwhm": w, "dfwhm": dw, "src": "local fit"}
 
 
 def _fmt_pm(v, dv, fmt=".1f"):
@@ -4866,6 +4883,10 @@ def toggle_suggestions(_b1, _b2, _rows, st1, st2):
     Output("energy-sugg-2", "children"),
     Output("energy-name-1-check", "children"),
     Output("energy-name-2-check", "children"),
+    Output("energy-f-1", "children"),
+    Output("energy-f-2", "children"),
+    Output("energy-fwhm-1", "children"),
+    Output("energy-fwhm-2", "children"),
     Output("energy-status", "children"),
     Output("energy-table", "data"),
     Output("energy-panel", "style"),
@@ -4877,13 +4898,6 @@ def toggle_suggestions(_b1, _b2, _rows, st1, st2):
 def render_energy(est, name1, name2, on):
     est = est or _empty_energy()
     calib = est.get("calib") or []
-
-    def peak_line(i):
-        if i >= len(calib):
-            return html.Span(f"Peak {i + 1}: not picked yet", style={"color": "#888"})
-        p = calib[i]
-        return html.Span([html.B(f"Peak {i + 1}: "), f"f = {_fmt_pm(p['f'], p['df'])} Hz",
-                          html.Span(f"  ({p['src']})", style={"color": "#888"})])
 
     def sugg(i):
         """Table of nearby simulated ions (nearest first); rows are clickable."""
@@ -4915,18 +4929,41 @@ def render_energy(est, name1, name2, on):
         return out
 
     def check(name):
+        """Mass excess column (NUBASE), or why the name is not valid."""
         if not name:
-            return ""
+            return html.Span("–", style={"color": "#888"})
         try:
             r = lookup_mass_excess(name)
-            txt = f"✓ {r['name']}: ME = {r['me']:.1f} ± {r['dme']:.1f} keV" + (" (#)" if r["sys"] else "")
+            out = [html.Span(f"{r['me']:.1f} ± {r['dme']:.1f}" + (" #" if r["sys"] else ""),
+                             style={"fontFamily": "monospace"}),
+                   html.Span(f"  {r['name']}", style={"color": "#2e7d32", "fontSize": "12px"})]
             if r["iso"]:
-                txt += f", E_x = {r['ex']:.2f} ± {r['dex']:.2f} keV"
-            return html.Span(txt, style={"color": "#2e7d32"})
+                out.append(html.Div(f"E_x = {r['ex']:.2f} ± {r['dex']:.2f}",
+                                    style={"fontSize": "12px", "color": "#666",
+                                           "fontFamily": "monospace"}))
+            return out
         except ValueError as exc:
-            return html.Span(f"✗ {exc}", style={"color": "#c0392b"})
+            return html.Span(f"✗ {exc}", style={"color": "#c0392b", "fontSize": "12px"})
 
-    info = [html.Div(peak_line(0)), html.Div(peak_line(1))]
+    def freq(i):
+        if i >= len(calib):
+            return html.Span("click the peak on the plot", style={"color": "#888",
+                                                               "fontFamily": "inherit"})
+        p = calib[i]
+        return [html.Span(_fmt_pm(p["f"], p["df"])),
+                html.Div(p["src"], style={"fontSize": "11px", "color": "#888",
+                                          "fontFamily": "inherit"})]
+
+    def fwhm(i):
+        if i >= len(calib) or p_get(calib[i], "fwhm") is None:
+            return html.Span("–", style={"color": "#888"})
+        return _fmt_pm(calib[i]["fwhm"], calib[i].get("dfwhm"))
+
+    def p_get(p, k):
+        v = p.get(k)
+        return None if v is None or (isinstance(v, float) and not np.isfinite(v)) else v
+
+    info = []
     if est.get("k") is not None:
         info.append(html.Div([
             html.B("Calibration: "),
@@ -4957,7 +4994,8 @@ def render_energy(est, name1, name2, on):
     has = bool(calib or est.get("pairs") or est.get("k") is not None)
     panel = {**BOX_STYLE, "display": "block" if (on or has) else "none", "padding": "8px 10px",
              "margin": "4px 0 8px 0"}
-    return info, sugg(0), sugg(1), check(name1), check(name2), status, rows, panel
+    return (info, sugg(0), sugg(1), check(name1), check(name2), freq(0), freq(1), fwhm(0),
+            fwhm(1), status, rows, panel)
 
 
 @app.callback(
