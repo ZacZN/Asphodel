@@ -1560,7 +1560,7 @@ results_tab = html.Div([
 
 # Peak-fit parameter table (one row per peak).  Value columns are editable;
 # uncertainties and derived quantities are not.
-FIT_PANEL_SHOWN = {"display": "block", "flex": "1 1 0", "minWidth": "520px"}
+FIT_PANEL_SHOWN = {"display": "block"}
 FIT_PANEL_HIDDEN = {**FIT_PANEL_SHOWN, "display": "none"}
 
 # line shapes available for each fitted peak
@@ -1862,8 +1862,7 @@ align_fit_tab = html.Div([
                   "width": "fit-content", "maxWidth": "100%"}),
         ], style={"flex": "0 0 auto", "maxWidth": "100%"}),
         # ---- Peak fitting (on the summed spectrum) ----------------------
-        # controls on the left, the parameter table to their right (wraps
-        # below when there is not enough room)
+        # controls on top, the parameter table underneath
         html.Div([
         html.Div([
             html.Div([
@@ -1902,7 +1901,7 @@ align_fit_tab = html.Div([
                             className="btn btn-outline-secondary btn-sm"),
             ], style={"display": "flex", "alignItems": "center", "marginBottom": "6px"}),
             html.Div(id="fit-status", style={"fontSize": "12px"}),
-        ], style={"flex": "0 0 400px"}),
+        ]),
             html.Div([
                 html.Div(["Fit parameters", info_button("params", {"marginLeft": "6px"})],
                          style={"fontWeight": "700", "fontSize": "13px",
@@ -1914,15 +1913,16 @@ align_fit_tab = html.Div([
                         {"label": v, "value": k} for k, v in SHAPE_LABELS.items()]}},
                     # compact, so the table fits beside the energy box
                     style_header={**TABLE_HEADER, "whiteSpace": "normal", "height": "auto",
-                                  "fontSize": "11px", "padding": "2px 5px"},
-                    style_cell={**TABLE_CELL, "padding": "2px 5px", "minWidth": "0"},
+                                  "fontSize": "10px", "padding": "2px 3px"},
+                    style_cell={**TABLE_CELL, "padding": "2px 3px", "minWidth": "0",
+                                "fontSize": "11px"},
                     style_data_conditional=TABLE_ODD + [
                         {"if": {"column_editable": False}, "color": "#666"},
                         # eta only applies to pseudo-Voigt peaks
                         {"if": {"column_id": "eta", "filter_query": '{shape} != "pvoigt"'},
                          "color": "transparent", "backgroundColor": "#f2f2f2"}],
                     style_cell_conditional=[{"if": {"column_id": "shape"}, "textAlign": "left",
-                                             "minWidth": "115px", "width": "115px"}],
+                                             "minWidth": "88px", "width": "88px"}],
                     # Bootstrap's CSS hides the DataTable dropdown menu
                     # (.Select-menu-outer gets display:none), so force it on; and
                     # let the menu hang below the table instead of being clipped
@@ -1938,22 +1938,24 @@ align_fit_tab = html.Div([
                     html.Span("Background  b0", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
                     dcc.Input(id="fit-b0", type="number", step="any", debounce=True,
                               className="form-control form-control-sm",
-                              style={"width": "150px", "marginRight": "4px"}),
+                              style={"width": "120px", "marginRight": "4px"}),
                     html.Span(id="fit-b0-unc", style={"fontSize": "12px", "marginRight": "16px",
                                                       "fontFamily": "monospace"}),
                     html.Span("b1 (per Hz)", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
                     dcc.Input(id="fit-b1", type="number", step="any", debounce=True,
                               className="form-control form-control-sm",
-                              style={"width": "150px", "marginRight": "4px"}),
+                              style={"width": "120px", "marginRight": "4px"}),
                     html.Span(id="fit-b1-unc", style={"fontSize": "12px", "fontFamily": "monospace"}),
                 ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap",
                           "marginTop": "6px"}),
             ], id="fit-panel", style=FIT_PANEL_HIDDEN),
         ], id="fit-bar", className="theia-box",
            style={**BOX_STYLE, "padding": "8px 10px", "margin": "4px 0 8px 0", "flex": "1 1 0",
-                  "minWidth": "560px",
-                  "display": "flex", "flexWrap": "wrap", "columnGap": "18px",
-                  "rowGap": "8px", "alignItems": "flex-start"}),
+                  # wide enough for the parameter table; if there is no room
+                  # beside the energy box the whole box moves underneath it
+                  "minWidth": "640px",
+                  # controls on top, the parameter table underneath
+                  "display": "flex", "flexDirection": "column", "rowGap": "8px"}),
         ], style={"display": "flex", "alignItems": "flex-start", "columnGap": "16px",
                   "flexWrap": "wrap"}),
         dcc.Store(id="energy-mode", data=False),
