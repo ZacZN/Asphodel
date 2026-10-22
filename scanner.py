@@ -1,7 +1,10 @@
 """
-scanner.py  –  Theia batch scanner
+scanner.py  –  Theia: spectrum viewer and batch scanner
 
-Loops over every 1-D Schottky spectrum (.npz, same format as viewer.py) in a
+Tabs: Viewer (one spectrum with the simulated ion frequencies overlaid; was
+viewer.py), Scan, Results and Further output.
+
+The scanner loops over every 1-D Schottky spectrum (.npz, same format as viewer.py) in a
 directory, detects peaks in the raw data, tracks the (drifting) reference peak
 from spectrum to spectrum, simulates the NUBASE ion frequencies from that
 reference and identifies every detected peak lying within ±x Hz of a simulated
@@ -1665,8 +1668,266 @@ further_tab = html.Div([
 ])
 
 
+# ===========================================================================
+# Viewer tab (formerly viewer.py): one spectrum with the simulated ion
+# frequencies overlaid.  It has its own settings, saved to viewer_config.json.
+# ===========================================================================
+
+def v_get_chargestate(electrons, z_lims, n_lims, el1, el2):
+    d = df_nubase(electrons=electrons)
+    d = rect_restrict(df=d, z_lims=z_lims, n_lims=n_lims)
+    d = diag_restrict(df=d, el1=el1, el2=el2)
+    return index_by_name(df=d, electrons=electrons)
+
+
+def v_compute_frequencies_multi(df, mq_col, ref_ion_name, ref_freq, gamma_t, harmonics,
+                                correction_enabled=False, corr_a=0.0, corr_b=0.0, corr_c=0.0):
+    result = df.sort_values(mq_col).copy()
+    for h in harmonics:
+        ref_mq = result.loc[ref_ion_name, mq_col]
+
+        def _direct(row_mq, _h=h, _ref_mq=ref_mq, _corr=correction_enabled):
+            if row_mq == _ref_mq:
+                f_true = ref_freq
+            else:
+                f_true = ref_freq + delta_f(ref_freq, _ref_mq, row_mq - _ref_mq, gamma_t)
+            # correction applied to the revolution frequency before harmonic scaling
+            if _corr:
+                f_true = apply_correction(f_true, corr_a, corr_b, corr_c)
+            return f_true * _h
+
+        result[f"frequency_direct_{h}"] = result[mq_col].apply(_direct)
+        # same frequency without the 2nd-order correction (for the tooltip)
+        result[f"frequency_uncorr_{h}"] = result[mq_col].apply(_direct, _corr=False)
+    return result
+
+
+def v_parse_highlight_ions(s):
+    """Comma-separated ion names -> list of stripped, non-empty strings."""
+    if not s or not s.strip():
+        return []
+    return [tok.strip() for tok in s.split(",") if tok.strip()]
+
+
+def v_ion_matches_highlight(ion_name, highlight_list):
+    """An entry with '+' must match the full ion name; without it, it matches
+    every charge state of that isotope ('204Hg' matches '204Hg79+')."""
+    base = ion_base_name(ion_name)
+    for h in highlight_list:
+        if ("+" in h and ion_name == h) or ("+" not in h and base == h):
+            return True
+    return False
+
+
+def v_build_figure(file_path, spectrum_name, ref_name, ref_frequency, ref_harmonic,
+                   z_lims, n_lims, el1, el2, mq_width, gamma_t, harmonics,
+                   correction_enabled=False, corr_a=0.0, corr_b=0.0, corr_c=0.0,
+                   highlight_ions=None):
+    """Run the full computation and return (figure, error text)."""
+    import plotly.express as px
+    highlight_ions = highlight_ions or []
+    try:
+        full_database = pd.concat([v_get_chargestate(e, z_lims, n_lims, el1, el2)
+                                   for e in (0, 1, 2, 3)])
+        sorted_db = full_database.sort_values("m/q", ascending=False)
+
+        mq_ref = sorted_db.loc[ref_name, "m/q"]
+        db = sorted_db[(sorted_db["m/q"] >= mq_ref - mq_width) &
+                       (sorted_db["m/q"] <= mq_ref + mq_width)]
+
+        ref_freq = ref_frequency / ref_harmonic
+        db = v_compute_frequencies_multi(db, "m/q", ref_name, ref_freq, gamma_t, harmonics,
+                                         correction_enabled=correction_enabled,
+                                         corr_a=corr_a, corr_b=corr_b, corr_c=corr_c)
+
+        data = unpack_npz(file_path.rstrip("/") + "/" + spectrum_name)
+        ff, pp = data["arr_0"], data["arr_1"]
+
+        n_points = 20
+        fig = go.Figure()
+        # "hvh" centres each step on its frequency value
+        fig.add_trace(go.Scattergl(x=ff, y=pp, mode="lines", name="Spectrum", hoverinfo="skip",
+                                   line=dict(shape="hvh", color="black", width=1)))
+
+        ymin, ymax = np.nanmin(pp), np.nanmax(pp)
+        pad = (ymax - ymin) * 0.05
+        y_range = np.linspace(ymin - pad, ymax + pad, n_points)
+        freq_min, freq_max = np.nanmin(ff), np.nanmax(ff)
+
+        colors = px.colors.qualitative.Plotly
+        freq_cols = [f"frequency_direct_{h}" for h in harmonics]
+        HIGHLIGHT_COLOR, HIGHLIGHT_WIDTH = "#FF8C00", 3
+        multi_harmonic = len(harmonics) > 1
+        highlighted_annotations = []
+
+        for h, col in zip(harmonics, freq_cols):
+            color = colors[freq_cols.index(col) % len(colors)]
+            xs_norm, ys_norm, hover_norm = [], [], []
+            xs_hi, ys_hi, hover_hi = [], [], []
+            for ion_name, row in db.iterrows():
+                f = row[col]
+                if pd.isna(f) or f < freq_min or f > freq_max:
+                    continue
+                label = build_hover_label(str(ion_name), row) + f"<br>Harmonic: {h}"
+                if correction_enabled:
+                    label += (f"<br>f_sim (uncorrected) = {row[f'frequency_uncorr_{h}']:.1f} Hz"
+                              f"<br>f_sim (corrected) = {f:.1f} Hz")
+                else:
+                    label += f"<br>f_sim = {f:.1f} Hz"
+                seg_x = [f] * n_points + [None]
+                seg_y = list(y_range) + [None]
+                seg_h = [label] * n_points + [None]
+                if v_ion_matches_highlight(str(ion_name), highlight_ions):
+                    xs_hi += seg_x; ys_hi += seg_y; hover_hi += seg_h
+                    highlighted_annotations.append((str(ion_name), f, h))
+                else:
+                    xs_norm += seg_x; ys_norm += seg_y; hover_norm += seg_h
+            if xs_norm:
+                fig.add_trace(go.Scattergl(x=xs_norm, y=ys_norm, mode="lines",
+                                           line=dict(dash="dash", color=color, width=1), name=col,
+                                           hoverinfo="text", hovertext=hover_norm,
+                                           connectgaps=False))
+            if xs_hi:
+                fig.add_trace(go.Scattergl(x=xs_hi, y=ys_hi, mode="lines",
+                                           line=dict(dash="solid", color=HIGHLIGHT_COLOR,
+                                                     width=HIGHLIGHT_WIDTH),
+                                           name=f"{col} ★", hoverinfo="text", hovertext=hover_hi,
+                                           connectgaps=False))
+
+        # labelled arrows for highlighted ions; three offsets so labels at
+        # similar frequencies don't sit exactly on top of each other
+        y_tip = ymax + pad
+        AY_OFFSETS = [-38, -58, -78]
+        for idx, (ion_name, freq, h) in enumerate(highlighted_annotations):
+            text = ion_name if not multi_harmonic else \
+                f"{ion_name}<br><span style='font-size:10px'>h={h}</span>"
+            fig.add_annotation(x=freq, y=y_tip, text=text, showarrow=True, arrowhead=2,
+                               arrowsize=1, arrowwidth=1.5, arrowcolor=HIGHLIGHT_COLOR, ax=0,
+                               ay=AY_OFFSETS[idx % len(AY_OFFSETS)],
+                               font=dict(size=11, color=HIGHLIGHT_COLOR),
+                               bgcolor="rgba(255,255,255,0.88)", bordercolor=HIGHLIGHT_COLOR,
+                               borderwidth=1, borderpad=3, align="center")
+
+        fig.update_layout(title="Calculated Frequencies overlayed with data",
+                          xaxis_title="Frequency (Hz)", yaxis_title="Schottky Power (a.u.)",
+                          hovermode="x", dragmode="pan", template="plotly_white",
+                          font=dict(size=18), margin=dict(l=60, r=20, t=50, b=50))
+        return fig, ""
+    except Exception as exc:
+        fig = go.Figure()
+        fig.update_layout(title=f"Error: {exc}", template="plotly_white",
+                          annotations=[dict(text=str(exc), x=0.5, y=0.5, showarrow=False,
+                                            font=dict(size=16, color="red"),
+                                            xref="paper", yref="paper")])
+        return fig, str(exc)
+
+
+VIEWER_DEFAULTS = dict(
+    file_path          = "/home/zn00092/Desktop/1dSpectra/SplitTDMS_Output_2^17_nobaseline/",
+    spectrum_name      = "1129.1.noBKG.npz",
+    ref_name           = "204Hg79+",
+    ref_frequency      = 411910517,
+    ref_harmonic       = 213,
+    z_lims             = "60, 83",
+    n_lims             = "100, 127",
+    el1                = "156, 66",
+    el2                = "200, 82",
+    mq_width           = 0.01,
+    gamma_t            = 1.399,
+    harmonics          = "212, 213, 214",
+    correction_enabled = [],
+    corr_a             = 0,
+    corr_b             = 0,
+    corr_c             = 0,
+    highlight_ions     = "",
+)
+VIEWER_CONFIG_PATH = os.path.join(HERE, "viewer_config.json")
+VIEWER_KEYS = list(VIEWER_DEFAULTS)
+
+
+def load_viewer_config():
+    return {**VIEWER_DEFAULTS, **_load_json(VIEWER_CONFIG_PATH)}
+
+
+def save_viewer_config(cfg):
+    try:
+        tmp = VIEWER_CONFIG_PATH + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(cfg, fh, indent=2)
+        os.replace(tmp, VIEWER_CONFIG_PATH)
+    except Exception:
+        pass
+
+
+VCFG = load_viewer_config()
+
+
+def v_input(label, key, number=False, step=None, help=None, placeholder=None):
+    kw = dict(id=f"v-{key}", value=str(VCFG[key]), debounce=True,
+              className="form-control form-control-sm", style={"width": "100%", "fontSize": "13px"})
+    if number:
+        kw["type"] = "number"
+        if step is not None:
+            kw["step"] = step
+    if placeholder:
+        kw["placeholder"] = placeholder
+    children = [html.Label(label, style=LABEL_STYLE), dcc.Input(**kw)]
+    if help:
+        children.append(html.Small(help, style=HELP_STYLE))
+    return html.Div(children, style=INPUT_STYLE)
+
+
+viewer_sidebar = html.Div([
+    html.H5("Viewer settings", style={"fontWeight": "700", "marginBottom": "4px"}),
+    *section("Spectrum"),
+    v_input("File path", "file_path"),
+    v_input("Spectrum name", "spectrum_name"),
+    *section("Reference ion"),
+    v_input("Ion name", "ref_name"),
+    v_input("Frequency (Hz)", "ref_frequency", True, 1),
+    v_input("Harmonic", "ref_harmonic", True, 1),
+    *section("Ion selection"),
+    v_input("Z limits  [min, max]", "z_lims"),
+    v_input("N limits  [min, max]", "n_lims"),
+    v_input("el1  [A, Z]", "el1"),
+    v_input("el2  [A, Z]", "el2"),
+    v_input("m/q window  (± value)", "mq_width", True, 0.001),
+    *section("Ring / harmonics"),
+    v_input("γ_t", "gamma_t", True, 0.001),
+    v_input("Harmonics (comma-separated)", "harmonics"),
+    *section("Frequency correction"),
+    dcc.Checklist(id="v-correction_enabled",
+                  options=[{"label": " Second order correction", "value": "on"}],
+                  value=VCFG["correction_enabled"], style={"fontSize": "13px", "marginBottom": "10px"}),
+    html.Div([
+        v_input("a  (f² coefficient)", "corr_a", True, "any"),
+        v_input("b  (f coefficient)", "corr_b", True, "any"),
+        v_input("c  (constant)", "corr_c", True, "any"),
+    ], id="v-correction-inputs",
+       style={"display": "block" if VCFG["correction_enabled"] else "none"}),
+    *section("Highlight ions"),
+    v_input("Ion names (comma-separated)", "highlight_ions", placeholder="e.g. 204Hg, 208Tl79+",
+            help="Omit charge state to highlight all charge states"),
+    html.Hr(style={"margin": "10px 0"}),
+    html.Div(id="v-error-box", style={"color": "#c0392b", "fontSize": "12px",
+                                      "whiteSpace": "pre-wrap"}),
+    html.Div(style={"height": "30px"}),
+], className="theia-sidebar",
+   style={"width": "300px", "minWidth": "300px", "padding": "14px 18px", "background": "#f9f9f9",
+          "overflowY": "auto", "borderRight": "1px solid #dddddd", "height": "calc(100vh - 42px)"})
+
+viewer_tab = html.Div([
+    viewer_sidebar,
+    html.Div([
+        dcc.Graph(id="viewer-graph", style={"height": "calc(100vh - 42px)"},
+                  config={"scrollZoom": True, "displayModeBar": True, "displaylogo": False}),
+    ], style={"flex": "1", "minWidth": "0"}),
+    html.Div(id="_viewer-saved", style={"display": "none"}),
+], style={"display": "flex"})
+
+
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
-app.title = "Theia Scanner"
+app.title = "Theia"
 
 # Results tables: move the page buttons from below the table to the top right,
 # level with the Export button (both 30 px tall), so nothing is left below it.
@@ -1753,7 +2014,7 @@ body.dark .js-plotly-plot { filter: invert(1) hue-rotate(180deg) contrast(1.15);
 app.index_string = app.index_string.replace(
     "{%css%}", "{%css%}\n<style>" + _TABLE_CSS + _FIT_CSS + _DARK_CSS + "</style>")
 # Spectrum graphs that get the bottom-right coordinate readout
-READOUT_GRAPHS = ["preview-graph", "snippet-graph", "refview-graph", "sum-graph"]
+READOUT_GRAPHS = ["viewer-graph", "preview-graph", "snippet-graph", "refview-graph", "sum-graph"]
 TAB_STYLE = {"padding": "8px 16px", "fontWeight": "600"}
 TAB_SEL = {**TAB_STYLE, "borderTop": f"3px solid {ACCENT}"}
 
@@ -1782,7 +2043,9 @@ _BASE_LAYOUT = html.Div([
               "boxShadow": "0 4px 14px rgba(0,0,0,0.18)"}),
     html.Div(id="_dark-mode-hook", style={"display": "none"}),
     html.Div(id="_settings-menu-hook", style={"display": "none"}),
-    dcc.Tabs(id="tabs", value="scan", children=[
+    dcc.Tabs(id="tabs", value="viewer", children=[
+        dcc.Tab(label="Viewer", value="viewer", style=TAB_STYLE, selected_style=TAB_SEL,
+                children=[viewer_tab]),
         dcc.Tab(label="Scan", value="scan", style=TAB_STYLE, selected_style=TAB_SEL, children=[
             html.Div([sidebar, scan_main], style={"display": "flex"}),
         ]),
@@ -1829,6 +2092,16 @@ def serve_layout():
     controls set to the state saved last time (scanner_config.json ->
     further_state).  The summed plot and the fit are rebuilt by show_sum /
     update_fit from the further-restore store."""
+    # Viewer tab: last saved viewer settings
+    vcfg = load_viewer_config()
+    for k in VIEWER_KEYS:
+        comp = _find_component(_BASE_LAYOUT, f"v-{k}")
+        if comp is not None:
+            comp.value = vcfg[k] if k == "correction_enabled" else str(vcfg[k])
+    comp = _find_component(_BASE_LAYOUT, "v-correction-inputs")
+    if comp is not None:
+        comp.style = {"display": "block" if vcfg["correction_enabled"] else "none"}
+
     st = load_config().get("further_state") or {}
     files = [f for f in (st.get("files") or []) if os.path.isfile(f)]
     fit = st.get("fit") or {}
@@ -1949,6 +2222,49 @@ SETTING_STATES = [State(cid, prop) for cid, prop in SETTING_FIELDS.values()]
 
 def _raw_from_states(values):
     return dict(zip(SETTING_KEYS, values))
+
+
+# ===========================================================================
+# Callbacks — Viewer tab
+# ===========================================================================
+
+_V_INPUTS = [Input(f"v-{k}", "value") for k in VIEWER_KEYS]
+
+
+@app.callback(Output("v-correction-inputs", "style"), Input("v-correction_enabled", "value"))
+def v_toggle_correction_inputs(enabled):
+    return {"display": "block" if enabled else "none"}
+
+
+@app.callback(Output("_viewer-saved", "children"), *_V_INPUTS, prevent_initial_call=True)
+def v_persist_config(*values):
+    save_viewer_config(dict(zip(VIEWER_KEYS, values)))
+    return dash.no_update
+
+
+def _v_ints(s):
+    return [int(p.strip()) for p in str(s).split(",") if p.strip()]
+
+
+@app.callback(Output("viewer-graph", "figure"), Output("v-error-box", "children"), *_V_INPUTS)
+def v_update_figure(*values):
+    v = dict(zip(VIEWER_KEYS, values))
+    try:
+        fig, err = v_build_figure(
+            file_path=v["file_path"] or "", spectrum_name=v["spectrum_name"] or "",
+            ref_name=v["ref_name"] or "", ref_frequency=float(v["ref_frequency"] or 0),
+            ref_harmonic=int(float(v["ref_harmonic"] or 1)),
+            z_lims=_v_ints(v["z_lims"]), n_lims=_v_ints(v["n_lims"]),
+            el1=_v_ints(v["el1"]), el2=_v_ints(v["el2"]),
+            mq_width=float(v["mq_width"] or 0.01), gamma_t=float(v["gamma_t"] or 1.399),
+            harmonics=_v_ints(v["harmonics"]),
+            correction_enabled=bool(v["correction_enabled"]),
+            corr_a=float(v["corr_a"] or 0), corr_b=float(v["corr_b"] or 0),
+            corr_c=float(v["corr_c"] or 0),
+            highlight_ions=v_parse_highlight_ions(v["highlight_ions"] or ""))
+        return fig, err
+    except Exception as exc:
+        return empty_fig(), f"Parse error: {exc}"
 
 
 # ===========================================================================
