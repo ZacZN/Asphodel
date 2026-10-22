@@ -1611,7 +1611,17 @@ align_fit_tab = html.Div([
                      "color": "transparent", "backgroundColor": "#f2f2f2"}],
                 style_cell_conditional=[{"if": {"column_id": "shape"}, "textAlign": "left",
                                          "minWidth": "140px", "width": "140px"}],
-                style_table={"overflowX": "auto"}),
+                # Bootstrap's CSS hides the DataTable dropdown menu
+                # (.Select-menu-outer gets display:none), so force it on; and
+                # let the menu hang below the table instead of being clipped
+                css=[{"selector": ".Select-menu-outer",
+                      "rule": "display: block !important; background: white; z-index: 50; "
+                              "border: 1px solid #dddddd; box-shadow: 0 4px 10px rgba(0,0,0,0.15)"},
+                     {"selector": ".Select-option", "rule": "color: #222 !important; padding: 4px 8px"},
+                     {"selector": ".Select-option.is-focused", "rule": f"background: {ACCENT_PALE}"},
+                     {"selector": ".dash-spreadsheet-container .dash-spreadsheet-inner",
+                      "rule": "overflow: visible !important"}],
+                style_table={"overflow": "visible"}),
             html.Div([
                 html.Span("Background  b0", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
                 dcc.Input(id="fit-b0", type="number", step="any", debounce=True,
