@@ -4764,6 +4764,10 @@ def _energy_into_patch(patch, est, fit_state, view, key, cached, trig):
     # a bracket above each pair, from centre A to centre B, with dE +- sigma.
     # Offsets are fractions of the current view's height, so the bracket
     # clears the peak markers and their labels whatever the zoom.
+    if not (view and view.get("y")):
+        # right after start-up the browser has not reported the view yet:
+        # use the view saved with the tab (restored on the plot)
+        view = (load_config().get("further_state") or {}).get("view")
     if view and view.get("y"):
         yspan = abs(view["y"][1] - view["y"][0]) or 1.0
     else:
