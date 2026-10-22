@@ -3505,27 +3505,14 @@ FIT_TRACE_STYLES = [
 ]
 
 
-@app.callback(
-    Output("sum-graph", "figure", allow_duplicate=True),
-    Input("fit-state", "data"),
-    State("sum-key", "data"),
-    prevent_initial_call=True,
-)
-def draw_fit(fit_state, key):
-    """Update only the fit-overlay traces (Patch), so the zoom is kept.
-    (allow_duplicate: the figure itself is built by show_sum.)"""
-    with _SUM_CACHE_LOCK:
-        cached = _SUM_CACHE.get(key)
-    if cached is None or (fit_state and fit_state.get("sum_key") != key):
-        return dash.no_update
-    patch = dash.Patch()
+def _fit_into_patch(patch, fit_state, cached):
+    """Fit-overlay traces (total, components, background, peak markers)."""
     for i, (x, y) in enumerate(fit_overlay(cached[0], fit_state), start=1):
         patch["data"][i]["x"] = x
         patch["data"][i]["y"] = y
     # peak numbers (as in the table) next to the markers
     n = len((fit_state or {}).get("peaks") or [])
     patch["data"][len(FIT_TRACE_STYLES)]["text"] = [str(k) for k in range(1, n + 1)]
-    return patch
 
 
 @app.callback(
@@ -4731,24 +4718,33 @@ def render_energy(est, name1, name2, on):
 
 @app.callback(
     Output("sum-graph", "figure", allow_duplicate=True),
-    Input("energy-state", "data"),
     Input("fit-state", "data"),
+    Input("energy-state", "data"),
     State("sum-view", "data"),
     State("sum-key", "data"),
     prevent_initial_call=True,
 )
-def draw_energy(est, fit_state, view, key):
-    """Mark the picked peaks on the summed plot (C1, C2, A1/B1, ...).
+def draw_overlays(fit_state, est, view, key):
+    """Update the fit and energy overlays of the summed plot in ONE Patch.
 
-    Runs only when the picks or the fit change - never on zoom/pan: patching
-    the 131k-point figure during a zoom makes the plot fight the zoom."""
-    trig0 = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
-    if trig0.startswith("fit-state") and not (est and est.get("pairs")):
-        return dash.no_update            # fit changes only move existing brackets
+    (Two callbacks patching the figure at the same moment - as happens when
+    both are restored on start-up - can lose one of the updates.)  Runs only
+    when the fit or the energy picks change, never on zoom/pan: patching the
+    131k-point figure during a zoom makes the plot fight the zoom."""
     with _SUM_CACHE_LOCK:
         cached = _SUM_CACHE.get(key)
     if cached is None:
         return dash.no_update
+    trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
+    patch = dash.Patch()
+    if not fit_state or fit_state.get("sum_key") == key:
+        _fit_into_patch(patch, fit_state, cached)
+    _energy_into_patch(patch, est, fit_state, view, key, cached, trig)
+    return patch
+
+
+def _energy_into_patch(patch, est, fit_state, view, key, cached, trig):
+    """Picked-peak labels (C1, C2, A1/B1, ...) and the pair brackets + labels."""
     ff, pp, _ = cached
     est = est or _empty_energy()
     pts = [(p["f"], f"C{i}") for i, p in enumerate(est.get("calib") or [], start=1)]
@@ -4760,7 +4756,6 @@ def draw_energy(est, fit_state, view, key):
     for f, lab in pts:
         merged.setdefault(round(f, 1), []).append(lab)
     pts = [(f, ", ".join(labs)) for f, labs in merged.items()]
-    patch = dash.Patch()
     idx = 1 + len(FIT_TRACE_STYLES)
     patch["data"][idx]["x"] = [p[0] for p in pts]
     patch["data"][idx]["y"] = [float(np.interp(p[0], ff, pp)) for p in pts]
@@ -4804,7 +4799,6 @@ def draw_energy(est, fit_state, view, key):
     patch["layout"]["annotations"] = list(_SUM_ANNOTATIONS.get(key, [])) + bt
     # when a pair is added, raise the top of the view if its bracket + label
     # would be above it (the x zoom is left alone)
-    trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
     ys = [v for v in by if v is not None]
     if trig.startswith("energy-state") and ys and view and view.get("y"):
         need = max(ys) + 0.16 * yspan                     # room for the label
