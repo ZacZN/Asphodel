@@ -46,7 +46,8 @@ Peak detection (no smoothing is ever applied to the data)
     step, not a smoothing kernel: the reported position is a raw data bin.
 """
 
-from nubase_reader import df_nubase, rect_restrict, diag_restrict, index_by_name, unpack_npz
+from nubase_reader import (df_nubase, rect_restrict, diag_restrict, index_by_name, unpack_npz,
+                           get_base_dataframe)
 
 import os
 import re
@@ -1660,6 +1661,57 @@ align_fit_tab = html.Div([
             html.Button("Clear peaks", id="btn-fit-clear", className="btn btn-outline-secondary btn-sm"),
         ], id="fit-bar", style={"display": "flex", "alignItems": "center", "flexWrap": "wrap",
                                 "rowGap": "6px", "margin": "4px 0"}),
+        # ---- Energy calculation (frequency -> energy from two known peaks) ----
+        html.Div([
+            html.Button("Energy calculation", id="btn-energy-mode",
+                        className="btn btn-outline-secondary btn-sm",
+                        title="Calibrate keV per Hz on two known peaks, then get the energy "
+                              "difference between any two peaks",
+                        style={"marginRight": "12px", "fontWeight": "600"}),
+            html.Span(id="energy-status", style={"fontSize": "13px"}),
+        ], style={"display": "flex", "alignItems": "center", "margin": "4px 0"}),
+        html.Div([
+            html.Div(id="energy-calib-info", style={"fontSize": "13px", "marginBottom": "6px"}),
+            *[html.Div([
+                html.Div([
+                    html.Span(f"Name of peak {i}:", style={**LABEL_STYLE, "margin": "0 6px 0 0",
+                                                           "minWidth": "110px"}),
+                    dcc.Input(id=f"energy-name-{i}", type="text", debounce=True, value="",
+                              placeholder="e.g. 207Tl81+ or m207Tl",
+                              className="form-control form-control-sm",
+                              style={"width": "200px", "marginRight": "10px"}),
+                    html.Span(id=f"energy-name-{i}-check", style={"fontSize": "12px"}),
+                ], style={"display": "flex", "alignItems": "center"}),
+                html.Div(id=f"energy-sugg-{i}", style={"marginLeft": "116px"}),
+            ], style={"marginBottom": "4px"}) for i in (1, 2)],
+            html.Div([
+                html.Button("Calibrate", id="btn-energy-calibrate", className="btn btn-sm",
+                            style={"backgroundColor": ACCENT, "color": "white", "marginRight": "8px"}),
+                html.Button("Reset calibration", id="btn-energy-reset",
+                            className="btn btn-outline-secondary btn-sm", style={"marginRight": "8px"}),
+                html.Button("Clear pairs", id="btn-energy-clear-pairs",
+                            className="btn btn-outline-secondary btn-sm"),
+            ], style={"margin": "6px 0"}),
+            dash_table.DataTable(
+                id="energy-table", data=[],
+                columns=[{"name": "pair", "id": "pair"}, {"name": "f_A (Hz)", "id": "f_A"},
+                         {"name": "f_B (Hz)", "id": "f_B"}, {"name": "f_B − f_A (Hz)", "id": "df"},
+                         {"name": "E(B) − E(A) (keV)", "id": "de"},
+                         {"name": "frequencies from", "id": "src"}],
+                style_header=TABLE_HEADER, style_cell=TABLE_CELL, style_data_conditional=TABLE_ODD,
+                style_cell_conditional=[{"if": {"column_id": "src"}, "textAlign": "left",
+                                         "fontFamily": "inherit", "color": "#666"}],
+                style_table={"overflowX": "auto"}),
+            html.Small("A click on a peak of the main fit (within half its FWHM) uses its fitted "
+                       "centre; anywhere else the peak is fitted on its own in a small window "
+                       "(shape for new peaks + constant background).  Calibration: k = (ME₂ − ME₁) "
+                       "/ (f₂ − f₁) from NUBASE (for two states of the same nuclide the excitation "
+                       "energies are used).  ΔE = k·(f_B − f_A).", style=HELP_STYLE),
+        ], id="energy-panel", className="theia-box",
+           style={**BOX_STYLE, "display": "none", "padding": "8px 10px", "margin": "4px 0 8px 0"}),
+        dcc.Store(id="energy-mode", data=False),
+        dcc.Store(id="energy-click", data=None),
+        dcc.Store(id="energy-state", data=None),
         html.Small("Peak fitting: switch it on and click a peak to add it (the start values snap "
                    "to the nearest maximum); edit any value in the table to adjust the curve by "
                    "hand, or press Fit to fit over the current view.  Delete a row to remove a "
@@ -3365,7 +3417,10 @@ def toggle_sum_ion(align):
             "display": "none" if align == "none" else "block"}
 
 
-def add_sum_sim_lines(fig, ff, pp, files, include_unsure, visible):
+_SUM_SIMS = {}      # sum key -> simulated lines (ion, harmonic, f_sim), for name suggestions
+
+
+def add_sum_sim_lines(fig, ff, pp, files, include_unsure, visible, key=None):
     """Simulated ion lines on the summed spectrum, exactly as in the scanner:
     ion database, harmonics, gamma_t, second-order correction and half-life cut
     from the scan settings stored in the (first) loaded confirmation file, with
@@ -3384,6 +3439,12 @@ def add_sum_sim_lines(fig, ff, pp, files, include_unsure, visible):
                                 s["harmonics"], s["correction_enabled"],
                                 s["corr_a"], s["corr_b"], s["corr_c"])
     sims = sims[(sims["f_sim"] >= ff.min()) & (sims["f_sim"] <= ff.max())].reset_index(drop=True)
+    if key is not None:
+        _SUM_SIMS[key] = pd.DataFrame({"ion": ion_db["ion"].to_numpy()[sims["ion_row"].to_numpy()],
+                                       "harmonic": sims["harmonic"].to_numpy(),
+                                       "f_sim": sims["f_sim"].to_numpy()})
+        for k_old in list(_SUM_SIMS)[:-4]:
+            _SUM_SIMS.pop(k_old, None)
     rows = [read_confirmed(f)[1] for f in files]
     t = pd.concat(rows, ignore_index=True)
     if not include_unsure and "decision" in t:
@@ -3515,9 +3576,13 @@ def show_sum(_, restore, files, align, ion_key, unsure, show_sims):
                                line=dict(shape="hvh", color="black", width=1)))
     for st in FIT_TRACE_STYLES:                      # empty until peaks are added
         fig.add_trace(go.Scatter(x=[], y=[], hoverinfo="skip", **st))
+    fig.add_trace(go.Scatter(x=[], y=[], hoverinfo="skip", name=ENERGY_TRACE,
+                             mode="markers+text", textposition="top center",
+                             textfont=dict(color="#2e7d32", size=13),
+                             marker=dict(symbol="triangle-down", size=11, color="#2e7d32")))
     # simulated ion lines (after the fit traces, whose positions are fixed)
     try:
-        sim_text = add_sum_sim_lines(fig, ff, pp, files, bool(unsure), bool(show_sims))
+        sim_text = add_sum_sim_lines(fig, ff, pp, files, bool(unsure), bool(show_sims), key=key)
     except Exception as exc:
         traceback.print_exc()
         sim_text = f"simulated lines not drawn: {exc}"
@@ -3703,11 +3768,16 @@ def run_fit(ff, pp, sigma, state):
     lo_u, hi_u = float(u.min()), float(u.max())
     bin_hz = float(np.median(np.diff(ff[m])))
     lb, ub = [], []
-    for (_, what) in names:
-        if what == "centre":
+    cb = state.get("centre_bounds")             # optional per-peak centre limits (Hz)
+    for (i, what) in names:
+        if what == "centre" and cb and cb[i]:
+            lb.append(max(lo_u, cb[i][0] - state["xref"])); ub.append(min(hi_u, cb[i][1] - state["xref"]))
+        elif what == "centre":
             lb.append(lo_u); ub.append(hi_u)
         elif what == "amp":
             lb.append(0.0); ub.append(np.inf)
+        elif what == "fwhm" and state.get("fwhm_bounds") and state["fwhm_bounds"][i]:
+            lb.append(state["fwhm_bounds"][i][0]); ub.append(state["fwhm_bounds"][i][1])
         elif what == "fwhm":
             lb.append(0.05 * bin_hz); ub.append(max(hi_u - lo_u, bin_hz))
         elif what == "eta":
@@ -3836,17 +3906,32 @@ def _fit_status(state):
     Output("fit-mode", "data"),
     Output("btn-fit-mode", "children"),
     Output("btn-fit-mode", "style"),
+    Output("energy-mode", "data"),
+    Output("btn-energy-mode", "children"),
+    Output("btn-energy-mode", "style"),
+    Output("energy-panel", "style"),
     Input("btn-fit-mode", "n_clicks"),
+    Input("btn-energy-mode", "n_clicks"),
     State("fit-mode", "data"),
+    State("energy-mode", "data"),
     prevent_initial_call=True,
 )
-def toggle_fit_mode(_, on):
-    on = not on
+def toggle_modes(_f, _e, fit_on, energy_on):
+    """Peak fitting and energy calculation are click modes for the summed
+    plot; turning one on turns the other off."""
+    trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
+    if trig.startswith("btn-fit-mode"):
+        fit_on, energy_on = not fit_on, False
+    else:
+        energy_on, fit_on = not energy_on, False
     base = {"marginRight": "12px", "fontWeight": "600"}
-    if on:
-        return True, "Peak fitting: ON (click peaks)", {**base, "backgroundColor": ACCENT,
-                                                         "color": "white", "borderColor": ACCENT}
-    return False, "Peak fitting", base
+    on_style = {**base, "backgroundColor": ACCENT, "color": "white", "borderColor": ACCENT}
+    panel = {**BOX_STYLE, "display": "block" if energy_on else "none", "padding": "8px 10px",
+             "margin": "4px 0 8px 0"}
+    return (fit_on, "Peak fitting: ON (click peaks)" if fit_on else "Peak fitting",
+            on_style if fit_on else base,
+            energy_on, "Energy calculation: ON (click peaks)" if energy_on else "Energy calculation",
+            on_style if energy_on else base, panel)
 
 
 # In peak-fitting mode a click (without dragging) on the summed plot adds a
@@ -3855,10 +3940,11 @@ def toggle_fit_mode(_, on):
 # becomes the fit region).
 app.clientside_callback(
     """
-    function(on, figure) {
+    function(on, energyOn, figure) {
         window._theiaFitMode = !!on;
+        window._theiaEnergyMode = !!energyOn;
         var box = document.getElementById('sum-graph');
-        if (box) box.classList.toggle('fit-mode', !!on);
+        if (box) box.classList.toggle('fit-mode', !!on || !!energyOn);
         setTimeout(function() {
             var gd = document.querySelector('#sum-graph .js-plotly-plot');
             if (!gd || gd._theiaFitClick) return;
@@ -3945,7 +4031,16 @@ app.clientside_callback(
             document.addEventListener('mouseup', function(e) {
                 if (!drag) return;
                 var d = drag; drag = null;
-                if (Math.abs(e.clientX - d.x0) < 2) return;     // no real move
+                if (Math.abs(e.clientX - d.x0) < 2) {           // no real move
+                    // energy mode: a tap on a fitted peak picks that peak
+                    if (window._theiaEnergyMode) {
+                        var L0 = gd._fullLayout;
+                        window.dash_clientside.set_props('energy-click', {data: {
+                            x: d.mx[d.k], xrange: [Number(L0.xaxis.range[0]), Number(L0.xaxis.range[1])],
+                            t: Date.now()}});
+                    }
+                    return;
+                }
                 var L = gd._fullLayout;                          // final position
                 d.dx = L.xaxis.p2d(L.xaxis.d2p(d.mx[d.k]) + (e.clientX - d.x0)) - d.mx[d.k];
                 window.dash_clientside.set_props('fit-drag', {data: {
@@ -3960,7 +4055,7 @@ app.clientside_callback(
 
             gd.addEventListener('click', function(e) {
                 if (window._theiaSkipClick) { window._theiaSkipClick = false; return; }
-                if (!window._theiaFitMode || !down) return;
+                if (!(window._theiaFitMode || window._theiaEnergyMode) || !down) return;
                 if (Math.abs(e.clientX - down[0]) > 4 || Math.abs(e.clientY - down[1]) > 4) return;
                 var L = gd._fullLayout;
                 if (!L || !L.xaxis || !L.yaxis) return;
@@ -3970,7 +4065,8 @@ app.clientside_callback(
                 if (px < 0 || px > L.xaxis._length || py < 0 || py > L.yaxis._length) return;
                 var x = L.xaxis.p2d(px);
                 if (!isFinite(x)) return;
-                window.dash_clientside.set_props('fit-click', {data: {
+                window.dash_clientside.set_props(
+                    window._theiaFitMode ? 'fit-click' : 'energy-click', {data: {
                     x: x, xrange: [Number(L.xaxis.range[0]), Number(L.xaxis.range[1])],
                     t: Date.now()}});
             });
@@ -3980,6 +4076,7 @@ app.clientside_callback(
     """,
     Output("_fit-mode-hook", "children"),
     Input("fit-mode", "data"),
+    Input("energy-mode", "data"),
     Input("sum-graph", "figure"),
 )
 
@@ -4302,6 +4399,338 @@ app.clientside_callback(
     Input("btn-quit", "n_clicks"),
     prevent_initial_call=True,
 )
+
+
+# ===========================================================================
+# Aligning and fitting: energy calculation
+# ===========================================================================
+#
+# 1. Calibration: pick two peaks (a fitted peak's centre is used if you click
+#    on one, otherwise the peak is fitted on its own in a small window), name
+#    them (NUBASE names, e.g. 207Tl81+ or m207Tl), press Calibrate:
+#        k = (ME2 - ME1) / (f2 - f1)        [keV per Hz]
+#    For an isomer / ground-state pair of the same nuclide, ME2 - ME1 is the
+#    excitation-energy difference (with its own, smaller uncertainty).
+# 2. Then pick peaks in pairs A, B:  dE = E(B) - E(A) = k (f_B - f_A).
+
+ENERGY_TRACE = "energy picks"
+
+
+@lru_cache(maxsize=1)
+def _nubase_table():
+    d = get_base_dataframe()
+    d = d.copy()
+    for c in ("E_x", "E_x_unc"):
+        d[c] = pd.to_numeric(d[c].astype(str).str.replace("#", "", regex=False), errors="coerce")
+    return d
+
+
+def lookup_mass_excess(name):
+    """NUBASE entry for an ion/nuclide name ('207Tl81+', 'm207Tl', '208Pb').
+    Returns dict(name, A, Z, iso, me, dme, ex, dex, sys) or raises ValueError."""
+    m = re.fullmatch(r"\s*([a-z]?)(\d+)([A-Z][a-z]?)(\d+\+)?\s*", name or "")
+    if not m:
+        raise ValueError(f"'{name}' is not a name like 207Tl81+, m207Tl or 208Pb")
+    iso, A, sym = m.group(1), m.group(2), m.group(3)
+    d = _nubase_table()
+    rows = d[d["Element"].astype(str).str.strip() == f"{A}{sym}"]
+    rows = rows[rows["Isomer_Flag"] == iso] if iso else rows[rows["Isomer_Flag"].isna()]
+    if not len(rows):
+        raise ValueError(f"'{iso}{A}{sym}' is not in NUBASE")
+    r = rows.iloc[0]
+    if pd.isna(r["m.e."]):
+        raise ValueError(f"no mass excess for '{iso}{A}{sym}' in NUBASE")
+    ex = 0.0 if not iso else (float(r["E_x"]) if pd.notna(r["E_x"]) else np.nan)
+    dex = 0.0 if not iso else (float(r["E_x_unc"]) if pd.notna(r["E_x_unc"]) else np.nan)
+    return dict(name=f"{iso}{A}{sym}", A=int(A), Z=int(r["ZZZi"]), iso=iso,
+                me=float(r["m.e."]), dme=float(r["m.e._unc"]) if pd.notna(r["m.e._unc"]) else np.nan,
+                ex=ex, dex=dex, sys=bool(r["m.e. sys?"]))
+
+
+def mass_excess_difference(n1, n2):
+    """ME(n2) - ME(n1) in keV with its uncertainty.  For two states of the
+    same nuclide the excitation energies are used (correlated ME errors)."""
+    a, b = lookup_mass_excess(n1), lookup_mass_excess(n2)
+    if (a["A"], a["Z"]) == (b["A"], b["Z"]) and np.isfinite(a["ex"]) and np.isfinite(b["ex"]):
+        return b["ex"] - a["ex"], float(np.hypot(a["dex"], b["dex"])), a, b, "excitation energies"
+    return b["me"] - a["me"], float(np.hypot(a["dme"], b["dme"])), a, b, "mass excesses"
+
+
+def local_peak_fit(ff, pp, sigma, x, shape):
+    """Fit one peak (with a constant background) in a small window around x,
+    independently of the main fit.  Returns (centre, uncertainty, fwhm)."""
+    pk = _snap_peak(ff, pp, x, [0.0, 0.0], "none")
+    bin_hz = float(np.median(np.diff(ff)))
+    # window of +-1 FWHM around the maximum: wide enough for the peak, narrow
+    # enough to keep neighbouring peaks out
+    half = max(1.0 * pk["fwhm"], 6 * bin_hz)
+    region = [pk["centre"] - half, pk["centre"] + half]
+    m = _region_mask(ff, region)
+    base = float(np.nanmin(pp[m])) if m.any() else 0.0
+    pk = _snap_peak(ff, pp, x, [base, 0.0], "const")
+    pk["shape"] = shape
+    # the centre may only move within half a FWHM of the clicked maximum, so
+    # the fit cannot slide onto a bigger neighbouring peak
+    w = max(0.5 * pk["fwhm"], 2 * bin_hz)
+    st = {"peaks": [pk], "bg": "const", "bgp": [base, 0.0], "region": region,
+          "xref": pk["centre"], "shape": shape,
+          "centre_bounds": [[pk["centre"] - w, pk["centre"] + w]],
+          "fwhm_bounds": [[0.3 * pk["fwhm"], 3.0 * pk["fwhm"]]]}
+    res = run_fit(ff, pp, sigma, st)
+    c = res["peaks"][0]["centre"]
+    dc = res["unc"]["peaks"][0].get("centre", np.nan)
+    return float(c), float(dc), float(res["peaks"][0]["fwhm"])
+
+
+def pick_peak(ff, pp, sigma, x, fit_state, shape):
+    """Frequency for a click at x: the centre of a peak in the main fit if the
+    click is on it (within half its FWHM), otherwise a local single-peak fit."""
+    bin_hz = float(np.median(np.diff(ff)))
+    if fit_state and fit_state.get("peaks"):
+        unc = (fit_state.get("unc") or {}).get("peaks") or [{} for _ in fit_state["peaks"]]
+        best = None
+        for i, pk in enumerate(fit_state["peaks"]):
+            d = abs(pk["centre"] - x)
+            if d <= max(0.5 * pk["fwhm"], 2 * bin_hz) and (best is None or d < best[0]):
+                best = (d, i)
+        if best is not None:
+            i = best[1]
+            pk = fit_state["peaks"][i]
+            du = unc[i].get("centre") if i < len(unc) else None
+            src = f"main fit, peak {i + 1}" + ("" if fit_state.get("fitted") else " (not fitted)")
+            return {"f": float(pk["centre"]), "df": float(du) if du is not None else np.nan,
+                    "src": src}
+    c, dc, w = local_peak_fit(ff, pp, sigma, x, shape)
+    return {"f": c, "df": dc, "src": f"local fit (FWHM {w:.0f} Hz)"}
+
+
+def _fmt_pm(v, dv, fmt=".1f"):
+    if v is None or not np.isfinite(v):
+        return "–"
+    return format(v, fmt) + ("" if dv is None or not np.isfinite(dv) else " ± " + format(dv, fmt))
+
+
+def suggest_ions(key, f, n=6):
+    """Simulated ions nearest to frequency f (from the summed plot's lines)."""
+    sims = _SUM_SIMS.get(key)
+    if sims is None or not len(sims):
+        return []
+    d = (sims["f_sim"] - f).abs()
+    near = sims.assign(d=d).sort_values("d").head(n)
+    return [(r.ion, int(r.harmonic), float(r.f_sim - f)) for r in near.itertuples()]
+
+
+def _empty_energy():
+    return {"calib": [], "k": None, "dk": None, "pending": None, "pairs": [], "msg": ""}
+
+
+@app.callback(
+    Output("energy-state", "data"),
+    Output("energy-name-1", "value"),
+    Output("energy-name-2", "value"),
+    Input("energy-click", "data"),
+    Input("energy-name-1", "value"),
+    Input("energy-name-2", "value"),
+    Input({"type": "energy-sugg", "peak": ALL, "name": ALL}, "n_clicks"),
+    Input("btn-energy-calibrate", "n_clicks"),
+    Input("btn-energy-reset", "n_clicks"),
+    Input("btn-energy-clear-pairs", "n_clicks"),
+    Input("sum-key", "data"),
+    State("energy-state", "data"),
+    State("fit-state", "data"),
+    State("fit-shape", "value"),
+    prevent_initial_call=True,
+)
+def update_energy(click, name1, name2, _sugg, _cal, _reset, _clear, key, est, fit_state, shape):
+    trig = dash.callback_context.triggered[0] if dash.callback_context.triggered else None
+    nu = dash.no_update
+    if trig is None:
+        return nu, nu, nu
+    pid, val = trig["prop_id"], trig["value"]
+    est = dict(est or _empty_energy())
+    est["msg"] = ""
+    if pid.startswith("sum-key") or pid.startswith("btn-energy-reset"):
+        return _empty_energy(), "", ""
+    if pid.startswith("btn-energy-clear-pairs"):
+        est["pairs"], est["pending"] = [], None
+        return est, nu, nu
+    if '"energy-sugg"' in pid:
+        if not val:
+            return nu, nu, nu
+        idd = json.loads(pid.rsplit(".", 1)[0])
+        if idd["peak"] == 1:
+            return nu, idd["name"], nu
+        return nu, nu, idd["name"]
+    if pid.startswith("energy-name"):
+        est["k"], est["dk"] = None, None              # names changed: recalibrate
+        return est, nu, nu
+
+    with _SUM_CACHE_LOCK:
+        cached = _SUM_CACHE.get(key)
+    if cached is None:
+        est["msg"] = "Sum the spectra first."
+        return est, nu, nu
+    ff, pp, sigma = cached
+
+    if pid.startswith("energy-click") and click:
+        try:
+            pk = pick_peak(ff, pp, sigma, float(click["x"]), fit_state, shape or "gauss")
+        except Exception as exc:
+            traceback.print_exc()
+            est["msg"] = f"Could not fit the peak there: {exc}"
+            return est, nu, nu
+        if est.get("k") is None:                      # calibration step
+            if len(est["calib"]) >= 2:
+                est["msg"] = ("Two calibration peaks are already picked: name them and press "
+                              "Calibrate, or Reset to pick again.")
+                return est, nu, nu
+            pk["suggest"] = suggest_ions(key, pk["f"])
+            est["calib"] = est["calib"] + [pk]
+            return est, nu, nu
+        if est.get("pending") is None:                # first peak (A) of a pair
+            est["pending"] = pk
+            return est, nu, nu
+        a, b = est["pending"], pk
+        dfreq = b["f"] - a["f"]
+        ddf = float(np.hypot(np.nan_to_num(a["df"]), np.nan_to_num(b["df"])))
+        de = est["k"] * dfreq
+        dde = float(np.hypot(est["k"] * ddf, dfreq * est["dk"]))
+        est["pairs"] = est["pairs"] + [{"a": a, "b": b, "dfreq": dfreq, "ddf": ddf,
+                                        "de": de, "dde": dde}]
+        est["pending"] = None
+        return est, nu, nu
+
+    if pid.startswith("btn-energy-calibrate"):
+        if len(est["calib"]) < 2:
+            est["msg"] = "Pick two calibration peaks first."
+            return est, nu, nu
+        try:
+            dme, ddme, a, b, how = mass_excess_difference(name1, name2)
+            if a["name"] == b["name"]:
+                raise ValueError("the two peaks have the same name (no energy difference)")
+        except Exception as exc:
+            est["msg"] = f"Calibration: {exc}"
+            return est, nu, nu
+        p1, p2 = est["calib"]
+        dfreq = p2["f"] - p1["f"]
+        if abs(dfreq) < 1e-9:
+            est["msg"] = "The two calibration peaks have the same frequency."
+            return est, nu, nu
+        s1, s2 = np.nan_to_num(p1["df"]), np.nan_to_num(p2["df"])
+        k = dme / dfreq
+        dk = float(np.sqrt((ddme / dfreq) ** 2 + (dme * np.hypot(s1, s2) / dfreq ** 2) ** 2))
+        est.update(k=float(k), dk=dk, names=[a["name"], b["name"]], dme=float(dme),
+                   ddme=float(ddme), how=how, sys=bool(a["sys"] or b["sys"]))
+        est["pairs"], est["pending"] = [], None
+        return est, nu, nu
+    return nu, nu, nu
+
+
+@app.callback(
+    Output("energy-calib-info", "children"),
+    Output("energy-sugg-1", "children"),
+    Output("energy-sugg-2", "children"),
+    Output("energy-name-1-check", "children"),
+    Output("energy-name-2-check", "children"),
+    Output("energy-status", "children"),
+    Output("energy-table", "data"),
+    Input("energy-state", "data"),
+    Input("energy-name-1", "value"),
+    Input("energy-name-2", "value"),
+    Input("energy-mode", "data"),
+)
+def render_energy(est, name1, name2, on):
+    est = est or _empty_energy()
+    calib = est.get("calib") or []
+
+    def peak_line(i):
+        if i >= len(calib):
+            return html.Span(f"Peak {i + 1}: not picked yet", style={"color": "#888"})
+        p = calib[i]
+        return html.Span([html.B(f"Peak {i + 1}: "), f"f = {_fmt_pm(p['f'], p['df'])} Hz",
+                          html.Span(f"  ({p['src']})", style={"color": "#888"})])
+
+    def sugg(i):
+        if i >= len(calib) or not calib[i].get("suggest"):
+            return ""
+        return [html.Span("Nearby simulated ions: ", style={"fontSize": "12px", "color": "#888"})] + [
+            html.Button(f"{ion} (h={h}, {d:+.0f} Hz)",
+                        id={"type": "energy-sugg", "peak": i + 1, "name": ion},
+                        className="btn btn-outline-secondary btn-sm",
+                        style={"fontSize": "11px", "padding": "1px 6px", "margin": "2px 4px 2px 0"})
+            for ion, h, d in calib[i]["suggest"]]
+
+    def check(name):
+        if not name:
+            return ""
+        try:
+            r = lookup_mass_excess(name)
+            txt = f"✓ {r['name']}: ME = {r['me']:.1f} ± {r['dme']:.1f} keV" + (" (#)" if r["sys"] else "")
+            if r["iso"]:
+                txt += f", E_x = {r['ex']:.2f} ± {r['dex']:.2f} keV"
+            return html.Span(txt, style={"color": "#2e7d32"})
+        except ValueError as exc:
+            return html.Span(f"✗ {exc}", style={"color": "#c0392b"})
+
+    info = [html.Div(peak_line(0)), html.Div(peak_line(1))]
+    if est.get("k") is not None:
+        info.append(html.Div([
+            html.B("Calibration: "),
+            f"k = {est['k']:.6g} ± {est['dk']:.2g} keV/Hz   "
+            f"(ΔE = {est['dme']:.2f} ± {est['ddme']:.2f} keV from {est['how']} of "
+            f"{est['names'][1]} − {est['names'][0]})"
+            + ("  · includes estimated (#) NUBASE values" if est.get("sys") else "")],
+            style={"marginTop": "4px"}))
+
+    if est.get("msg"):
+        status = html.Span(est["msg"], style={"color": "#c0392b"})
+    elif not on:
+        status = "Turn on Energy calculation to pick peaks on the plot."
+    elif est.get("k") is None:
+        status = ("Step 1 – calibration: click two peaks, enter their names (or click a "
+                  "suggestion), then press Calibrate." if len(calib) < 2 else
+                  "Step 1 – enter the names of the two peaks and press Calibrate.")
+    elif est.get("pending") is None:
+        status = "Step 2 – click peak A of a pair (the energy difference is E(B) − E(A))."
+    else:
+        status = f"Step 2 – peak A at {est['pending']['f']:.1f} Hz picked; now click peak B."
+
+    rows = [{"pair": i, "f_A": round(p["a"]["f"], 1), "f_B": round(p["b"]["f"], 1),
+             "df": _fmt_pm(p["dfreq"], p["ddf"]), "de": _fmt_pm(p["de"], p["dde"], ".2f"),
+             "src": f"A: {p['a']['src']};  B: {p['b']['src']}"}
+            for i, p in enumerate(est.get("pairs") or [], start=1)]
+    return info, sugg(0), sugg(1), check(name1), check(name2), status, rows
+
+
+@app.callback(
+    Output("sum-graph", "figure", allow_duplicate=True),
+    Input("energy-state", "data"),
+    State("sum-key", "data"),
+    prevent_initial_call=True,
+)
+def draw_energy(est, key):
+    """Mark the picked peaks on the summed plot (C1, C2, A1/B1, ...)."""
+    with _SUM_CACHE_LOCK:
+        cached = _SUM_CACHE.get(key)
+    if cached is None:
+        return dash.no_update
+    ff, pp, _ = cached
+    est = est or _empty_energy()
+    pts = [(p["f"], f"C{i}") for i, p in enumerate(est.get("calib") or [], start=1)]
+    for i, pr in enumerate(est.get("pairs") or [], start=1):
+        pts += [(pr["a"]["f"], f"A{i}"), (pr["b"]["f"], f"B{i}")]
+    if est.get("pending"):
+        pts.append((est["pending"]["f"], f"A{len(est.get('pairs') or []) + 1}"))
+    merged = {}                                   # one label per position ("C1, A1")
+    for f, lab in pts:
+        merged.setdefault(round(f, 1), []).append(lab)
+    pts = [(f, ", ".join(labs)) for f, labs in merged.items()]
+    patch = dash.Patch()
+    idx = 1 + len(FIT_TRACE_STYLES)
+    patch["data"][idx]["x"] = [p[0] for p in pts]
+    patch["data"][idx]["y"] = [float(np.interp(p[0], ff, pp)) for p in pts]
+    patch["data"][idx]["text"] = [p[1] for p in pts]
+    return patch
 
 
 # ===========================================================================
