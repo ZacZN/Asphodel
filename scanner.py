@@ -1684,6 +1684,10 @@ pid_modal = html.Div([
         html.Small("The reference position is always the strongest peak of the summed spectrum.  "
                    "Values start from the scan settings of the first loaded file.",
                    style={**HELP_STYLE, "marginBottom": "8px"}),
+        # shows / hides the lines straight away (no Apply needed)
+        dcc.Checklist(id="sum-show-sims", value=["on"],
+                      options=[{"label": " Show simulated ions on the plot", "value": "on"}],
+                      style={"fontSize": "13px", "fontWeight": "600", "marginBottom": "10px"}),
         html.Div([
             html.Div([_pid_field(k, lab) for k, lab in PID_FIELDS[:7]]),
             html.Div([_pid_field(k, lab) for k, lab in PID_FIELDS[7:9]] + [
@@ -1758,9 +1762,6 @@ align_fit_tab = html.Div([
                           style={"fontSize": "13px", "marginRight": "14px"}),
             html.Button("Sum spectra", id="btn-sum", className="btn btn-sm",
                         style={"backgroundColor": ACCENT, "color": "white", "marginRight": "14px"}),
-            dcc.Checklist(id="sum-show-sims", value=["on"],
-                          options=[{"label": " show simulated ions", "value": "on"}],
-                          style={"fontSize": "13px", "marginRight": "10px"}),
             html.Button("PID Settings", id="btn-pid", className="btn btn-outline-secondary btn-sm",
                         title="Settings used for the simulated ion lines"),
         ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap", "rowGap": "6px",
@@ -1770,7 +1771,8 @@ align_fit_tab = html.Div([
         dcc.Loading(html.Div(id="sum-status", style={"fontSize": "13px", "margin": "6px 0",
                                                      "minHeight": "18px"}),
                     type="dot", color=ACCENT),
-        html.Div(id="sum-sim-info", style={"fontSize": "12px", "marginBottom": "4px"}),
+        # description of the simulated lines (kept hidden; updated by the callbacks)
+        html.Div(id="sum-sim-info", style={"display": "none"}),
         dcc.Store(id="sum-key", data=None),
         dcc.Store(id="pid-settings", data=None),
 
