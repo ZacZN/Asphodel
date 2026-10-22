@@ -1752,6 +1752,12 @@ _BASE_LAYOUT = html.Div([
     # page); opens a small popup menu holding display options such as dark
     # mode.  Opening/closing is done in the browser (clientside callback
     # below): the button toggles it, clicking anywhere outside closes it.
+    # Quit: stops scanner.py and closes (or blanks) this browser tab
+    html.Button("\u23FB Quit", id="btn-quit", className="btn btn-outline-danger btn-sm",
+                title="Stop scanner.py and close this tab",
+                style={"position": "absolute", "top": "7px", "right": "122px", "zIndex": "20",
+                       "fontWeight": "600"}),
+    html.Div(id="_quit-hook", style={"display": "none"}),
     html.Button("\u2699 Settings", id="btn-settings", className="btn btn-outline-secondary btn-sm",
                 style={"position": "absolute", "top": "7px", "right": "14px", "zIndex": "20",
                        "fontWeight": "600"}),
@@ -1774,8 +1780,9 @@ _BASE_LAYOUT = html.Div([
                 children=[results_tab]),
         dcc.Tab(label="Further output", value="further", style=TAB_STYLE, selected_style=TAB_SEL,
                 children=[further_tab]),
-    # Tab bar stops short of the right edge to leave room for the settings button
-    ], style={"height": "42px", "width": "calc(100% - 130px)"}),
+    # Tab bar stops short of the right edge to leave room for the Quit and
+    # Settings buttons
+    ], style={"height": "42px", "width": "calc(100% - 210px)"}),
     # Polls the background scan; only enabled while a scan is running
     dcc.Interval(id="poll", interval=700, disabled=True),
     dcc.Store(id="scan-finished"),
@@ -3650,6 +3657,47 @@ def show_further_page(page):
     base = {"padding": "14px 18px", "overflowY": "auto", "height": "calc(100vh - 82px)"}
     return ({**base, "display": "block" if page == "align" else "none"},
             {**base, "display": "block" if page == "iso" else "none"})
+
+
+# ---------------------------------------------------------------------------
+# Quit
+# ---------------------------------------------------------------------------
+
+@app.server.route("/_theia_quit", methods=["POST"])
+def _theia_quit():
+    """Stop the program shortly after answering (so the browser gets the
+    reply).  The Further output state is already saved after every change."""
+    print("Quit pressed in the browser: stopping Theia scanner.")
+    threading.Timer(0.5, lambda: os._exit(0)).start()
+    return "stopping"
+
+
+app.clientside_callback(
+    """
+    function(n) {
+        if (!n) return window.dash_clientside.no_update;
+        if (!window.confirm('Quit Theia scanner?\\n\\nThis stops scanner.py ' +
+                            '(a scan that is running is stopped too).')) {
+            return window.dash_clientside.no_update;
+        }
+        fetch('_theia_quit', {method: 'POST'}).catch(function() {}).then(function() {
+            window.close();
+            // browsers only let a script close tabs it opened itself; if this
+            // tab is still open, replace the page with a message
+            setTimeout(function() {
+                document.body.innerHTML =
+                    '<div style="font-family:sans-serif;padding:60px;text-align:center;">' +
+                    '<h3 style="color:#f57d15">Theia scanner has stopped</h3>' +
+                    '<p>You can close this tab.</p></div>';
+            }, 300);
+        });
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("_quit-hook", "children"),
+    Input("btn-quit", "n_clicks"),
+    prevent_initial_call=True,
+)
 
 
 # ===========================================================================
