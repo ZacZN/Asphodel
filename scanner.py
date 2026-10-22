@@ -1560,6 +1560,9 @@ results_tab = html.Div([
 
 # Peak-fit parameter table (one row per peak).  Value columns are editable;
 # uncertainties and derived quantities are not.
+FIT_PANEL_SHOWN = {"display": "block", "flex": "1 1 0", "minWidth": "520px"}
+FIT_PANEL_HIDDEN = {**FIT_PANEL_SHOWN, "display": "none"}
+
 # line shapes available for each fitted peak
 SHAPE_LABELS = {"gauss": "Gaussian", "lorentz": "Lorentzian", "pvoigt": "Pseudo-Voigt"}
 
@@ -1857,8 +1860,11 @@ align_fit_tab = html.Div([
         ], className="theia-box",
            style={**BOX_STYLE, "padding": "8px 10px", "margin": "4px 0 8px 0",
                   "width": "fit-content", "maxWidth": "100%"}),
-        ], style={"minWidth": "0", "flex": "0 1 auto"}),
+        ], style={"flex": "0 0 auto", "maxWidth": "100%"}),
         # ---- Peak fitting (on the summed spectrum) ----------------------
+        # controls on the left, the parameter table to their right (wraps
+        # below when there is not enough room)
+        html.Div([
         html.Div([
             html.Div([
                 html.Button("Peak fitting", id="btn-fit-mode",
@@ -1896,9 +1902,60 @@ align_fit_tab = html.Div([
                             className="btn btn-outline-secondary btn-sm"),
             ], style={"display": "flex", "alignItems": "center", "marginBottom": "6px"}),
             html.Div(id="fit-status", style={"fontSize": "12px"}),
+        ], style={"flex": "0 0 400px"}),
+            html.Div([
+                html.Div(["Fit parameters", info_button("params", {"marginLeft": "6px"})],
+                         style={"fontWeight": "700", "fontSize": "13px",
+                                                  "margin": "6px 0 4px 0"}),
+                dash_table.DataTable(
+                    id="fit-table", data=[], editable=True, row_deletable=True,
+                    columns=FIT_COLUMNS,
+                    dropdown={"shape": {"clearable": False, "options": [
+                        {"label": v, "value": k} for k, v in SHAPE_LABELS.items()]}},
+                    # compact, so the table fits beside the energy box
+                    style_header={**TABLE_HEADER, "whiteSpace": "normal", "height": "auto",
+                                  "fontSize": "11px", "padding": "2px 5px"},
+                    style_cell={**TABLE_CELL, "padding": "2px 5px", "minWidth": "0"},
+                    style_data_conditional=TABLE_ODD + [
+                        {"if": {"column_editable": False}, "color": "#666"},
+                        # eta only applies to pseudo-Voigt peaks
+                        {"if": {"column_id": "eta", "filter_query": '{shape} != "pvoigt"'},
+                         "color": "transparent", "backgroundColor": "#f2f2f2"}],
+                    style_cell_conditional=[{"if": {"column_id": "shape"}, "textAlign": "left",
+                                             "minWidth": "115px", "width": "115px"}],
+                    # Bootstrap's CSS hides the DataTable dropdown menu
+                    # (.Select-menu-outer gets display:none), so force it on; and
+                    # let the menu hang below the table instead of being clipped
+                    css=[{"selector": ".Select-menu-outer",
+                          "rule": "display: block !important; background: white; z-index: 50; "
+                                  "border: 1px solid #dddddd; box-shadow: 0 4px 10px rgba(0,0,0,0.15)"},
+                         {"selector": ".Select-option", "rule": "color: #222 !important; padding: 4px 8px"},
+                         {"selector": ".Select-option.is-focused", "rule": f"background: {ACCENT_PALE}"},
+                         {"selector": ".dash-spreadsheet-container .dash-spreadsheet-inner",
+                          "rule": "overflow: visible !important"}],
+                    style_table={"overflow": "visible"}),
+                html.Div([
+                    html.Span("Background  b0", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
+                    dcc.Input(id="fit-b0", type="number", step="any", debounce=True,
+                              className="form-control form-control-sm",
+                              style={"width": "150px", "marginRight": "4px"}),
+                    html.Span(id="fit-b0-unc", style={"fontSize": "12px", "marginRight": "16px",
+                                                      "fontFamily": "monospace"}),
+                    html.Span("b1 (per Hz)", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
+                    dcc.Input(id="fit-b1", type="number", step="any", debounce=True,
+                              className="form-control form-control-sm",
+                              style={"width": "150px", "marginRight": "4px"}),
+                    html.Span(id="fit-b1-unc", style={"fontSize": "12px", "fontFamily": "monospace"}),
+                ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap",
+                          "marginTop": "6px"}),
+            ], id="fit-panel", style=FIT_PANEL_HIDDEN),
         ], id="fit-bar", className="theia-box",
-           style={**BOX_STYLE, "padding": "8px 10px", "margin": "4px 0 8px 0", "flex": "0 0 430px"}),
-        ], style={"display": "flex", "alignItems": "flex-start", "columnGap": "16px"}),
+           style={**BOX_STYLE, "padding": "8px 10px", "margin": "4px 0 8px 0", "flex": "1 1 0",
+                  "minWidth": "560px",
+                  "display": "flex", "flexWrap": "wrap", "columnGap": "18px",
+                  "rowGap": "8px", "alignItems": "flex-start"}),
+        ], style={"display": "flex", "alignItems": "flex-start", "columnGap": "16px",
+                  "flexWrap": "wrap"}),
         dcc.Store(id="energy-mode", data=False),
         dcc.Store(id="energy-click", data=None),
         dcc.Store(id="energy-state", data=None),
@@ -1919,49 +1976,6 @@ align_fit_tab = html.Div([
         dcc.Graph(id="fit-resid", figure=empty_fig(),
                   config={"scrollZoom": True, "displaylogo": False, "doubleClick": False},
                   style={"height": "200px", "display": "none"}),
-        html.Div([
-            html.Div(["Fit parameters", info_button("params", {"marginLeft": "6px"})],
-                     style={"fontWeight": "700", "fontSize": "13px",
-                                              "margin": "6px 0 4px 0"}),
-            dash_table.DataTable(
-                id="fit-table", data=[], editable=True, row_deletable=True,
-                columns=FIT_COLUMNS,
-                dropdown={"shape": {"clearable": False, "options": [
-                    {"label": v, "value": k} for k, v in SHAPE_LABELS.items()]}},
-                style_header=TABLE_HEADER, style_cell=TABLE_CELL,
-                style_data_conditional=TABLE_ODD + [
-                    {"if": {"column_editable": False}, "color": "#666"},
-                    # eta only applies to pseudo-Voigt peaks
-                    {"if": {"column_id": "eta", "filter_query": '{shape} != "pvoigt"'},
-                     "color": "transparent", "backgroundColor": "#f2f2f2"}],
-                style_cell_conditional=[{"if": {"column_id": "shape"}, "textAlign": "left",
-                                         "minWidth": "140px", "width": "140px"}],
-                # Bootstrap's CSS hides the DataTable dropdown menu
-                # (.Select-menu-outer gets display:none), so force it on; and
-                # let the menu hang below the table instead of being clipped
-                css=[{"selector": ".Select-menu-outer",
-                      "rule": "display: block !important; background: white; z-index: 50; "
-                              "border: 1px solid #dddddd; box-shadow: 0 4px 10px rgba(0,0,0,0.15)"},
-                     {"selector": ".Select-option", "rule": "color: #222 !important; padding: 4px 8px"},
-                     {"selector": ".Select-option.is-focused", "rule": f"background: {ACCENT_PALE}"},
-                     {"selector": ".dash-spreadsheet-container .dash-spreadsheet-inner",
-                      "rule": "overflow: visible !important"}],
-                style_table={"overflow": "visible"}),
-            html.Div([
-                html.Span("Background  b0", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
-                dcc.Input(id="fit-b0", type="number", step="any", debounce=True,
-                          className="form-control form-control-sm",
-                          style={"width": "150px", "marginRight": "4px"}),
-                html.Span(id="fit-b0-unc", style={"fontSize": "12px", "marginRight": "16px",
-                                                  "fontFamily": "monospace"}),
-                html.Span("b1 (per Hz)", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
-                dcc.Input(id="fit-b1", type="number", step="any", debounce=True,
-                          className="form-control form-control-sm",
-                          style={"width": "150px", "marginRight": "4px"}),
-                html.Span(id="fit-b1-unc", style={"fontSize": "12px", "fontFamily": "monospace"}),
-            ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap",
-                      "marginTop": "6px"}),
-        ], id="fit-panel", style={"display": "none"}),
     ], id="further-content", className="theia-box", style={**BOX_STYLE, "padding": "8px 10px"}),
 ], id="further-page-align", style={"padding": "14px 18px", "overflowY": "auto",
                                    "height": "calc(100vh - 82px)"})
@@ -4525,7 +4539,7 @@ def update_fit(click, dragged, run, _ts, shape, bg, b0, b1, _clear, key, state, 
     if state is None:
         msg = ("Sum the spectra first, then turn on peak fitting."
                if trig.startswith(("fit-click", "fit-run")) else "")
-        return None, [], cols, None, None, "", "", msg, {"display": "none"}
+        return None, [], cols, None, None, "", "", msg, FIT_PANEL_HIDDEN
     nb = _n_bg(state["bg"])
     bunc = (state.get("unc") or {}).get("bgp") or [None, None]
     b0v = float(f"{state['bgp'][0]:.6g}") if nb >= 1 else None
@@ -4533,7 +4547,7 @@ def update_fit(click, dragged, run, _ts, shape, bg, b0, b1, _clear, key, state, 
     status = _fit_status(state)
     if error:
         status = html.Span(f"Fit error: {error}", style={"color": "#c0392b"})
-    panel = {"display": "block"} if state["peaks"] else {"display": "none"}
+    panel = FIT_PANEL_SHOWN if state["peaks"] else FIT_PANEL_HIDDEN
     return (state, fit_table_rows(state), cols, b0v, b1v,
             ("± " + _fmt_num(bunc[0], ".3g")) if nb >= 1 and bunc[0] is not None else "",
             ("± " + _fmt_num(bunc[1], ".3g")) if nb == 2 and bunc[1] is not None else "",
