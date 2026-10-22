@@ -3626,6 +3626,7 @@ def toggle_sum_ion(align):
 
 
 _SUM_ANNOTATIONS = {}   # sum key -> the figure's own annotations (energy labels go after)
+_SUM_SHAPES = {}        # ... and its own shapes (the energy brackets go after)
 _SUM_SIMS = {}      # sum key -> simulated lines (ion, harmonic, f_sim), for name suggestions
 
 
@@ -3862,6 +3863,7 @@ def show_sum(_, restore, files, align, ion_key, unsure, show_sims, pid_over):
                       uirevision=key)
     # annotations of the plot itself; the energy labels are added after these
     _SUM_ANNOTATIONS[key] = [a.to_plotly_json() for a in fig.layout.annotations]
+    _SUM_SHAPES[key] = [sh.to_plotly_json() for sh in fig.layout.shapes]
 
     sh = info["shifts"]
     parts = [f"Summed {info['n']} spectra ({how})"]
@@ -5093,21 +5095,14 @@ def _energy_into_patch(patch, est, fit_state, view, key, cached, trig):
     patch["data"][idx]["y"] = [float(np.interp(p[0], ff, pp)) for p in pts]
     patch["data"][idx]["text"] = [p[1] for p in pts]
 
-    # a bracket above each pair, from centre A to centre B, with dE +- sigma.
-    # Offsets are fractions of the current view's height, so the bracket
-    # clears the peak markers and their labels whatever the zoom.
-    if not (view and view.get("y")):
-        # right after start-up the browser has not reported the view yet:
-        # use the view saved with the tab (restored on the plot)
-        view = (load_config().get("further_state") or {}).get("view")
-    if view and view.get("y"):
-        yspan = abs(view["y"][1] - view["y"][0]) or 1.0
-    else:
-        finite = pp[np.isfinite(pp)]
-        yspan = float(finite.max() - finite.min()) or 1.0
+    # a bracket just above each pair, from centre A to centre B, with dE +- sigma.
+    # Drawn as layout shapes whose vertical size is in PIXELS above the
+    # highest data / fit point between the peaks (ysizemode="pixel"), so it
+    # sits the same distance above the peaks at any zoom without redrawing.
     fx, fy = fit_overlay(ff, fit_state)[0] if fit_state else ([], [])
     fx, fy = np.asarray(fx, dtype=float), np.asarray(fy, dtype=float)
-    bx, by, bt = [], [], []
+    shapes, labels = [], []
+    line = dict(color="black", width=1.5)
     for i, pr in enumerate(est.get("pairs") or []):
         fa, fb = pr["a"]["f"], pr["b"]["f"]
         lo, hi = min(fa, fb), max(fa, fb)
@@ -5117,30 +5112,27 @@ def _energy_into_patch(patch, est, fit_state, view, key, cached, trig):
         mf = (fx >= lo) & (fx <= hi)
         if mf.any():                                                    # ... and the fit
             top = max(top, float(np.nanmax(fy[mf])))
-        y = top + yspan * (0.14 + 0.10 * i)        # stagger successive pairs
-        tick = yspan * 0.025
-        label = f"ΔE = {_fmt_pm(pr['de'], pr['dde'], '.2f')} keV"
+        # pixels above `top`: clear of the peak numbers / pick labels; later
+        # pairs are stacked higher
+        h = 34 + 46 * i
         mid = 0.5 * (fa + fb)
-        # bracket: ticks down at A and B, a tick up in the middle
-        bx += [fa, fa, mid, mid, mid, fb, fb, None]
-        by += [y - tick, y, y, y + tick, y, y, y - tick, None]
-        # label as an annotation: drawn on top of everything, black text on
-        # an opaque white box with a black border
-        bt.append(dict(x=mid, y=y + tick, xref="x", yref="y", text=label, showarrow=False,
-                       yanchor="bottom", yshift=3, font=dict(color="black", size=26),
-                       bgcolor="white", bordercolor="black", borderwidth=1.5, borderpad=4,
-                       opacity=1))
-    patch["data"][idx + 1]["x"] = bx
-    patch["data"][idx + 1]["y"] = by
-    patch["layout"]["annotations"] = list(_SUM_ANNOTATIONS.get(key, [])) + bt
-    # when a pair is added, raise the top of the view if its bracket + label
-    # would be above it (the x zoom is left alone)
-    ys = [v for v in by if v is not None]
-    if trig.startswith("energy-state") and ys and view and view.get("y"):
-        need = max(ys) + 0.16 * yspan                     # room for the label
-        if need > max(view["y"]):
-            patch["layout"]["yaxis"]["range"] = [min(view["y"]), need]
-            patch["layout"]["yaxis"]["autorange"] = False
+        common = dict(type="line", xref="x", yref="y", ysizemode="pixel", yanchor=top,
+                      line=line, layer="above")
+        shapes += [dict(common, x0=fa, x1=fb, y0=h, y1=h),              # horizontal
+                   dict(common, x0=fa, x1=fa, y0=h - 7, y1=h),          # tick down at A
+                   dict(common, x0=fb, x1=fb, y0=h - 7, y1=h),          # tick down at B
+                   dict(common, x0=mid, x1=mid, y0=h, y1=h + 7)]        # tick up, middle
+        # label: drawn on top of everything, black text on an opaque white
+        # box with a black border
+        labels.append(dict(x=mid, y=top, xref="x", yref="y", yshift=h + 8, yanchor="bottom",
+                           text=f"ΔE = {_fmt_pm(pr['de'], pr['dde'], '.2f')} keV",
+                           showarrow=False, font=dict(color="black", size=26),
+                           bgcolor="white", bordercolor="black", borderwidth=1.5, borderpad=4,
+                           opacity=1))
+    patch["data"][idx + 1]["x"] = []                 # (old bracket trace, no longer used)
+    patch["data"][idx + 1]["y"] = []
+    patch["layout"]["shapes"] = list(_SUM_SHAPES.get(key, [])) + shapes
+    patch["layout"]["annotations"] = list(_SUM_ANNOTATIONS.get(key, [])) + labels
     return patch
 
 
