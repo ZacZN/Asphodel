@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.pyo
+*.sqlite
+*.npz
+_viewer_output.html
+.~lock.*#
