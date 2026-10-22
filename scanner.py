@@ -3478,6 +3478,7 @@ _SUM_CACHE = {}
 _SUM_CACHE_LOCK = threading.Lock()
 # fit saved last session, waiting for its restored sum (sum key -> fit state)
 _RESTORE_FIT = {}
+_RESTORE_ENERGY = {}    # same for the energy calculation (state + peak names)
 
 
 def _cache_sum(ff, pp):
@@ -3559,6 +3560,8 @@ def show_sum(_, restore, files, align, ion_key, unsure, show_sims):
     key = _cache_sum(ff, pp)
     if restoring and restore.get("fit"):
         _RESTORE_FIT[key] = restore["fit"]
+    if restoring and restore.get("energy"):
+        _RESTORE_ENERGY[key] = restore["energy"]
 
     if align == "identified":
         ion, harm = ion_key.rsplit("|", 1)
@@ -3915,7 +3918,6 @@ def _fit_status(state):
     Output("energy-mode", "data"),
     Output("btn-energy-mode", "children"),
     Output("btn-energy-mode", "style"),
-    Output("energy-panel", "style"),
     Input("btn-fit-mode", "n_clicks"),
     Input("btn-energy-mode", "n_clicks"),
     State("fit-mode", "data"),
@@ -3932,12 +3934,10 @@ def toggle_modes(_f, _e, fit_on, energy_on):
         energy_on, fit_on = not energy_on, False
     base = {"marginRight": "12px", "fontWeight": "600"}
     on_style = {**base, "backgroundColor": ACCENT, "color": "white", "borderColor": ACCENT}
-    panel = {**BOX_STYLE, "display": "block" if energy_on else "none", "padding": "8px 10px",
-             "margin": "4px 0 8px 0"}
     return (fit_on, "Peak fitting: ON (click peaks)" if fit_on else "Peak fitting",
             on_style if fit_on else base,
             energy_on, "Energy calculation: ON (click peaks)" if energy_on else "Energy calculation",
-            on_style if energy_on else base, panel)
+            on_style if energy_on else base)
 
 
 # In peak-fitting mode a click (without dragging) on the summed plot adds a
@@ -4122,20 +4122,29 @@ app.clientside_callback(
     Input("sum-key", "data"),
     Input("sum-view", "data"),
     Input("fit-state", "data"),
+    Input("energy-state", "data"),
+    Input("energy-name-1", "value"),
+    Input("energy-name-2", "value"),
     prevent_initial_call=True,
 )
-def save_further_state(files, align, ion, unsure, key, view, fit):
+def save_further_state(files, align, ion, unsure, key, view, fit, energy, name1, name2):
     """Save the Further output tab after every change, so it is restored the
     next time scanner.py runs (scanner_config.json -> further_state)."""
     trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
     old = load_config().get("further_state") or {}
     st = {"files": files or [], "align": align, "ion": ion, "unsure": unsure or [],
-          "summed": key is not None, "view": view or old.get("view"), "fit": old.get("fit")}
+          "summed": key is not None, "view": view or old.get("view"), "fit": old.get("fit"),
+          "energy": old.get("energy")}
     if trig.startswith("sum-key"):
         st["view"] = view if view else old.get("view")
     if trig.startswith("fit-state"):
         st["fit"] = ({k: v for k, v in fit.items() if k != "sum_key"}
                      if fit and fit.get("peaks") else None)
+    if trig.startswith("energy-state") or trig.startswith("energy-name"):
+        has = energy and (energy.get("calib") or energy.get("pairs") or energy.get("k") is not None)
+        st["energy"] = ({"state": {k: v for k, v in energy.items() if k != "msg"},
+                         "names": [name1 or "", name2 or ""]}
+                        if has or name1 or name2 else None)
     if key is None and not trig.startswith("sum-key"):
         # page just loaded and the restored sum is not back yet: keep it
         st["summed"] = old.get("summed", False)
@@ -4556,7 +4565,13 @@ def update_energy(click, name1, name2, _sugg, _cal, _reset, _clear, key, est, fi
     pid, val = trig["prop_id"], trig["value"]
     est = dict(est or _empty_energy())
     est["msg"] = ""
-    if pid.startswith("sum-key") or pid.startswith("btn-energy-reset"):
+    if pid.startswith("sum-key"):
+        saved = _RESTORE_ENERGY.pop(key, None)          # saved last session
+        if saved:
+            names = saved.get("names") or ["", ""]
+            return dict(_empty_energy(), **(saved.get("state") or {})), names[0], names[1]
+        return _empty_energy(), "", ""
+    if pid.startswith("btn-energy-reset"):
         return _empty_energy(), "", ""
     if pid.startswith("btn-energy-clear-pairs"):
         est["pairs"], est["pending"] = [], None
@@ -4641,6 +4656,7 @@ def update_energy(click, name1, name2, _sugg, _cal, _reset, _clear, key, est, fi
     Output("energy-name-2-check", "children"),
     Output("energy-status", "children"),
     Output("energy-table", "data"),
+    Output("energy-panel", "style"),
     Input("energy-state", "data"),
     Input("energy-name-1", "value"),
     Input("energy-name-2", "value"),
@@ -4706,7 +4722,11 @@ def render_energy(est, name1, name2, on):
              "df": _fmt_pm(p["dfreq"], p["ddf"]), "de": _fmt_pm(p["de"], p["dde"], ".2f"),
              "src": f"A: {p['a']['src']};  B: {p['b']['src']}"}
             for i, p in enumerate(est.get("pairs") or [], start=1)]
-    return info, sugg(0), sugg(1), check(name1), check(name2), status, rows
+    # panel shown while the mode is on, or whenever there is something in it
+    has = bool(calib or est.get("pairs") or est.get("k") is not None)
+    panel = {**BOX_STYLE, "display": "block" if (on or has) else "none", "padding": "8px 10px",
+             "margin": "4px 0 8px 0"}
+    return info, sugg(0), sugg(1), check(name1), check(name2), status, rows, panel
 
 
 @app.callback(
