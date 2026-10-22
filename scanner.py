@@ -1583,6 +1583,75 @@ FIT_COLUMNS = [
 # Further output: reads files saved by confirmation mode (confirmed/*.csv) for
 # further processing.  Sub-tabs: "Aligning and fitting" (file list, summing,
 # peak fitting) and "Isochronicity Curve" (to come).
+# ---- ⓘ info buttons: the help text of a section, shown in a popup ----------
+INFO_TEXTS = {
+    "sum": ("Sum spectra", [
+        "Each spectrum is added once, however many identifications or files it appears in.",
+        "Aligned spectra are shifted (linear interpolation) so the chosen peak sits at the "
+        "median of its positions.",
+        "The plot opens zoomed to ±5 kHz around the ion/harmonic chosen in the dropdown.",
+        "With an identified peak, spectra without that ion/harmonic are left out.",
+        "Bins not covered by every shifted spectrum are dropped.",
+        "Simulated ion lines: the strongest peak of the sum is taken as the reference ion (at its "
+        "reference harmonic), with the scan settings stored in the first loaded file.  Ions in the "
+        "loaded files are dark dashed, others light dashed, half-life-excluded dotted.",
+    ]),
+    "fit": ("Peak fitting", [
+        "Switch it on and click a peak to add it (the start values snap to the nearest maximum).",
+        "Edit any value in the table to adjust the curve by hand, or press Fit to fit over the "
+        "current view.  Delete a row to remove a peak.",
+        "Drag a peak's centre (the × marker, cursor ↔) sideways to move it.",
+        "Each peak has its own line shape (shape column); 'Shape for new peaks' sets the shape of "
+        "peaks added from then on.",
+        "χ²/ndf uses a noise σ per bin estimated from the summed spectrum; uncertainties are "
+        "scaled by √(χ²/ndf).",
+    ]),
+    "energy": ("Energy calculation", [
+        "Step 1 – calibration: click two peaks, give their NUBASE names (or click a suggested "
+        "nearby simulated ion) and press Calibrate.",
+        "A click on a peak of the main fit (within half its FWHM) uses its fitted centre; anywhere "
+        "else the peak is fitted on its own in a small window (shape for new peaks + constant "
+        "background).",
+        "Calibration: k = (ME₂ − ME₁) / (f₂ − f₁) from NUBASE (for two states of the same nuclide "
+        "the excitation energies are used).",
+        "Step 2: click peaks in pairs A, B:  ΔE = E(B) − E(A) = k·(f_B − f_A).",
+        "A linear keV-per-Hz calibration is only accurate for pairs close in frequency to the "
+        "calibration peaks (ideally the same A/q).",
+    ]),
+    "params": ("Fit parameters", [
+        "centre, amplitude (height above the background), FWHM and – for pseudo-Voigt – η "
+        "(Lorentzian fraction) can be edited; the curve is redrawn straight away.",
+        "± columns are the 1σ uncertainties from the last Fit (cleared when you change anything "
+        "by hand).",
+        "Background = b0 + b1·(f − f_mid), where f_mid is the centre of the fit region.",
+    ]),
+}
+
+
+def info_button(key, style=None):
+    return html.Button("ⓘ", id={"type": "info-btn", "key": key}, n_clicks=0,
+                       className="btn btn-outline-secondary btn-sm", title="Information",
+                       style={"padding": "0 7px", "borderRadius": "50%", "fontWeight": "700",
+                              "lineHeight": "1.4", **(style or {})})
+
+
+info_modal = html.Div([
+    html.Div([
+        html.Div([
+            html.Span(id="info-title", style={"fontWeight": "700", "fontSize": "15px"}),
+            html.Button("✕", id="info-close", className="btn btn-outline-secondary btn-sm"),
+        ], style={"display": "flex", "justifyContent": "space-between", "alignItems": "center",
+                  "marginBottom": "8px"}),
+        html.Div(id="info-body", style={"fontSize": "13px"}),
+    ], className="theia-box",
+       style={"border": "1px solid #dddddd", "borderRadius": "6px", "background": "white",
+              "width": "620px", "maxWidth": "92vw", "padding": "14px 16px",
+              "boxShadow": "0 8px 30px rgba(0,0,0,0.3)"}),
+], id="info-modal", n_clicks=0,
+   style={"display": "none", "position": "fixed", "inset": "0", "zIndex": "1000",
+          "background": "rgba(0,0,0,0.35)", "alignItems": "center", "justifyContent": "center"})
+
+
 align_fit_tab = html.Div([
     html.H5("Aligning and fitting", style={"fontWeight": "700"}),
     # Numbered list of loaded confirmation files (any number); "+ Add file"
@@ -1601,7 +1670,8 @@ align_fit_tab = html.Div([
     html.Div([
         # Sum the spectra referenced by the loaded files, optionally aligned.
         html.Div([
-            html.Span("Sum spectra", style={"fontWeight": "700", "marginRight": "18px"}),
+            html.Span("Sum spectra", style={"fontWeight": "700", "marginRight": "4px"}),
+            info_button("sum", {"marginRight": "14px"}),
             html.Span("Align on:", style={**LABEL_STYLE, "marginRight": "8px"}),
             dcc.RadioItems(id="sum-align", value="none", inline=True,
                            options=[{"label": "Not aligned", "value": "none"},
@@ -1622,12 +1692,6 @@ align_fit_tab = html.Div([
                           style={"fontSize": "13px"}),
         ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap", "rowGap": "6px",
                   "marginBottom": "6px"}),
-        html.Small("Each spectrum is added once, however many identifications or files it "
-                   "appears in.  Aligned spectra are shifted (linear interpolation) so the "
-                   "chosen peak sits at the median of its positions; the plot opens zoomed to "
-                   "±5 kHz around the ion/harmonic chosen in the dropdown; with an identified peak, "
-                   "spectra without that ion/harmonic are left out.  Bins not covered by every "
-                   "shifted spectrum are dropped.", style=HELP_STYLE),
         # spinner on the status line only, so fit updates of the plot do not
         # flash a loading overlay over the graph
         dcc.Loading(html.Div(id="sum-status", style={"fontSize": "13px", "margin": "6px 0",
@@ -1640,6 +1704,7 @@ align_fit_tab = html.Div([
             html.Button("Peak fitting", id="btn-fit-mode", className="btn btn-outline-secondary btn-sm",
                         title="Turn on, then click peaks in the plot to add them to the fit",
                         style={"marginRight": "12px", "fontWeight": "600"}),
+            info_button("fit", {"marginRight": "12px"}),
             html.Span("Shape for new peaks:", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
             dcc.Dropdown(id="fit-shape", value="gauss", clearable=False,
                          options=[{"label": "Gaussian", "value": "gauss"},
@@ -1668,6 +1733,7 @@ align_fit_tab = html.Div([
                         title="Calibrate keV per Hz on two known peaks, then get the energy "
                               "difference between any two peaks",
                         style={"marginRight": "12px", "fontWeight": "600"}),
+            info_button("energy", {"marginRight": "12px"}),
             html.Span(id="energy-status", style={"fontSize": "13px"}),
         ], style={"display": "flex", "alignItems": "center", "margin": "4px 0"}),
         html.Div([
@@ -1702,21 +1768,11 @@ align_fit_tab = html.Div([
                 style_cell_conditional=[{"if": {"column_id": "src"}, "textAlign": "left",
                                          "fontFamily": "inherit", "color": "#666"}],
                 style_table={"overflowX": "auto"}),
-            html.Small("A click on a peak of the main fit (within half its FWHM) uses its fitted "
-                       "centre; anywhere else the peak is fitted on its own in a small window "
-                       "(shape for new peaks + constant background).  Calibration: k = (ME₂ − ME₁) "
-                       "/ (f₂ − f₁) from NUBASE (for two states of the same nuclide the excitation "
-                       "energies are used).  ΔE = k·(f_B − f_A).", style=HELP_STYLE),
         ], id="energy-panel", className="theia-box",
            style={**BOX_STYLE, "display": "none", "padding": "8px 10px", "margin": "4px 0 8px 0"}),
         dcc.Store(id="energy-mode", data=False),
         dcc.Store(id="energy-click", data=None),
         dcc.Store(id="energy-state", data=None),
-        html.Small("Peak fitting: switch it on and click a peak to add it (the start values snap "
-                   "to the nearest maximum); edit any value in the table to adjust the curve by "
-                   "hand, or press Fit to fit over the current view.  Delete a row to remove a "
-                   "peak.  Drag a peak's centre (the × marker, cursor ↔) sideways to move it.  χ²/ndf uses a noise σ per bin estimated from the summed spectrum; "
-                   "uncertainties are scaled by √(χ²/ndf).", style=HELP_STYLE),
         html.Div(id="fit-status", style={"fontSize": "13px", "margin": "4px 0"}),
         dcc.Store(id="fit-mode", data=False),
         dcc.Store(id="fit-click", data=None),
@@ -1736,7 +1792,8 @@ align_fit_tab = html.Div([
                   config={"scrollZoom": True, "displaylogo": False, "doubleClick": False},
                   style={"height": "200px", "display": "none"}),
         html.Div([
-            html.Div("Fit parameters", style={"fontWeight": "700", "fontSize": "13px",
+            html.Div(["Fit parameters", info_button("params", {"marginLeft": "6px"})],
+                     style={"fontWeight": "700", "fontSize": "13px",
                                               "margin": "6px 0 4px 0"}),
             dash_table.DataTable(
                 id="fit-table", data=[], editable=True, row_deletable=True,
@@ -1776,8 +1833,6 @@ align_fit_tab = html.Div([
                 html.Span(id="fit-b1-unc", style={"fontSize": "12px", "fontFamily": "monospace"}),
             ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap",
                       "marginTop": "6px"}),
-            html.Small("b1 is the slope about the centre of the fit region "
-                       "(background = b0 + b1·(f − f_mid))", style=HELP_STYLE),
         ], id="fit-panel", style={"display": "none"}),
     ], id="further-content", className="theia-box", style={**BOX_STYLE, "padding": "8px 10px"}),
 ], id="further-page-align", style={"padding": "14px 18px", "overflowY": "auto",
@@ -2214,6 +2269,7 @@ _BASE_LAYOUT = html.Div([
     html.Div(id="_snippet-excluded-hook", style={"display": "none"}),
     # Further output tab: saved state handed to the restore logic on page load
     folder_browser,
+    info_modal,
     dcc.Store(id="further-restore", data=None),
     dcc.Store(id="sum-view", data=None),
     html.Div(id="_sum-view-hook", style={"display": "none"}),
@@ -4810,6 +4866,30 @@ def _energy_into_patch(patch, est, fit_state, view, key, cached, trig):
             patch["layout"]["yaxis"]["range"] = [min(view["y"]), need]
             patch["layout"]["yaxis"]["autorange"] = False
     return patch
+
+
+@app.callback(
+    Output("info-modal", "style"),
+    Output("info-title", "children"),
+    Output("info-body", "children"),
+    Input({"type": "info-btn", "key": ALL}, "n_clicks"),
+    Input("info-close", "n_clicks"),
+    prevent_initial_call=True,
+)
+def show_info(_clicks, _close):
+    """ⓘ buttons: show that section's help in a popup; ✕ closes it."""
+    shown = {"display": "flex", "position": "fixed", "inset": "0", "zIndex": "1000",
+             "background": "rgba(0,0,0,0.35)", "alignItems": "center", "justifyContent": "center"}
+    trig = dash.callback_context.triggered[0] if dash.callback_context.triggered else None
+    if not trig or not trig["value"]:
+        return dash.no_update, dash.no_update, dash.no_update
+    if trig["prop_id"].startswith("info-close"):
+        return {**shown, "display": "none"}, dash.no_update, dash.no_update
+    key = json.loads(trig["prop_id"].rsplit(".", 1)[0])["key"]
+    title, lines = INFO_TEXTS.get(key, ("Information", []))
+    body = html.Ul([html.Li(t, style={"marginBottom": "4px"}) for t in lines],
+                   style={"paddingLeft": "18px", "margin": "0"})
+    return shown, title, body
 
 
 # ===========================================================================
