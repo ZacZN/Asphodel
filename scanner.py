@@ -1496,9 +1496,10 @@ FIT_COLUMNS = [
 
 
 # Further output: reads files saved by confirmation mode (confirmed/*.csv) for
-# further processing: a numbered file list and spectrum summing.
-further_tab = html.Div([
-    html.H5("Further output", style={"fontWeight": "700"}),
+# further processing.  Sub-tabs: "Aligning and fitting" (file list, summing,
+# peak fitting) and "Isochronicity Curve" (to come).
+align_fit_tab = html.Div([
+    html.H5("Aligning and fitting", style={"fontWeight": "700"}),
     # Numbered list of loaded confirmation files (any number); "+ Add file"
     # opens a picker, choosing a file appends it to the list.
     html.Div(id="further-list"),
@@ -1629,7 +1630,29 @@ further_tab = html.Div([
                        "(background = b0 + b1·(f − f_mid))", style=HELP_STYLE),
         ], id="fit-panel", style={"display": "none"}),
     ], id="further-content", className="theia-box", style={**BOX_STYLE, "padding": "8px 10px"}),
-], style={"padding": "14px 18px", "overflowY": "auto", "height": "calc(100vh - 42px)"})
+], id="further-page-align", style={"padding": "14px 18px", "overflowY": "auto",
+                                   "height": "calc(100vh - 82px)"})
+
+isochronicity_tab = html.Div([
+    html.H5("Isochronicity Curve", style={"fontWeight": "700"}),
+], id="further-page-iso", style={"padding": "14px 18px", "overflowY": "auto",
+                                 "height": "calc(100vh - 82px)", "display": "none"})
+
+# The sub-tab bar only switches which page is visible: both pages stay
+# mounted, so plots keep their zoom and browser-side listeners.
+FURTHER_PAGES = {"align": "further-page-align", "iso": "further-page-iso"}
+SUBTAB_STYLE = {"padding": "6px 14px", "fontWeight": "600", "fontSize": "13px"}
+SUBTAB_SEL = {**SUBTAB_STYLE, "borderTop": f"3px solid {ACCENT}"}
+further_tab = html.Div([
+    dcc.Tabs(id="further-subtabs", value="align", children=[
+        dcc.Tab(label="Aligning and fitting", value="align", style=SUBTAB_STYLE,
+                selected_style=SUBTAB_SEL),
+        dcc.Tab(label="Isochronicity Curve", value="iso", style=SUBTAB_STYLE,
+                selected_style=SUBTAB_SEL),
+    ], style={"height": "40px"}),
+    align_fit_tab,
+    isochronicity_tab,
+])
 
 
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
@@ -3616,6 +3639,17 @@ app.clientside_callback(
     Input("snippet-show-excluded", "value"),
     prevent_initial_call=True,
 )
+
+
+@app.callback(
+    Output("further-page-align", "style"),
+    Output("further-page-iso", "style"),
+    Input("further-subtabs", "value"),
+)
+def show_further_page(page):
+    base = {"padding": "14px 18px", "overflowY": "auto", "height": "calc(100vh - 82px)"}
+    return ({**base, "display": "block" if page == "align" else "none"},
+            {**base, "display": "block" if page == "iso" else "none"})
 
 
 # ===========================================================================
