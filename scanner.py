@@ -3580,6 +3580,11 @@ def show_sum(_, restore, files, align, ion_key, unsure, show_sims):
                              mode="markers+text", textposition="top center",
                              textfont=dict(color="#2e7d32", size=13),
                              marker=dict(symbol="triangle-down", size=11, color="#2e7d32")))
+    # bracket over each calculated pair, labelled with its energy difference
+    fig.add_trace(go.Scatter(x=[], y=[], hoverinfo="skip", name=ENERGY_PAIR_TRACE,
+                             mode="lines+text", textposition="top center",
+                             textfont=dict(color="#2e7d32", size=13),
+                             line=dict(color="#2e7d32", width=1.5)))
     # simulated ion lines (after the fit traces, whose positions are fixed)
     try:
         sim_text = add_sum_sim_lines(fig, ff, pp, files, bool(unsure), bool(show_sims), key=key)
@@ -4414,6 +4419,7 @@ app.clientside_callback(
 # 2. Then pick peaks in pairs A, B:  dE = E(B) - E(A) = k (f_B - f_A).
 
 ENERGY_TRACE = "energy picks"
+ENERGY_PAIR_TRACE = "energy pairs"
 
 
 @lru_cache(maxsize=1)
@@ -4730,6 +4736,26 @@ def draw_energy(est, key):
     patch["data"][idx]["x"] = [p[0] for p in pts]
     patch["data"][idx]["y"] = [float(np.interp(p[0], ff, pp)) for p in pts]
     patch["data"][idx]["text"] = [p[1] for p in pts]
+
+    # a bracket above each pair, from centre A to centre B, with dE +- sigma
+    bx, by, bt = [], [], []
+    for i, pr in enumerate(est.get("pairs") or []):
+        fa, fb = pr["a"]["f"], pr["b"]["f"]
+        lo, hi = min(fa, fb), max(fa, fb)
+        ya, yb = float(np.interp(fa, ff, pp)), float(np.interp(fb, ff, pp))
+        m = (ff >= lo) & (ff <= hi)
+        floor = float(np.nanmin(pp[m])) if m.any() else min(ya, yb)
+        top = max(ya, yb, float(np.nanmax(pp[m])) if m.any() else ya)   # clear the data
+        span = max(top - floor, abs(top) * 0.05, 1e-9)
+        y = top + span * (0.15 + 0.12 * i)          # stagger successive pairs
+        tick = span * 0.05
+        label = f"ΔE = {_fmt_pm(pr['de'], pr['dde'], '.2f')} keV"
+        bx += [fa, fa, 0.5 * (fa + fb), fb, fb, None]
+        by += [y - tick, y, y, y, y - tick, None]
+        bt += ["", "", label, "", "", ""]
+    patch["data"][idx + 1]["x"] = bx
+    patch["data"][idx + 1]["y"] = by
+    patch["data"][idx + 1]["text"] = bt
     return patch
 
 
