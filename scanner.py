@@ -3417,6 +3417,7 @@ def toggle_sum_ion(align):
             "display": "none" if align == "none" else "block"}
 
 
+_SUM_ANNOTATIONS = {}   # sum key -> the figure's own annotations (energy labels go after)
 _SUM_SIMS = {}      # sum key -> simulated lines (ion, harmonic, f_sim), for name suggestions
 
 
@@ -3582,9 +3583,7 @@ def show_sum(_, restore, files, align, ion_key, unsure, show_sims):
                              marker=dict(symbol="triangle-down", size=11, color="#2e7d32")))
     # bracket over each calculated pair, labelled with its energy difference
     fig.add_trace(go.Scatter(x=[], y=[], hoverinfo="skip", name=ENERGY_PAIR_TRACE,
-                             mode="lines+text", textposition="top center",
-                             textfont=dict(color="#2e7d32", size=26),
-                             line=dict(color="#2e7d32", width=1.5)))
+                             mode="lines", line=dict(color="black", width=1.5)))
     # simulated ion lines (after the fit traces, whose positions are fixed)
     try:
         sim_text = add_sum_sim_lines(fig, ff, pp, files, bool(unsure), bool(show_sims), key=key)
@@ -3616,6 +3615,8 @@ def show_sum(_, restore, files, align, ion_key, unsure, show_sims):
                       margin=dict(l=60, r=20, t=50, b=40), showlegend=False,
                       # keeps the user's zoom while the fit traces are patched
                       uirevision=key)
+    # annotations of the plot itself; the energy labels are added after these
+    _SUM_ANNOTATIONS[key] = [a.to_plotly_json() for a in fig.layout.annotations]
 
     sh = info["shifts"]
     parts = [f"Summed {info['n']} spectra ({how})"]
@@ -4768,18 +4769,25 @@ def draw_energy(est, fit_state, view, key):
         y = top + yspan * (0.14 + 0.10 * i)        # stagger successive pairs
         tick = yspan * 0.025
         label = f"ΔE = {_fmt_pm(pr['de'], pr['dde'], '.2f')} keV"
-        bx += [fa, fa, 0.5 * (fa + fb), fb, fb, None]
-        by += [y - tick, y, y, y, y - tick, None]
-        bt += ["", "", label, "", "", ""]
+        mid = 0.5 * (fa + fb)
+        # bracket: ticks down at A and B, a tick up in the middle
+        bx += [fa, fa, mid, mid, mid, fb, fb, None]
+        by += [y - tick, y, y, y + tick, y, y, y - tick, None]
+        # label as an annotation: drawn on top of everything, black text on
+        # an opaque white box with a black border
+        bt.append(dict(x=mid, y=y + tick, xref="x", yref="y", text=label, showarrow=False,
+                       yanchor="bottom", yshift=3, font=dict(color="black", size=26),
+                       bgcolor="white", bordercolor="black", borderwidth=1.5, borderpad=4,
+                       opacity=1))
     patch["data"][idx + 1]["x"] = bx
     patch["data"][idx + 1]["y"] = by
-    patch["data"][idx + 1]["text"] = bt
+    patch["layout"]["annotations"] = list(_SUM_ANNOTATIONS.get(key, [])) + bt
     # when a pair is added, raise the top of the view if its bracket + label
     # would be above it (the x zoom is left alone)
     trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
     ys = [v for v in by if v is not None]
     if trig.startswith("energy-state") and ys and view and view.get("y"):
-        need = max(ys) + 0.12 * yspan                     # room for the label
+        need = max(ys) + 0.16 * yspan                     # room for the label
         if need > max(view["y"]):
             patch["layout"]["yaxis"]["range"] = [min(view["y"]), need]
             patch["layout"]["yaxis"]["autorange"] = False
