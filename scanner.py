@@ -1583,6 +1583,11 @@ FIT_COLUMNS = [
 # Further output: reads files saved by confirmation mode (confirmed/*.csv) for
 # further processing.  Sub-tabs: "Aligning and fitting" (file list, summing,
 # peak fitting) and "Isochronicity Curve" (to come).
+SUGG_BOX_STYLE = {"marginLeft": "116px", "marginTop": "4px", "width": "620px", "maxWidth": "90%",
+                  "border": "1px solid #dddddd", "borderRadius": "6px", "background": "white",
+                  "padding": "4px 0", "boxShadow": "0 4px 12px rgba(0,0,0,0.12)"}
+
+
 # ---- ⓘ info buttons: the help text of a section, shown in a popup ----------
 INFO_TEXTS = {
     "sum": ("Sum spectra", [
@@ -1820,12 +1825,19 @@ align_fit_tab = html.Div([
                     html.Span(f"Name of peak {i}:", style={**LABEL_STYLE, "margin": "0 6px 0 0",
                                                            "minWidth": "110px"}),
                     dcc.Input(id=f"energy-name-{i}", type="text", debounce=True, value="",
-                              placeholder="e.g. 207Tl81+ or m207Tl",
+                              placeholder="type a name, e.g. 207Tl81+ or m207Tl",
                               className="form-control form-control-sm",
-                              style={"width": "200px", "marginRight": "10px"}),
+                              style={"width": "260px", "marginRight": "6px"}),
+                    html.Button("Suggest ▾", id=f"energy-suggest-btn-{i}", className="btn btn-sm",
+                                title="Simulated ions near this peak",
+                                style={"backgroundColor": ACCENT, "color": "white",
+                                       "fontWeight": "600", "marginRight": "10px",
+                                       "whiteSpace": "nowrap"}),
                     html.Span(id=f"energy-name-{i}-check", style={"fontSize": "12px"}),
                 ], style={"display": "flex", "alignItems": "center"}),
-                html.Div(id=f"energy-sugg-{i}", style={"marginLeft": "116px"}),
+                # suggestion list, opened by "Suggest"; a click on a row fills the name
+                html.Div(id=f"energy-sugg-{i}", className="theia-box",
+                         style={**SUGG_BOX_STYLE, "display": "none"}),
             ], style={"marginBottom": "4px"}) for i in (1, 2)],
             html.Div([
                 html.Button("Calibrate", id="btn-energy-calibrate", className="btn btn-sm",
@@ -4720,7 +4732,7 @@ def _empty_energy():
     Input("energy-click", "data"),
     Input("energy-name-1", "value"),
     Input("energy-name-2", "value"),
-    Input({"type": "energy-sugg", "peak": ALL, "name": ALL}, "n_clicks"),
+    Input({"type": "energy-sugg", "peak": ALL, "name": ALL, "h": ALL}, "n_clicks"),
     Input("btn-energy-calibrate", "n_clicks"),
     Input("btn-energy-reset", "n_clicks"),
     Input("btn-energy-clear-pairs", "n_clicks"),
@@ -4822,6 +4834,33 @@ def update_energy(click, name1, name2, _sugg, _cal, _reset, _clear, key, est, fi
 
 
 @app.callback(
+    Output("energy-sugg-1", "style"),
+    Output("energy-sugg-2", "style"),
+    Input("energy-suggest-btn-1", "n_clicks"),
+    Input("energy-suggest-btn-2", "n_clicks"),
+    Input({"type": "energy-sugg", "peak": ALL, "name": ALL, "h": ALL}, "n_clicks"),
+    State("energy-sugg-1", "style"),
+    State("energy-sugg-2", "style"),
+    prevent_initial_call=True,
+)
+def toggle_suggestions(_b1, _b2, _rows, st1, st2):
+    """'Suggest' opens/closes that peak's list; choosing an ion closes it."""
+    trig = dash.callback_context.triggered[0] if dash.callback_context.triggered else None
+    if not trig:
+        return dash.no_update, dash.no_update
+    pid = trig["prop_id"]
+    open_ = lambda st: (st or {}).get("display") != "none"
+    show = lambda on: {**SUGG_BOX_STYLE, "display": "block" if on else "none"}
+    if pid.startswith("energy-suggest-btn-1"):
+        return show(not open_(st1)), show(False)
+    if pid.startswith("energy-suggest-btn-2"):
+        return show(False), show(not open_(st2))
+    if '"energy-sugg"' in pid and trig["value"]:
+        return show(False), show(False)
+    return dash.no_update, dash.no_update
+
+
+@app.callback(
     Output("energy-calib-info", "children"),
     Output("energy-sugg-1", "children"),
     Output("energy-sugg-2", "children"),
@@ -4847,14 +4886,33 @@ def render_energy(est, name1, name2, on):
                           html.Span(f"  ({p['src']})", style={"color": "#888"})])
 
     def sugg(i):
-        if i >= len(calib) or not calib[i].get("suggest"):
-            return ""
-        return [html.Span("Nearby simulated ions: ", style={"fontSize": "12px", "color": "#888"})] + [
-            html.Button(f"{ion} (h={h}, {d:+.0f} Hz)",
-                        id={"type": "energy-sugg", "peak": i + 1, "name": ion},
-                        className="btn btn-outline-secondary btn-sm",
-                        style={"fontSize": "11px", "padding": "1px 6px", "margin": "2px 4px 2px 0"})
-            for ion, h, d in calib[i]["suggest"]]
+        """Table of nearby simulated ions (nearest first); rows are clickable."""
+        if i >= len(calib):
+            return html.Div("Click the peak on the plot first.",
+                            style={"fontSize": "12px", "color": "#888", "padding": "4px 12px"})
+        rows = calib[i].get("suggest") or []
+        if not rows:
+            return html.Div("No simulated ions near this peak (sum the spectra first?).",
+                            style={"fontSize": "12px", "color": "#888", "padding": "4px 12px"})
+        cell = {"padding": "3px 12px", "fontSize": "13px"}
+        head = {**cell, "fontSize": "11px", "fontWeight": "700", "color": "#888",
+                "textTransform": "uppercase", "letterSpacing": "0.04em"}
+        grid = {"display": "grid", "gridTemplateColumns": "1.3fr 0.9fr 1.4fr 1fr"}
+        f0 = calib[i]["f"]
+        out = [html.Div(f"{len(rows)} nearby, nearest centre first, click one",
+                        style={"fontSize": "12px", "color": "#2e7d32", "padding": "2px 12px 4px"}),
+               html.Div([html.Span("Ion", style=head), html.Span("Harmonic", style=head),
+                         html.Span("f_sim (Hz)", style=head), html.Span("From centre", style=head)],
+                        style={**grid, "borderBottom": "1px solid #dddddd"})]
+        for ion, h, d in rows:
+            out.append(html.Div([
+                html.Span(ion, style={**cell, "fontWeight": "600"}),
+                html.Span(f"h{h}", style=cell),
+                html.Span(f"{f0 + d:,.1f}", style={**cell, "fontFamily": "monospace"}),
+                html.Span(f"{d:+.0f} Hz", style={**cell, "fontFamily": "monospace"}),
+            ], id={"type": "energy-sugg", "peak": i + 1, "name": ion, "h": h}, n_clicks=0,
+               className="theia-fb-row", style={**grid, "cursor": "pointer"}))
+        return out
 
     def check(name):
         if not name:
