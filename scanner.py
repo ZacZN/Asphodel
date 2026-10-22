@@ -1615,7 +1615,10 @@ align_fit_tab = html.Div([
                           options=[{"label": " include unsure", "value": "on"}],
                           style={"fontSize": "13px", "marginRight": "14px"}),
             html.Button("Sum spectra", id="btn-sum", className="btn btn-sm",
-                        style={"backgroundColor": ACCENT, "color": "white"}),
+                        style={"backgroundColor": ACCENT, "color": "white", "marginRight": "14px"}),
+            dcc.Checklist(id="sum-show-sims", value=["on"],
+                          options=[{"label": " show simulated ions", "value": "on"}],
+                          style={"fontSize": "13px"}),
         ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap", "rowGap": "6px",
                   "marginBottom": "6px"}),
         html.Small("Each spectrum is added once, however many identifications or files it "
@@ -1669,6 +1672,7 @@ align_fit_tab = html.Div([
         dcc.Store(id="fit-run", data=None),
         dcc.Store(id="fit-state", data=None),
         html.Div(id="_fit-mode-hook", style={"display": "none"}),
+        html.Div(id="_sum-sims-hook", style={"display": "none"}),
 
         dcc.Graph(id="sum-graph", figure=empty_fig("Load files and click “Sum spectra”"),
                   # doubleClick off: a touchpad double-tap (to drag/pan)
@@ -3361,6 +3365,51 @@ def toggle_sum_ion(align):
             "display": "none" if align == "none" else "block"}
 
 
+def add_sum_sim_lines(fig, ff, pp, files, include_unsure, visible):
+    """Simulated ion lines on the summed spectrum, exactly as in the scanner:
+    ion database, harmonics, gamma_t, second-order correction and half-life cut
+    from the scan settings stored in the (first) loaded confirmation file, with
+    the strongest peak of the summed spectrum taken as the reference ion at its
+    reference harmonic.  Ions/harmonics in the loaded files are drawn as
+    'identified'.  Returns a one-line description for the status."""
+    header, table = read_confirmed(files[0])
+    st = header.get("scan_settings")
+    if not isinstance(st, dict):
+        return "simulated lines not drawn: no scan settings in the file header"
+    s = parse_settings(st)
+    k = int(np.nanargmax(pp))
+    ref_f = float(ff[k])
+    ion_db, ref_mq = build_ion_database(*s["ion_key"])
+    sims = simulate_frequencies(ion_db, ref_mq, ref_f, s["ref_harmonic"], s["gamma_t"],
+                                s["harmonics"], s["correction_enabled"],
+                                s["corr_a"], s["corr_b"], s["corr_c"])
+    sims = sims[(sims["f_sim"] >= ff.min()) & (sims["f_sim"] <= ff.max())].reset_index(drop=True)
+    rows = [read_confirmed(f)[1] for f in files]
+    t = pd.concat(rows, ignore_index=True)
+    if not include_unsure and "decision" in t:
+        t = t[t["decision"] != "unsure"]
+    listed = t[["ion", "harmonic"]].drop_duplicates() if len(t) else \
+        pd.DataFrame(columns=["ion", "harmonic"])
+    n0 = len(fig.data)
+    finite = pp[np.isfinite(pp)]
+    ylo, yhi = float(finite.min()), float(finite.max())
+    pad = 0.05 * (yhi - ylo or 1)
+    add_sim_lines(fig, sims, ion_db, listed, ylo - pad, yhi + pad,
+                  excluded=~hl_allowed(ion_db, s))
+    for tr in fig.data[n0:]:
+        tr.meta = "sim"                          # for the show/hide tick box
+        tr.visible = bool(visible)
+    cut = hl_cut_text(s)
+    others = ""
+    if len(files) > 1:
+        others = f" (settings from file 1 of {len(files)})"
+    return (f"Simulated lines: reference {s['ref_name']} (h={s['ref_harmonic']}) taken as the "
+            f"strongest peak at {ref_f:.1f} Hz · harmonics {', '.join(map(str, s['harmonics']))}"
+            f" · correction {'on' if s['correction_enabled'] else 'off'}"
+            + (f" · half-life cut: {cut}" if cut else "") + others
+            + " · dark dashed: ions in the loaded files")
+
+
 # Summed spectra are kept on the server (keyed by sum-key) so the peak-fit
 # callbacks can use the data without sending it back and forth.
 _SUM_CACHE = {}
@@ -3426,8 +3475,9 @@ def draw_fit(fit_state, key):
     State("sum-align", "value"),
     State("sum-ion", "value"),
     State("sum-unsure", "value"),
+    State("sum-show-sims", "value"),
 )
-def show_sum(_, restore, files, align, ion_key, unsure):
+def show_sum(_, restore, files, align, ion_key, unsure, show_sims):
     """'Sum spectra' button, or (on page load) rebuild the sum saved last time
     with its zoom; the saved fit is then picked up by update_fit."""
     trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
@@ -3465,6 +3515,12 @@ def show_sum(_, restore, files, align, ion_key, unsure):
                                line=dict(shape="hvh", color="black", width=1)))
     for st in FIT_TRACE_STYLES:                      # empty until peaks are added
         fig.add_trace(go.Scatter(x=[], y=[], hoverinfo="skip", **st))
+    # simulated ion lines (after the fit traces, whose positions are fixed)
+    try:
+        sim_text = add_sum_sim_lines(fig, ff, pp, files, bool(unsure), bool(show_sims))
+    except Exception as exc:
+        traceback.print_exc()
+        sim_text = f"simulated lines not drawn: {exc}"
     if info["target"] is not None:
         fig.add_vline(x=info["target"], line=dict(color=ACCENT, width=1.5, dash="dash"),
                       annotation_text=f"aligned at {info['target']:.1f} Hz",
@@ -3482,7 +3538,10 @@ def show_sum(_, restore, files, align, ion_key, unsure):
         fig.update_xaxes(range=view["x"], autorange=False)
         fig.update_yaxes(range=view["y"], autorange=False)
     fig.update_layout(title=title, xaxis_title="Frequency (Hz)",
-                      yaxis_title="Summed Schottky Power (a.u.)", hovermode=False,
+                      yaxis_title="Summed Schottky Power (a.u.)",
+                      # hover only reaches the simulated lines (the spectrum
+                      # and fit traces skip hover), as in the other plots
+                      hovermode="x",
                       dragmode="pan", template="plotly_white", font=dict(size=14),
                       margin=dict(l=60, r=20, t=50, b=40), showlegend=False,
                       # keeps the user's zoom while the fit traces are patched
@@ -3502,7 +3561,7 @@ def show_sum(_, restore, files, align, ion_key, unsure):
                      f"{zi} h={zh} not in the summed spectra, view centred on the strongest peak")
     if info["n_dirs"] > 1:
         parts.append(f"from {info['n_dirs']} spectra directories")
-    status = [html.Span("  ·  ".join(parts))]
+    status = [html.Span("  ·  ".join(parts)), html.Div(sim_text, style={"fontSize": "12px"})]
     if info["failed"]:
         status.append(html.Div(f"Could not load {len(info['failed'])}: "
                                + "; ".join(info["failed"][:3])
@@ -3979,6 +4038,24 @@ def save_further_state(files, align, ion, unsure, key, view, fit):
         st["summed"] = old.get("summed", False)
     save_config({"further_state": st})
     return dash.no_update
+
+
+# Show / hide the simulated lines on the summed plot without a redraw
+app.clientside_callback(
+    """
+    function(value) {
+        var gd = document.querySelector('#sum-graph .js-plotly-plot');
+        if (!gd || !gd.data) return window.dash_clientside.no_update;
+        var idx = [];
+        gd.data.forEach(function(t, i) { if (t.meta === 'sim') idx.push(i); });
+        if (idx.length) Plotly.restyle(gd, {visible: (value && value.length) ? true : false}, idx);
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("_sum-sims-hook", "children"),
+    Input("sum-show-sims", "value"),
+    prevent_initial_call=True,
+)
 
 
 # "Fit": pass the current view range (the fit region) to the server
