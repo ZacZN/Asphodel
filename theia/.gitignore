@@ -1,0 +1,18 @@
+_viewer_output.html
+first_test.ipynb
+second_attempt.py
+old/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Local config (contains machine-specific paths)
+viewer_config.json
+
+
+scans/
+scanner_config.json
+
+confirmed/
