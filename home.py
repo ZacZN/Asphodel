@@ -71,6 +71,8 @@ TOOLS = {
                         "Draw nuclear level schemes (Tk window).", False),
 }
 SECTIONS = ["Theia", "Spectrogram", "Tartarus", "Elysium"]
+# sections shown side by side on one row (each takes as many columns as it has cards)
+SECTION_ROWS = [["Theia", "Spectrogram", "Elysium"], ["Tartarus"]]
 
 _PROCS = {}                 # key -> list of (Popen, experiment)
 _PROCS_LOCK = threading.Lock()
@@ -461,18 +463,27 @@ def tool_forms():
 
 def tools_section():
     forms = tool_forms()
-    blocks = []
-    for sec in SECTIONS:
-        cards = []
-        for key, t in TOOLS.items():
-            if t[0] != sec:
-                continue
-            card = tool_card(key)
-            if key in forms:
-                card.children.append(forms[key])
-            cards.append(card)
-        blocks.append(html.Div([html.H3(sec, className="sec"), html.Div(cards, className="tools")]))
-    return section("Tools", *blocks)
+    rows = []
+    for row in SECTION_ROWS:
+        blocks, ncols = [], 0
+        for sec in row:
+            cards = []
+            for key, t in TOOLS.items():
+                if t[0] != sec:
+                    continue
+                card = tool_card(key)
+                if key in forms:
+                    card.children.append(forms[key])
+                cards.append(card)
+            n = max(len(cards), 1)
+            ncols += n
+            blocks.append(html.Div([html.H3(sec, className="sec"),
+                                    html.Div(cards, className="tools",
+                                             style={"gridTemplateColumns": f"repeat({n}, 1fr)"})],
+                                   className="tsec", style={"gridColumn": f"span {n}"}))
+        rows.append(html.Div(blocks, className="trow",
+                             style={"gridTemplateColumns": f"repeat({ncols}, minmax(0, 1fr))"}))
+    return section("Tools", *rows)
 
 
 def data_section():
@@ -694,9 +705,12 @@ aside h3:first-child{{margin-top:0}}
 .btn.small{{padding:3px 8px;font-size:11px}}
 main{{flex:1;padding:16px 20px;min-width:0}}
 h2{{font-size:15px;margin:0 0 10px;padding-bottom:5px;border-bottom:1px solid var(--line)}}
-h3.sec{{font-size:12px;text-transform:uppercase;letter-spacing:.8px;color:var(--accent);margin:12px 0 6px}}
+h3.sec{{font-size:12px;text-transform:uppercase;letter-spacing:.8px;color:var(--accent);margin:4px 0 6px}}
+.trow{{display:grid;gap:12px;margin-bottom:10px}}
+.tsec{{display:flex;flex-direction:column;min-width:0}}
+.tsec .tools{{flex:1}}
 section{{margin-bottom:24px}}
-.tools{{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}}
+.tools{{display:grid;gap:12px}}
 .tool{{border:1px solid var(--line);border-radius:6px;padding:12px;background:#fff;border-top:3px solid var(--accent)}}
 .tool .name{{font-weight:700;font-size:15px}} .tool .from{{font-size:11px;color:var(--muted);font-family:monospace}}
 .tool p{{font-size:12px;color:#555;margin:6px 0 8px}}
@@ -719,6 +733,7 @@ tbody tr:nth-child(even) td{{background:var(--pale)}}
 .modal{{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:1000;align-items:center;justify-content:center}}
 .modal-box{{background:#fff;border-radius:8px;padding:18px 22px;width:520px;border-top:4px solid var(--accent)}}
 .chk input{{width:auto}}
+@media (max-width:1100px){{.trow,.tools{{grid-template-columns:1fr !important}} .tsec{{grid-column:auto !important}}}}
 .btn.quit{{color:#c62828;border-color:#c62828}} .btn.quit:hover{{background:#c62828;color:#fff}}
 """
 
