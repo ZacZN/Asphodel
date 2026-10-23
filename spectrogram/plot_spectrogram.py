@@ -138,190 +138,38 @@ def saved_view(file_path, fmin_req, fmax_req):
 
 
 # ---------------------------------------------------------------------------
-# Simulated ion lines (physics ported from Theia/scanner.py)
+# Simulated ion lines (physics in core/physics.py, shared with theia/scanner.py)
 # ---------------------------------------------------------------------------
 # The reference is the strongest bin of the summed power (all time frames, the
 # whole uncropped file). It is taken to be `ref_name` at
 # `ref_harmonic`; every other ion in the selection is placed relative to it.
 
-# Defaults = the Theia scanner_config.json values at the time this was written.
+# Panel defaults. The physics keys are placeholders: their values come from the
+# shared physics settings (data/<exp>/settings/physics.json); the "sim" entry
+# in spectrogram_prefs.json keeps only this tool's overrides of them.
 SIM_DEFAULTS = {
     "show":               True,
-    "ref_name":           "208Pb80+",
-    "ref_harmonic":       214,
-    "z_lims":             "60, 83",
-    "n_lims":             "100, 127",
-    "el1":                "156, 66",
-    "el2":                "200, 82",
-    "mq_width":           0.2,
-    "gamma_t":            1.399,
-    "harmonics":          "212, 213, 214",
-    "correction_enabled": True,
-    "corr_a":             2.8498393862845746e-07,
-    "corr_b":             -1.0910358215490124,
-    "corr_c":             1044186.4522976408,
-    "min_half_life":      1,
+    "ref_name":           "",
+    "ref_harmonic":       0,
+    "z_lims":             "",
+    "n_lims":             "",
+    "el1":                "",
+    "el2":                "",
+    "mq_width":           0.0,
+    "gamma_t":            0.0,
+    "harmonics":          "",
+    "correction_enabled": False,
+    "corr_a":             0.0,
+    "corr_b":             0.0,
+    "corr_c":             0.0,
+    "min_half_life":      0.0,
     "min_half_life_unit": "ms",
     "exclude_unknown_hl": False,
     "show_excluded":      True,
 }
 
-# NUBASE half-life units -> seconds
-HL_UNITS = {"ys": 1e-24, "zs": 1e-21, "as": 1e-18, "fs": 1e-15, "ps": 1e-12, "ns": 1e-9,
-            "us": 1e-6, "ms": 1e-3, "s": 1.0, "m": 60.0, "h": 3600.0, "d": 86400.0,
-            "y": 3.15576e7, "ky": 3.15576e10, "My": 3.15576e13, "Gy": 3.15576e16,
-            "Ty": 3.15576e19, "Py": 3.15576e22, "Ey": 3.15576e25, "Zy": 3.15576e28,
-            "Yy": 3.15576e31}
-HL_CUT_UNITS = ["ns", "us", "ms", "s", "m", "h", "d", "y"]
-
-
-def delta_f(ref_frequency, ref_mq, delta_mq, gamma_t):
-    return (-1 / (gamma_t**2)) * (delta_mq / ref_mq) * ref_frequency
-
-
-def apply_correction(freq, a, b, c):
-    """Return freq + a*freq**2 + b*freq + c (second-order polynomial correction)."""
-    return freq + a * freq**2 + b * freq + c
-
-
-def ion_base_name(ion_name):
-    """'204Hg79+' -> '204Hg',  'm186Hf72+' -> 'm186Hf'"""
-    import re
-    return re.sub(r"\d+\+$", "", ion_name)
-
-
-def build_hover_label(ion_name, row):
-    """Hover label for a simulated line (copied from scanner.py/viewer.py)."""
-    import pandas as pd
-
-    def _val(key):
-        v = row.get(key, None)
-        if v is None:
-            return ""
-        try:
-            if pd.isna(v):
-                return ""
-        except (TypeError, ValueError):
-            pass
-        return str(v).strip()
-
-    def _fmt_float(v):
-        try:
-            if v == int(v):
-                return str(int(v))
-            return f"{v:.3f}".rstrip("0").rstrip(".")
-        except (ValueError, OverflowError):
-            return str(v)
-
-    lines = [ion_name]
-    me_sys     = bool(row.get("m.e. sys?", False))
-    me_raw     = row.get("m.e.", None)
-    me_unc_raw = row.get("m.e._unc", None)
-    if me_raw is not None and not pd.isna(me_raw):
-        prefix  = "#" if me_sys else ""
-        me_line = f"m.e. = {_fmt_float(me_raw)}{prefix}"
-        if me_unc_raw is not None and not pd.isna(me_unc_raw):
-            me_line += f" ± {_fmt_float(me_unc_raw)}{prefix}"
-        lines.append(me_line + " keV")
-    t_val, t_unc, t_unit = _val("T"), _val("T_unc"), _val("T_unit")
-    if t_val:
-        t_line = f"T = {t_val}"
-        if t_unc:
-            t_line += f" ± {t_unc}"
-        if t_unit:
-            t_line += f" {t_unit}"
-        lines.append(t_line)
-    if ion_name and ion_name[0].isalpha():          # isomer
-        ex_val, ex_unc = _val("E_x"), _val("E_x_unc")
-        if ex_val:
-            lines.append(f"E_x = {ex_val}" + (f" ± {ex_unc}" if ex_unc else "") + " keV")
-    br = _val("BR")
-    if br:
-        lines.append(f"Decay: {br}")
-    return "<br>".join(lines)
-
-
-def half_life_seconds(t, unit):
-    """NUBASE half-life (T, T_unit) -> seconds. 'stbl' -> inf, unknown -> NaN."""
-    import re
-    t = "" if t is None or (isinstance(t, float) and np.isnan(t)) else str(t).strip()
-    if t.startswith("stbl"):
-        return np.inf
-    num = re.sub(r"[#<>~=\s]", "", t)
-    unit = "" if unit is None or (isinstance(unit, float) and np.isnan(unit)) else str(unit).strip()
-    try:
-        return float(num) * HL_UNITS[unit]
-    except (ValueError, KeyError):
-        return np.nan
-
-
-def hl_allowed(ion_db, s):
-    """Bool per ion: False = excluded by the half-life cut (still drawn, dotted)."""
-    thr = float(s.get("min_half_life") or 0)
-    if thr <= 0 or "half_life_s" not in ion_db:
-        return np.ones(len(ion_db), dtype=bool)
-    thr *= HL_UNITS.get(s.get("min_half_life_unit") or "s", 1.0)
-    hl = ion_db["half_life_s"].to_numpy(dtype=float)
-    known = ~np.isnan(hl)
-    ok = np.zeros(len(hl), dtype=bool)
-    ok[known] = hl[known] >= thr
-    if not s.get("exclude_unknown_hl"):
-        ok[~known] = True
-    return ok
-
-
-_ION_DB_CACHE = {}
-
-
-def build_ion_database(z_lims, n_lims, el1, el2, ref_name, mq_width):
-    """Bare, H-, He- and Li-like ions inside the selection, restricted to the
-    m/q window around the reference ion (as in scanner.py). Cached."""
-    key = (z_lims, n_lims, el1, el2, ref_name, mq_width)
-    if key in _ION_DB_CACHE:
-        return _ION_DB_CACHE[key]
-    import pandas as pd
-    from nubase_reader import df_nubase, rect_restrict, diag_restrict, index_by_name
-    frames = []
-    for electrons in (0, 1, 2, 3):
-        d = df_nubase(electrons=electrons)
-        d = rect_restrict(df=d, z_lims=list(z_lims), n_lims=list(n_lims))
-        d = diag_restrict(df=d, el1=list(el1), el2=list(el2))
-        d = index_by_name(df=d, electrons=electrons)
-        d["electrons"] = electrons
-        d["charge"] = d["ZZZi"] - electrons
-        frames.append(d)
-    db = pd.concat(frames).sort_values("m/q", ascending=False)
-    if ref_name not in db.index:
-        raise ValueError(f"reference ion '{ref_name}' is not in the ion selection "
-                         f"(check Z/N limits, el1/el2)")
-    mq_ref = db.loc[ref_name, "m/q"]
-    if isinstance(mq_ref, pd.Series):
-        mq_ref = mq_ref.iloc[0]
-    db = db[(db["m/q"] >= mq_ref - mq_width) & (db["m/q"] <= mq_ref + mq_width)].copy()
-    db["ion"] = db.index.astype(str)
-    db["ion_base"] = db["ion"].map(ion_base_name)
-    db["half_life_s"] = [half_life_seconds(t, u) for t, u in zip(db["T"], db["T_unit"])]
-    db["hover"] = [build_hover_label(name, row) for name, (_, row) in zip(db["ion"], db.iterrows())]
-    out = (db.reset_index(drop=True), float(mq_ref))
-    if len(_ION_DB_CACHE) > 8:
-        _ION_DB_CACHE.clear()
-    _ION_DB_CACHE[key] = out
-    return out
-
-
-def simulate_frequencies(ion_db, ref_mq, ref_obs_freq, ref_harmonic, gamma_t, harmonics,
-                         correction_enabled=False, corr_a=0.0, corr_b=0.0, corr_c=0.0):
-    """One row per (ion, harmonic): ion_row, harmonic, f_sim (as scanner.py)."""
-    import pandas as pd
-    ref_rev = ref_obs_freq / ref_harmonic
-    mq = ion_db["m/q"].to_numpy(dtype=float)
-    f_true = ref_rev + delta_f(ref_rev, ref_mq, mq - ref_mq, gamma_t)
-    if correction_enabled:
-        f_true = apply_correction(f_true, corr_a, corr_b, corr_c)
-    rows = np.arange(len(ion_db))
-    out = [pd.DataFrame({"ion_row": rows, "harmonic": int(h), "f_sim": f_true * h})
-           for h in harmonics]
-    return pd.concat(out, ignore_index=True)
+from core import physics
+from core.physics import HL_UNITS, HL_CUT_UNITS, hl_allowed, build_ion_database, simulate_frequencies
 
 
 def _ints(v, n, what):
@@ -377,12 +225,10 @@ def parse_sim_settings(raw):
 
 
 def sim_prefs():
-    """Saved panel values (defaults filled in)."""
+    """Panel values: SIM_DEFAULTS, then the shared physics, then the saved overrides."""
     saved = read_prefs().get("sim")
-    out = dict(SIM_DEFAULTS)
-    if isinstance(saved, dict):
-        out.update({k: v for k, v in saved.items() if k in SIM_DEFAULTS})
-    return out
+    saved = {k: v for k, v in saved.items() if k in SIM_DEFAULTS} if isinstance(saved, dict) else {}
+    return physics.with_shared(SIM_DEFAULTS, saved)
 
 
 def compute_sim_lines(freq, sum_all, raw):
@@ -2717,8 +2563,8 @@ def serve(html, state):
                         l["df"] = l["f"] - c
                     self._send(200, {"hits": hits[:200], "n": len(hits)})
                 except ImportError as exc:
-                    self._send(400, {"error": f"{exc} (needs pandas, and nubase_reader.py + "
-                                              f"nubase_4.mas20 next to this script)"})
+                    self._send(400, {"error": f"{exc} (needs pandas, and core/nubase_reader.py + "
+                                              f"core/nubase_4.mas20)"})
                 except Exception as exc:
                     self._send(400, {"error": str(exc)})
 
@@ -2739,8 +2585,8 @@ def serve(html, state):
                     self._send(200, {"file": STATE.get("npz_path", ""), "hits": hits[:300],
                                      "n": len(hits), "ref_freq": res["ref_freq"]})
                 except ImportError as exc:
-                    self._send(400, {"error": f"{exc} (needs pandas, and nubase_reader.py + "
-                                              f"nubase_4.mas20 next to this script)"})
+                    self._send(400, {"error": f"{exc} (needs pandas, and core/nubase_reader.py + "
+                                              f"core/nubase_4.mas20)"})
                 except Exception as exc:
                     self._send(400, {"error": str(exc)})
 
@@ -2749,7 +2595,9 @@ def serve(html, state):
                     body = self._body()
                     with _PREFS_LOCK:
                         prefs = read_prefs()
-                        prefs["sim"] = {k: body[k] for k in SIM_DEFAULTS if k in body}
+                        # keep only the values that differ from the shared physics
+                        prefs["sim"] = physics.strip_shared(
+                            {k: body[k] for k in SIM_DEFAULTS if k in body})
                         write_prefs(prefs)
                     if body.get("save_only"):
                         return self._send(200, {"status": "saved"})
@@ -2758,8 +2606,8 @@ def serve(html, state):
                     # reference + lines over the whole uncropped file
                     self._send(200, compute_sim_lines(STATE["file_freq"], STATE["file_sum"], body))
                 except ImportError as exc:
-                    self._send(400, {"error": f"{exc} (needs pandas, and nubase_reader.py + "
-                                              f"nubase_4.mas20 next to this script)"})
+                    self._send(400, {"error": f"{exc} (needs pandas, and core/nubase_reader.py + "
+                                              f"core/nubase_4.mas20)"})
                 except Exception as exc:
                     self._send(400, {"error": str(exc)})
 

@@ -1,4 +1,4 @@
-"""nubase_reader.py — self-contained NuBase2020 reader for Theia.
+"""nubase_reader.py — self-contained NuBase2020 reader for the Asphodel suite (core).
 
 Provides all ion-database and spectrum-loading helpers that viewer.py needs,
 with no dependency on external personal modules.  The NuBase data file
