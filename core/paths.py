@@ -4,8 +4,8 @@ Where the Asphodel suite keeps its data, outputs and settings.
 Layout (all under <repo>/data/, which git ignores):
 
     data/
-      asphodel_settings.json      {"experiment": "E0203"}  - the active experiment
-      <experiment>/
+      asphodel_settings.json      active experiment + experiment profiles (see below)
+      <experiment>/               (default location; a profile can point anywhere)
         spectra_1d/               1-D spectra (.npz)
         spectrograms/             summed 2-D spectrograms (.npz)
         summed_1d/                summed 1-D spectra (.npz)
@@ -13,11 +13,12 @@ Layout (all under <repo>/data/, which git ignores):
         rionid/                   RionID tables (.xlsx)
         settings/                 per-tool GUI settings (.json)
         outputs/scans|confirmed|fits|figures/
+        notes.md                  notes from the home page
 
 Every function takes an optional `exp`; without it the active experiment is used.
 Folders that tools write into (outputs/<kind>, settings/) are created on demand.
 
-Use from a script in a sub-folder (e.g. theia/scanner.py):
+Use from a script in a sub-folder (e.g. theia/theia.py):
 
     import os, sys
     sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -26,6 +27,7 @@ Use from a script in a sub-folder (e.g. theia/scanner.py):
 
 import json
 import os
+import shutil
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_ROOT = os.path.join(REPO_ROOT, "data")
@@ -34,7 +36,28 @@ SUITE_SETTINGS = os.path.join(DATA_ROOT, "asphodel_settings.json")
 OUTPUT_KINDS = ("scans", "confirmed", "fits", "figures")
 
 
-# --------------------------------------------------------------------------- experiment
+# --------------------------------------------------------------------------- experiments (profiles)
+#
+# Each experiment is a profile with its own data folder; everything of that
+# experiment (spectra, settings incl. physics.json, outputs, notes) lives in
+# that folder. data/asphodel_settings.json holds the active experiment and the
+# profiles:
+#
+#   {"experiment": "E0203",
+#    "profiles": {"E0203": {"data_dir": "/home/.../Asphodel/data/E0203"}}}
+#
+# A folder in data/ without a profile entry is a profile too (data_dir =
+# data/<name>). The environment variable ASPHODEL_EXPERIMENT overrides the
+# active experiment for one process: the home page starts every tool with it,
+# so a running tool stays on its experiment when the home page switches.
+
+ENV_EXPERIMENT = "ASPHODEL_EXPERIMENT"
+
+# sub-folders of every experiment's data folder
+EXPERIMENT_SUBDIRS = ("spectra_1d", "spectrograms", "summed_1d", "levelschemes", "rionid",
+                      "settings", "outputs/scans", "outputs/confirmed", "outputs/fits",
+                      "outputs/figures")
+
 
 def _read_suite_settings():
     try:
@@ -45,21 +68,48 @@ def _read_suite_settings():
         return {}
 
 
-def list_experiments():
-    """Experiment folders in data/ (sorted)."""
+def _write_suite_settings(d):
+    os.makedirs(DATA_ROOT, exist_ok=True)
+    tmp = SUITE_SETTINGS + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(d, fh, indent=2)
+    os.replace(tmp, SUITE_SETTINGS)
+
+
+def profiles():
+    """{name: {"data_dir": path}} for every experiment: the registered profiles
+    plus any folder in data/ that is not registered."""
+    out = {}
     try:
-        return sorted(n for n in os.listdir(DATA_ROOT)
-                      if not n.startswith(".") and os.path.isdir(os.path.join(DATA_ROOT, n)))
+        for n in os.listdir(DATA_ROOT):
+            if not n.startswith(".") and os.path.isdir(os.path.join(DATA_ROOT, n)):
+                out[n] = {"data_dir": os.path.join(DATA_ROOT, n)}
     except OSError:
-        return []
+        pass
+    reg = _read_suite_settings().get("profiles") or {}
+    if isinstance(reg, dict):
+        for n, p in reg.items():
+            if isinstance(p, dict):
+                out[n] = dict(out.get(n, {}), **p)
+    for p in out.values():
+        p["data_dir"] = os.path.abspath(os.path.expanduser(p.get("data_dir") or ""))
+    return dict(sorted(out.items()))
+
+
+def list_experiments():
+    """Names of all experiments (sorted)."""
+    return list(profiles())
 
 
 def experiment():
     """Name of the active experiment.
 
-    Read from data/asphodel_settings.json. If that file has no experiment and
-    data/ holds exactly one experiment folder, that one is used.
+    ASPHODEL_EXPERIMENT if set, else data/asphodel_settings.json. If neither
+    names one and there is exactly one experiment, that one is used.
     """
+    name = (os.environ.get(ENV_EXPERIMENT) or "").strip()
+    if name:
+        return name
     name = (_read_suite_settings().get("experiment") or "").strip()
     if name:
         return name
@@ -68,22 +118,56 @@ def experiment():
         return exps[0]
     raise RuntimeError(
         f"No active experiment set. Put {{\"experiment\": \"<name>\"}} in {SUITE_SETTINGS} "
-        f"(experiments found in data/: {', '.join(exps) or 'none'}).")
+        f"(experiments found: {', '.join(exps) or 'none'}).")
 
 
 def set_experiment(name):
     """Make `name` the active experiment (kept in data/asphodel_settings.json)."""
+    if name not in profiles():
+        raise ValueError(f"Unknown experiment {name!r}")
     d = _read_suite_settings()
     d["experiment"] = name
-    os.makedirs(DATA_ROOT, exist_ok=True)
-    with open(SUITE_SETTINGS, "w", encoding="utf-8") as fh:
-        json.dump(d, fh, indent=2)
+    _write_suite_settings(d)
+
+
+def create_experiment(name, data_dir=None, copy_physics_from=None):
+    """New experiment profile: register it, create its data folder with the
+    standard sub-folders and, optionally, copy physics.json from another
+    experiment. Existing files in data_dir are left alone. Returns data_dir."""
+    name = (name or "").strip()
+    if not name or os.sep in name or name.startswith("."):
+        raise ValueError("Give the experiment a name without '/' (e.g. E0203).")
+    if name in profiles():
+        raise ValueError(f"An experiment called {name!r} already exists.")
+    data_dir = os.path.abspath(os.path.expanduser(data_dir or os.path.join(DATA_ROOT, name)))
+    for sub in EXPERIMENT_SUBDIRS:
+        os.makedirs(os.path.join(data_dir, sub), exist_ok=True)
+    if copy_physics_from:
+        src = os.path.join(experiment_dir(copy_physics_from), "settings", "physics.json")
+        dst = os.path.join(data_dir, "settings", "physics.json")
+        if os.path.isfile(src) and not os.path.exists(dst):
+            shutil.copyfile(src, dst)
+    d = _read_suite_settings()
+    reg = d.get("profiles") if isinstance(d.get("profiles"), dict) else {}
+    reg[name] = {"data_dir": data_dir}
+    d["profiles"] = reg
+    _write_suite_settings(d)
+    return data_dir
 
 
 # --------------------------------------------------------------------------- folders
 
 def experiment_dir(exp=None):
-    return os.path.join(DATA_ROOT, exp or experiment())
+    """Data folder of the experiment (its profile's data_dir; data/<name> if
+    it has no profile entry)."""
+    name = exp or experiment()
+    p = profiles().get(name)
+    return p["data_dir"] if p else os.path.join(DATA_ROOT, name)
+
+
+def notes_file(exp=None):
+    """Free-text notes of the experiment (shown on the home page)."""
+    return os.path.join(experiment_dir(exp), "notes.md")
 
 
 def spectra_1d(exp=None):

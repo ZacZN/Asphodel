@@ -1,5 +1,5 @@
 """
-scanner.py  –  Theia: spectrum viewer and batch scanner
+theia.py  –  Theia: spectrum viewer and batch scanner
 
 Tabs: Viewer (one spectrum with the simulated ion frequencies overlaid; was
 viewer.py), Scan, Scan Results and Further output.
@@ -13,7 +13,7 @@ and searched in the "Scan Results" tab.
 
 Usage
 -----
-    python scanner.py
+    python theia/theia.py      (or start it from the Asphodel home page)
 then open  http://127.0.0.1:8052/
 
 Output  (in the active experiment's data folder, see core/paths.py)
@@ -2090,7 +2090,8 @@ viewer_tab = html.Div([
 ], style={"display": "flex"})
 
 
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True,
+                title="Theia")
 app.title = "Theia"
 
 # Results tables: move the page buttons from below the table to the top right,
@@ -2198,9 +2199,9 @@ _BASE_LAYOUT = html.Div([
     # page); opens a small popup menu holding display options such as dark
     # mode.  Opening/closing is done in the browser (clientside callback
     # below): the button toggles it, clicking anywhere outside closes it.
-    # Quit: stops scanner.py and closes (or blanks) this browser tab
+    # Quit: stops Theia and closes (or blanks) this browser tab
     html.Button("\u23FB Quit", id="btn-quit", className="btn btn-outline-danger btn-sm",
-                title="Stop scanner.py and close this tab",
+                title="Stop Theia and close this tab",
                 style={"position": "absolute", "top": "7px", "right": "122px", "zIndex": "20",
                        "fontWeight": "600"}),
     html.Div(id="_quit-hook", style={"display": "none"}),
@@ -2954,7 +2955,7 @@ def restore_snippet_width(_tab):
     prevent_initial_call=True,
 )
 def remember_snippet_width(value):
-    """Save the half-width so it is restored next time scanner.py runs."""
+    """Save the half-width so it is restored next time Theia runs."""
     if value is not None and value > 0:
         save_config({"snippet_half_width": value})
     return dash.no_update
@@ -4196,7 +4197,7 @@ app.clientside_callback(
 )
 def save_further_state(files, align, ion, unsure, key, view, fit, energy, name1, name2, pid):
     """Save the Further output tab after every change, so it is restored the
-    next time scanner.py runs (scanner_config.json -> further_state)."""
+    next time Theia runs (scanner_config.json -> further_state)."""
     trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
     old = load_config().get("further_state") or {}
     st = {"files": files or [], "align": align, "ion": ion, "unsure": unsure or [],
@@ -4450,7 +4451,7 @@ def show_further_page(page):
 def _theia_quit():
     """Stop the program shortly after answering (so the browser gets the
     reply).  The Further output state is already saved after every change."""
-    print("Quit pressed in the browser: stopping Theia scanner.")
+    print("Quit pressed in the browser: stopping Theia.")
     threading.Timer(0.5, lambda: os._exit(0)).start()
     return "stopping"
 
@@ -4459,7 +4460,7 @@ app.clientside_callback(
     """
     function(n) {
         if (!n) return window.dash_clientside.no_update;
-        if (!window.confirm('Quit Theia scanner?\\n\\nThis stops scanner.py ' +
+        if (!window.confirm('Quit Theia?\\n\\nThis stops Theia ' +
                             '(a scan that is running is stopped too).')) {
             return window.dash_clientside.no_update;
         }
@@ -4470,7 +4471,7 @@ app.clientside_callback(
             setTimeout(function() {
                 document.body.innerHTML =
                     '<div style="font-family:sans-serif;padding:60px;text-align:center;">' +
-                    '<h3 style="color:#f57d15">Theia scanner has stopped</h3>' +
+                    '<h3 style="color:#f57d15">Theia has stopped</h3>' +
                     '<p>You can close this tab.</p></div>';
             }, 300);
         });
@@ -5125,7 +5126,7 @@ def restore_dark_mode(_tab):
     prevent_initial_call=True,
 )
 def remember_dark_mode(value):
-    """Save the choice so it is restored next time scanner.py runs."""
+    """Save the choice so it is restored next time Theia runs."""
     save_config({"dark_mode": value or []})
     return dash.no_update
 
@@ -5288,6 +5289,6 @@ if __name__ == "__main__":
     # Hide the per-request access log lines; warnings and errors are still shown
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
     url = "http://127.0.0.1:8052/"
-    print(f"Starting Theia scanner at {url}")
+    print(f"Starting Theia at {url}")
     threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     app.run(debug=False, host="127.0.0.1", port=8052)

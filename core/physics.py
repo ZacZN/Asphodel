@@ -1,7 +1,7 @@
 """
 Shared physics for the Asphodel suite.
 
-1. Ion-frequency simulation (moved here from theia/scanner.py; plot_spectrogram.py
+1. Ion-frequency simulation (moved here from Theia, theia/theia.py; plot_spectrogram.py
    had a port of the same code):  build_ion_database, simulate_frequencies,
    delta_f, apply_correction, half-life helpers and the hover labels.
 

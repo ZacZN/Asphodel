@@ -66,8 +66,9 @@ Error bars (default: automatic two-pass fit)
 
 Saving a fit
 ------------
-  The plot window has a "Save fit" button (top left). It writes one JSON
-  record per fit to data/<experiment>/outputs/fits/ (see core/paths.py):
+  The plot window has a "Save fit parameters" button (top left). It writes
+  one JSON record per fit (results only - use the window's own save icon
+  for the figure) to data/<experiment>/outputs/fits/ (see core/paths.py):
   fit_<YYYYmmdd_HHMMSS>_<file>[_<title>].json with the input file, the
   windows and options used, every parameter (value, error, fitted/fixed),
   the half-lives (lab and c.o.m.), chi^2/ndf and the error model.
@@ -651,7 +652,7 @@ def _place_boxes_once(fig, ax, xy_sets, fixed, legend_kw, log, max_iter, pad_px,
 
 
 # ---------------------------------------------------------------------------
-# Fit records (JSON, saved with the "Save fit" button in the plot window)
+# Fit records (JSON, saved with the "Save fit parameters" button in the plot window)
 # ---------------------------------------------------------------------------
 
 FIT_RECORD_FORMAT = "asphodel-decay-fit"
@@ -701,6 +702,8 @@ def _settings_of(args):
         "err_coeffs":             ([_num(x) for x in args.err_coeffs]
                                    if args.err_coeffs is not None else None),
         "unweighted":             bool(args.unweighted),
+        "title":                  args.title,
+        "title_full":             args.title_full,
     }
 
 
@@ -797,14 +800,14 @@ def save_fit_record(record):
 
 
 def add_save_button(fig, record):
-    """'Save fit' button in the top-left corner of the figure. One click saves
+    """'Save fit parameters' button in the top-left corner of the figure. One click saves
     the record; later clicks only say where it was saved."""
-    ax_btn = fig.add_axes([0.005, 0.945, 0.085, 0.045])
+    ax_btn = fig.add_axes([0.005, 0.945, 0.15, 0.045])
     try:
         ax_btn.set_in_layout(False)               # not moved by constrained layout
     except AttributeError:
         pass
-    btn = Button(ax_btn, "Save fit", color="#fff4ec", hovercolor="#f57d15")
+    btn = Button(ax_btn, "Save fit parameters", color="#fff4ec", hovercolor="#f57d15")
     btn.label.set_fontsize(13)
     state = {"path": None}
 
@@ -818,7 +821,7 @@ def add_save_button(fig, record):
                 fig.canvas.draw_idle()
                 return
             print(f"Fit saved to {state['path']}")
-            btn.label.set_text("Saved ✓")
+            btn.label.set_text("Parameters saved ✓")
         else:
             print(f"Already saved: {state['path']}")
         fig.canvas.draw_idle()

@@ -120,11 +120,19 @@ Notes:
 
 `docs/asphodel_scripts_guide.pdf` (moved from spectrogram/, outdated: to be rewritten once the structure settles), `docs/scanner_design.md` (recreated from the handover copy, with the new locations), `docs/suite_notes.md` (copy of this note), `docs/suite_home_mockup.html`.
 
+## Home page (first version 23 Oct)
+
+- `home.py` (repo root, Dash, port 8050 or a free one). Decided by Zac: all tools stay separate programs; the home page starts/stops them as processes with `ASPHODEL_EXPERIMENT` set, so a running tool keeps its experiment. Live messaging between tools (a hub in home.py) comes later, once the interactions are listed.
+- Sections: Theia (theia/theia.py, renamed from scanner.py), Spectrogram (plot_spectrogram.py, decay_fit.py), Tartarus (sum_spectra.py, new_2nd_order_correction_plot.py, intensity_variation_fit.py moved here), Elysium (levelschemer.py).
+- Contents: experiment switcher + new experiment, tool cards with status and small forms, data-file table with "open with", outputs tabs (scan runs, confirmed IDs, decay fits with Re-run/Spectrogram, figures), shared physics editor with the tool overrides, NUBASE info, notes (`<data_dir>/notes.md`). Left out for now: resume-last-session bar, activity log, diffing scan runs.
+- Experiment profiles (`core/paths.py`): `data/asphodel_settings.json` holds `experiment` and `profiles` {name: {data_dir}}; a profile's data folder can be anywhere; a folder in data/ without an entry is also a profile.
+- "Open with Viewer / Scan in Theia" works through the settings files (viewer_config.json file_path/spectrum_name, scanner_config.json spectra_dir), then reload the Theia page.
+
 ## Things that will break and need fixing
 
 - **Absolute paths** in `.asphodel_prefs.json` (`lastDir`, `session.file` → `.../Asphodel/summed/...`) and `viewer_config.json` (`file_path` → `Tartarus/`). `scanner_config.json` `spectra_dir` → `1dSpectra/...`.
 - **Paths relative to script location**: `scanner.py` writes `scans/` and `confirmed/` next to itself (`HERE`). `plot_spectrogram.py` finds `decay_fit.py` via `_HERE` and imports `nubase_reader` from its own folder. Both need pointing at `core/` and at the data/outputs folder.
-- ~~`decay_fit.py` only plots/prints.~~ Done 23 Oct: a "Save fit" button in the plot window (top left) writes one JSON per fit to `data/<exp>/outputs/fits/fit_<stamp>_<file>[_<label>].json` (format `asphodel-decay-fit` v1: file, label, mode decay/bateman/joint, settings, parameters with value/error/status, half-lives lab + c.o.m., χ²/ndf, error model; no data points). Decided by Zac: saving only on request, no figure saved.
+- ~~`decay_fit.py` only plots/prints.~~ Done 23 Oct: a "Save fit parameters" button in the plot window (top left) writes one JSON per fit to `data/<exp>/outputs/fits/fit_<stamp>_<file>[_<label>].json` (format `asphodel-decay-fit` v1: file, label, mode decay/bateman/joint, settings, parameters with value/error/status, half-lives lab + c.o.m., χ²/ndf, error model; no data points). Decided by Zac: saving only on request, no figure saved.
 
 ## Current physics settings (E0203, 208Pb80+ setting)
 

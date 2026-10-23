@@ -1,0 +1,881 @@
+#!/usr/bin/env python3
+"""
+home.py  –  Asphodel home page
+
+The suite's launcher and overview, as a Dash app (http://127.0.0.1:8050/):
+
+  * experiment profiles: switch the active experiment, create a new one
+    (each experiment has its own data folder, settings, outputs and notes)
+  * tools, grouped by section (Theia, Spectrogram, Tartarus, Elysium): start,
+    stop and status.  Every tool is its own program; the home page starts it
+    as a separate process with the experiment fixed (ASPHODEL_EXPERIMENT), so
+    a running tool stays on its experiment if the home page switches.
+  * data files of the experiment, with "open with" buttons
+  * outputs: scan runs, confirmed identifications, decay fits, figures
+  * the shared physics settings (physics.json) and the overrides of each tool
+  * notes per experiment
+
+Usage
+-----
+    python home.py            (opens the browser; Ctrl-C to stop)
+
+Tools started from here keep running when the home page is stopped.
+"""
+
+import datetime
+import glob
+import itertools
+import json
+import os
+import shlex
+import signal
+import socket
+import subprocess
+import sys
+import threading
+import webbrowser
+
+sys.path.insert(1, os.path.dirname(os.path.abspath(__file__)))
+from core import paths, physics
+
+import dash
+from dash import dcc, html, Input, Output, State, ALL, ctx
+
+REPO = paths.REPO_ROOT
+ACCENT, PALE, SIDE, LINE = "#f57d15", "#fff4ec", "#f9f9f9", "#dddddd"
+HOME_PORT = 8050
+THEIA_PORT = 8052
+
+# ===========================================================================
+# Tools
+# ===========================================================================
+# key: (section, name, script relative to the repo, description, single instance?)
+TOOLS = {
+    "theia":           ("Theia", "Theia", "theia/theia.py",
+                        "Viewer (one 1-D spectrum with simulated ion lines), batch scanner, "
+                        "scan results and further output.", True),
+    "spectrogram":     ("Spectrogram", "Spectrogram", "spectrogram/plot_spectrogram.py",
+                        "2-D / 3-D time × frequency view, simulated lines, region selection "
+                        "for decay fits.", False),
+    "decay_fit":       ("Spectrogram", "Decay fit", "spectrogram/decay_fit.py",
+                        "Exponential / Bateman / joint fits and half-lives. Usually started "
+                        "from the spectrogram.", False),
+    "sum_spectra":     ("Tartarus", "Sum spectra", "tartarus/sum_spectra.py",
+                        "Sum all 1-D spectra of a folder (raw and drift-aligned).", False),
+    "correction_plot": ("Tartarus", "2nd-order correction", "tartarus/new_2nd_order_correction_plot.py",
+                        "f_diff vs f_sim from a RionID table and the 2nd-order polynomial fit.", False),
+    "intensity_fit":   ("Tartarus", "Intensity variation fit", "tartarus/intensity_variation_fit.py",
+                        "Linear fit of σ vs intensity from a spreadsheet.", False),
+    "levelschemer":    ("Elysium", "LevelSchemer", "elysium/levelschemer.py",
+                        "Draw nuclear level schemes (Tk window).", False),
+}
+SECTIONS = ["Theia", "Spectrogram", "Tartarus", "Elysium"]
+
+_PROCS = {}                 # key -> list of (Popen, experiment)
+_PROCS_LOCK = threading.Lock()
+
+
+def _port_open(port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.2)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def running(key):
+    """[(pid, experiment)] of the live processes of a tool started from here."""
+    with _PROCS_LOCK:
+        live = [(p, e) for p, e in _PROCS.get(key, []) if p.poll() is None]
+        _PROCS[key] = live
+    return [(p.pid, e) for p, e in live]
+
+
+def start_tool(key, args=()):
+    """Start a tool as its own process, fixed to the active experiment."""
+    section, name, script, _, single = TOOLS[key]
+    path = os.path.join(REPO, script)
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"{script} not found")
+    if key == "theia" and _port_open(THEIA_PORT):
+        webbrowser.open(f"http://127.0.0.1:{THEIA_PORT}/")
+        return f"Theia is already running – opened it in the browser."
+    if single and running(key):
+        return f"{name} is already running."
+    exp = paths.experiment()
+    env = dict(os.environ, **{paths.ENV_EXPERIMENT: exp})
+    proc = subprocess.Popen([sys.executable, path, *[str(a) for a in args]], cwd=REPO, env=env)
+    with _PROCS_LOCK:
+        _PROCS.setdefault(key, []).append((proc, exp))
+    shown = " ".join(shlex.quote(str(a)) for a in args)
+    return f"Started {name} ({exp})" + (f": {shown}" if shown else "") + "."
+
+
+def stop_tool(key):
+    name = TOOLS[key][1]
+    with _PROCS_LOCK:
+        procs = [p for p, _ in _PROCS.get(key, []) if p.poll() is None]
+    if not procs:
+        if key == "theia" and _port_open(THEIA_PORT):
+            return "Theia was not started from here – use its Quit button."
+        return f"{name} is not running."
+    for p in procs:
+        p.send_signal(signal.SIGTERM)
+    return f"Stopped {name} ({len(procs)} process{'es' if len(procs) > 1 else ''})."
+
+
+def theia_status():
+    if _port_open(THEIA_PORT):
+        own = running("theia")
+        return True, (f"running ({own[0][1]}) · 127.0.0.1:{THEIA_PORT}" if own
+                      else f"running · 127.0.0.1:{THEIA_PORT} (started elsewhere)")
+    return False, "stopped"
+
+
+def tool_status(key):
+    if key == "theia":
+        return theia_status()
+    live = running(key)
+    if not live:
+        return False, "not running"
+    exps = sorted({e for _, e in live})
+    return True, f"{len(live)} running ({', '.join(exps)})"
+
+
+# ===========================================================================
+# Settings files of the tools (for "open with" and the overrides list)
+# ===========================================================================
+
+def _read_json(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _update_json(path, changes):
+    d = _read_json(path)
+    d.update(changes)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(d, fh, indent=2)
+    os.replace(tmp, path)
+
+
+def tool_overrides():
+    """{tool label: {key: value}} physics values a tool keeps for itself."""
+    out = {}
+    for label, fname, sub in (("Theia scanner", "scanner_config.json", None),
+                              ("Theia viewer", "viewer_config.json", None),
+                              ("Spectrogram", "spectrogram_prefs.json", "sim")):
+        d = _read_json(paths.settings_file(fname))
+        if sub:
+            d = d.get(sub) or {}
+        shared = physics.load_shared()
+        ov = {k: v for k, v in d.items()
+              if k in physics.PHYSICS_KEYS and not physics._same(k, v, shared[k])}
+        if ov:
+            out[label] = ov
+    return out
+
+
+# ===========================================================================
+# Data and outputs of the experiment
+# ===========================================================================
+
+def _size(n):
+    for unit in ("B", "kB", "MB", "GB", "TB"):
+        if n < 1000 or unit == "TB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1000
+
+
+def _mtime(path):
+    try:
+        return datetime.datetime.fromtimestamp(os.path.getmtime(path)).strftime("%d %b %Y %H:%M")
+    except OSError:
+        return ""
+
+
+def folder_summary(d, pattern="*.npz"):
+    files = glob.glob(os.path.join(d, pattern))
+    total = 0
+    for f in files:
+        try:
+            total += os.path.getsize(f)
+        except OSError:
+            pass
+    return len(files), total
+
+
+def data_rows():
+    """Rows of the data-file table: the 1-D spectra folder as one row, every
+    spectrogram and summed 1-D file on its own."""
+    rows = []
+    d1 = paths.spectra_1d()
+    n, total = folder_summary(d1)
+    rows.append(dict(name=f"spectra_1d/  ({n} files)", kind="1-D folder", size=total,
+                     mtime=_mtime(d1), path=d1))
+    for kind, d in (("spectrogram", paths.spectrograms()), ("summed 1-D", paths.summed_1d())):
+        for f in sorted(glob.glob(os.path.join(d, "*.npz"))):
+            rows.append(dict(name=os.path.basename(f), kind=kind, size=os.path.getsize(f),
+                             mtime=_mtime(f), path=f))
+    return rows
+
+
+def scan_runs():
+    path = os.path.join(paths.outputs("scans"), "index.csv")
+    try:
+        import csv
+        with open(path, newline="") as fh:
+            rows = list(csv.DictReader(fh))
+    except OSError:
+        return []
+    return rows[::-1]                                  # newest first
+
+
+def confirmed_files():
+    out = []
+    for f in sorted(glob.glob(os.path.join(paths.outputs("confirmed"), "*.csv")),
+                    key=os.path.getmtime, reverse=True):
+        head = {}
+        try:
+            with open(f, encoding="utf-8") as fh:
+                for line in fh:
+                    if not line.startswith("# "):
+                        break
+                    k, _, v = line[2:].partition(": ")
+                    head[k.strip()] = v.strip()
+        except OSError:
+            continue
+        out.append(dict(path=f, name=os.path.basename(f), saved=head.get("saved", ""),
+                        accepted=head.get("accepted", ""), unsure=head.get("unsure", ""),
+                        filter=head.get("filter", ""),
+                        scan=os.path.basename(head.get("database", ""))))
+    return out
+
+
+def fit_records():
+    out = []
+    for f in sorted(glob.glob(os.path.join(paths.outputs("fits"), "*.json")), reverse=True):
+        d = _read_json(f)
+        if d.get("format") != "asphodel-decay-fit":
+            continue
+        d["_path"] = f
+        out.append(d)
+    return out
+
+
+def figure_files():
+    d = paths.outputs("figures")
+    return [f for f in sorted(glob.glob(os.path.join(d, "*")), key=os.path.getmtime, reverse=True)
+            if os.path.isfile(f)]
+
+
+def fmt_time(s, err=None):
+    """Seconds -> value ± error in a readable unit."""
+    if s is None:
+        return "–"
+    for unit, f in (("y", 3.15576e7), ("d", 86400), ("h", 3600), ("min", 60), ("s", 1),
+                    ("ms", 1e-3), ("µs", 1e-6)):
+        if abs(s) >= f or unit == "µs":
+            v = s / f
+            e = (err / f) if err is not None else None
+            return f"{v:.4g} ± {e:.2g} {unit}" if e is not None else f"{v:.4g} {unit}"
+
+
+def fit_rerun_args(rec):
+    """decay_fit.py command-line arguments that redo a saved fit."""
+    st = rec.get("settings") or {}
+    w = st.get("freq_window_hz") or [None, None]
+    args = [rec["file"], repr(w[0]), repr(w[1])]
+    if st.get("parent_window_hz"):
+        args += ["--parent-window", *map(repr, st["parent_window_hz"])]
+    elif st.get("bateman"):
+        args.append("--bateman")
+    if st.get("with_offset") is False and not st.get("bateman"):
+        args.append("--no-offset")
+    for key, opt in (("tmin_s", "--tmin"), ("tmax_s", "--tmax"), ("gamma", "--gamma"),
+                     ("halflife_isomer_com_s", "--halflife-isomer"),
+                     ("halflife_groundstate_com_s", "--halflife-groundstate"),
+                     ("time_avg", "--time-avg")):
+        if st.get(key) is not None:
+            args += [opt, repr(st[key])]
+    if st.get("skip_bins") and any(st["skip_bins"]):
+        args += ["--skip", *map(str, st["skip_bins"])]
+    if st.get("err_coeffs"):
+        args += ["--err-coeffs", *map(repr, st["err_coeffs"])]
+    if st.get("unweighted"):
+        args.append("--unweighted")
+    if st.get("title_full"):
+        args += ["--title-full", st["title_full"]]
+    elif st.get("title"):
+        args += ["--title", st["title"]]
+    elif rec.get("label"):                     # records saved before title/title_full were stored
+        args += ["--title", rec["label"]]
+    return args
+
+
+def open_in_system(path):
+    """Open a file with the desktop's default program (figures, PDFs)."""
+    subprocess.Popen(["xdg-open", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+# ===========================================================================
+# Layout helpers
+# ===========================================================================
+
+_ACT_IDS = itertools.count()
+
+
+def act(action, payload="", label="", cls="btn small", title=None):
+    """Button whose click is handled by the one 'actions' callback."""
+    return html.Button(label, id={"type": "act", "a": action, "p": str(payload),
+                                  "u": next(_ACT_IDS)},
+                       className=cls, n_clicks=0, title=title)
+
+
+def table(header, rows):
+    return html.Table([html.Thead(html.Tr([html.Th(h) for h in header])),
+                       html.Tbody([html.Tr([html.Td(c) for c in r]) for r in rows])])
+
+
+def section(title, *children, extra=None):
+    return html.Section([html.H2([title, extra] if extra else title), *children])
+
+
+def _status_children(on, text):
+    return [html.Span(className="dot on" if on else "dot"), html.Span(text)]
+
+
+def tool_card(key):
+    section_, name, script, desc, _ = TOOLS[key]
+    on, text = tool_status(key)
+    buttons = {
+        "theia": [act("start", "theia", "Open", "btn primary small"),
+                  act("stop", "theia", "Stop")],
+        "spectrogram": [act("start", "spectrogram", "Open…", "btn primary small",
+                            title="Reopens the last session, or the file chooser"),
+                        act("stop", "spectrogram", "Stop all")],
+        "decay_fit": [html.Span("Run from the form below, the spectrogram or the Decay fits tab.",
+                                className="note")],
+        "levelschemer": [act("start", "levelschemer", "Open", "btn primary small",
+                             title="Reopens the last scheme"),
+                         act("stop", "levelschemer", "Stop all")],
+    }.get(key, [])
+    return html.Div([
+        html.Div(name, className="name"),
+        html.Div(script, className="from"),
+        html.P(desc),
+        html.Div(_status_children(on, text), id={"type": "status", "k": key}, className="status"),
+        html.Div(buttons, className="btns"),
+    ], className="tool")
+
+
+def _opts(files, base=None):
+    return [{"label": os.path.relpath(f, base) if base else os.path.basename(f), "value": f}
+            for f in files]
+
+
+def tool_forms():
+    """Small forms for the command-line tools."""
+    exp_dir = paths.experiment_dir()
+    spectrograms = sorted(glob.glob(os.path.join(paths.spectrograms(), "*.npz")))
+    xlsx = sorted(glob.glob(os.path.join(paths.rionid(), "*.xls*")))
+    sheets = sorted(f for ext in ("*.ods", "*.xlsx", "*.xls", "*.csv")
+                    for f in glob.glob(os.path.join(exp_dir, ext)))
+    schemes = sorted(glob.glob(os.path.join(paths.levelschemes(), "*.json")))
+    ods_default = os.path.join(exp_dir, "Schottky_Uncertainties.ods")
+    lbl = lambda t: html.Label(t, className="flabel")
+    return {
+        "decay_fit": html.Div([
+            lbl("Spectrogram file"),
+            dcc.Dropdown(id="df-file", options=_opts(spectrograms), clearable=False,
+                         value=spectrograms[0] if spectrograms else None),
+            html.Div([html.Div([lbl("f min (Hz)"), dcc.Input(id="df-fmin", type="number")]),
+                      html.Div([lbl("f max (Hz)"), dcc.Input(id="df-fmax", type="number")])],
+                     className="row2"),
+            lbl("Options"),
+            dcc.Input(id="df-opts", type="text", placeholder="e.g. --bateman --gamma 1.43 --title m199Pt77+ h213",
+                      className="wide"),
+            html.Button("Run fit", id="df-run", className="btn primary small", n_clicks=0),
+        ], className="form"),
+        "sum_spectra": html.Div([
+            lbl("Input folder"), dcc.Input(id="ss-in", type="text", value=paths.spectra_1d(), className="wide"),
+            lbl("Output folder"), dcc.Input(id="ss-out", type="text", value=paths.summed_1d(), className="wide"),
+            html.Button("Run", id="ss-run", className="btn primary small", n_clicks=0),
+        ], className="form"),
+        "correction_plot": html.Div([
+            lbl("RionID table"),
+            dcc.Dropdown(id="cp-file", options=_opts(xlsx), clearable=False,
+                         value=xlsx[0] if xlsx else None),
+            lbl("Sheet"), dcc.Input(id="cp-sheet", type="text", value="New2ndOrderCorrection", className="wide"),
+            html.Button("Run", id="cp-run", className="btn primary small", n_clicks=0),
+        ], className="form"),
+        "intensity_fit": html.Div([
+            lbl("Spreadsheet"),
+            dcc.Dropdown(id="if-file", options=_opts(sheets), clearable=False,
+                         value=ods_default if ods_default in sheets else (sheets[0] if sheets else None)),
+            lbl("Exclude ions (space separated, optional)"),
+            dcc.Input(id="if-exclude", type="text", className="wide", placeholder="e.g. 206Pb79+ 208Pb80+"),
+            html.Button("Run", id="if-run", className="btn primary small", n_clicks=0),
+        ], className="form"),
+        "levelschemer": html.Div([
+            lbl("Open a scheme"),
+            dcc.Dropdown(id="ls-file", options=_opts(schemes), clearable=False,
+                         value=schemes[0] if schemes else None),
+            html.Button("Open scheme", id="ls-run", className="btn small", n_clicks=0),
+        ], className="form"),
+    }
+
+
+def tools_section():
+    forms = tool_forms()
+    blocks = []
+    for sec in SECTIONS:
+        cards = []
+        for key, t in TOOLS.items():
+            if t[0] != sec:
+                continue
+            card = tool_card(key)
+            if key in forms:
+                card.children.append(forms[key])
+            cards.append(card)
+        blocks.append(html.Div([html.H3(sec, className="sec"), html.Div(cards, className="tools")]))
+    return section("Tools", *blocks)
+
+
+def data_section():
+    rows = []
+    for r in data_rows():
+        if r["kind"] == "1-D folder":
+            btns = [act("viewer_dir", r["path"], "Viewer"), act("scan_dir", r["path"], "Scan in Theia")]
+        elif r["kind"] == "spectrogram":
+            btns = [act("spectrogram_file", r["path"], "Spectrogram")]
+        else:
+            btns = [act("viewer_file", r["path"], "Viewer")]
+        rows.append([html.Span(r["name"], className="mono"), r["kind"], _size(r["size"]),
+                     r["mtime"], html.Span(btns)])
+    return section("Data files",
+                   html.Div(paths.experiment_dir(), className="note mono"),
+                   table(["File", "Type", "Size", "Modified", "Open with"], rows))
+
+
+def outputs_section():
+    # scan runs
+    runs = scan_runs()
+    keys = [k for k in ("file", "created", "label", "status", "n_files", "n_spectra_done",
+                        "n_identifications", "settings_hash") if runs and k in runs[0]]
+    scans = table(keys, [[r.get(k, "") for k in keys] for r in runs]) if runs else \
+        html.P("No scan runs yet.", className="note")
+    # confirmed
+    conf = confirmed_files()
+    confirmed = table(["File", "Saved", "Accepted", "Unsure", "Filter", "From scan"],
+                      [[html.Span(c["name"], className="mono"), c["saved"], c["accepted"], c["unsure"],
+                        c["filter"], c["scan"]] for c in conf]) if conf else \
+        html.P("No confirmed identifications yet.", className="note")
+    # fits
+    recs = fit_records()
+    fit_rows = []
+    for r in recs:
+        res = r.get("result") or {}
+        hls = res.get("half_lives") or {}
+        hl = hls.get("decay") or hls.get("A") or {}
+        st = r.get("settings") or {}
+        w = st.get("freq_window_hz") or [None, None]
+        chi = res.get("chi2_ndf")
+        fit_rows.append([
+            (r.get("saved") or "").replace("T", " "), r.get("label") or "–", r.get("mode", ""),
+            fmt_time(hl.get("lab_s"), hl.get("lab_err_s")),
+            fmt_time(hl.get("com_s"), hl.get("com_err_s")) if "com_s" in hl else "–",
+            html.Span(os.path.basename(r.get("file", "")), className="mono"),
+            f"{w[0]:,.0f} – {w[1]:,.0f} Hz" if None not in w else "",
+            f"{chi:.3g}" if chi is not None else "–",
+            html.Span([act("rerun_fit", r["_path"], "Re-run"),
+                       act("fit_spectrogram", r["_path"], "Spectrogram")])])
+    fits = table(["Saved", "Label", "Model", "T½ (lab)", "T½ (c.o.m.)", "File", "Window", "χ²/ndf", ""],
+                 fit_rows) if fit_rows else \
+        html.P("No saved fits yet – use “Save fit parameters” in a decay-fit window.", className="note")
+    # figures
+    figs = figure_files()
+    figures = table(["Figure", "Modified", ""],
+                    [[html.Span(os.path.basename(f), className="mono"), _mtime(f),
+                      act("open_file", f, "Open")] for f in figs]) if figs else \
+        html.P("No figures yet.", className="note")
+    return section("Outputs", dcc.Tabs([
+        dcc.Tab(label=f"Scan runs ({len(runs)})", children=[scans,
+                html.Div(act("start", "theia", "Open Theia (Scan Results)"), className="below")]),
+        dcc.Tab(label=f"Confirmed IDs ({len(conf)})", children=[confirmed]),
+        dcc.Tab(label=f"Decay fits ({len(recs)})", children=[fits]),
+        dcc.Tab(label=f"Figures ({len(figs)})", children=[figures]),
+    ], className="otabs"))
+
+
+# --------------------------------------------------------------------------- sidebar
+
+PHYS_LABELS = {
+    "ref_name": "Reference ion", "ref_frequency": "f_ref (Hz)", "ref_harmonic": "Ref. harmonic",
+    "gamma_t": "γ_t", "harmonics": "Harmonics", "z_lims": "Z min, max", "n_lims": "N min, max",
+    "el1": "el1 (A, Z)", "el2": "el2 (A, Z)", "mq_width": "m/q window (±)",
+    "correction_enabled": "2nd-order correction", "corr_a": "a", "corr_b": "b", "corr_c": "c",
+    "min_half_life": "Min T½", "min_half_life_unit": "T½ unit",
+    "exclude_unknown_hl": "Exclude unknown T½",
+}
+
+
+def _phys_text(k, v):
+    if isinstance(v, list):
+        return ", ".join(str(x) for x in v)
+    if isinstance(v, float):
+        return physics._fmt_num(v)
+    return str(v)
+
+
+def physics_panel():
+    sh = physics.load_shared()
+    fields = []
+    for k in physics.PHYSICS_KEYS:
+        if k in ("correction_enabled", "exclude_unknown_hl"):
+            inp = dcc.Checklist(id={"type": "phys", "k": k}, options=[{"label": "", "value": "on"}],
+                                value=["on"] if sh[k] else [], className="chk")
+        elif k == "min_half_life_unit":
+            inp = dcc.Dropdown(id={"type": "phys", "k": k}, options=physics.HL_CUT_UNITS,
+                               value=sh[k], clearable=False, className="unit")
+        else:
+            inp = dcc.Input(id={"type": "phys", "k": k}, type="text", value=_phys_text(k, sh[k]),
+                            debounce=True)
+        fields += [html.Label(PHYS_LABELS.get(k, k)), inp]
+    ov = tool_overrides()
+    ov_lines = ([html.Div([html.B(t + ": "), ", ".join(f"{k} = {_phys_text(k, v)}" for k, v in d.items())])
+                 for t, d in ov.items()] or [html.Div("none")])
+    return html.Div([
+        html.Div(fields, className="kv"),
+        html.Div([html.Button("Save physics", id="phys-save", className="btn primary small", n_clicks=0),
+                  html.Span(id="phys-msg", className="note")], className="below"),
+        html.Div([html.Div("Tool overrides (tool settings that differ from these):", className="note"),
+                  html.Div(ov_lines, className="note")], className="below"),
+        html.Div("Tools read these when they start (Theia: on page reload).", className="note"),
+    ])
+
+
+def sidebar():
+    srcs = []
+    for title, d in (("1-D spectra", paths.spectra_1d()), ("Spectrograms", paths.spectrograms()),
+                     ("Summed 1-D", paths.summed_1d())):
+        n, total = folder_summary(d)
+        srcs.append(html.Div([html.B(title), html.Code(os.path.relpath(d, paths.experiment_dir())),
+                              html.Div(f"{n} .npz · {_size(total)}")], className="src"))
+    nub = os.path.join(paths.REPO_ROOT, "core", "nubase_4.mas20")
+    return html.Aside([
+        html.H3("Data sources"), *srcs,
+        html.H3("Shared physics"), physics_panel(),
+        html.H3("Reference data"),
+        html.Div([html.B("NUBASE"), html.Code("core/nubase_4.mas20"),
+                  html.Div(_mtime(nub))], className="src"),
+    ])
+
+
+def notes_section():
+    try:
+        with open(paths.notes_file(), encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        text = ""
+    return section("Notes", dcc.Textarea(id="notes", value=text, className="notes",
+                                         placeholder="Notes for this experiment…"),
+                   html.Div([html.Button("Save notes", id="notes-save", className="btn small", n_clicks=0),
+                             html.Span(id="notes-msg", className="note")], className="below"))
+
+
+def header():
+    exps = paths.list_experiments()
+    cur = paths.experiment()
+    return html.Header([
+        html.Div(["Asphodel", html.Span(" ·")], className="logo"),
+        dcc.Dropdown(id="exp-select", options=exps, value=cur, clearable=False, className="exp"),
+        html.Button("+ New experiment…", id="exp-new-open", className="btn small", n_clicks=0),
+        html.Span(paths.experiment_dir(), className="path"),
+        html.Span(className="spacer"),
+        html.Button("↻ Refresh", id="refresh", className="btn small", n_clicks=0,
+                    title="Re-read files and outputs"),
+    ])
+
+
+def new_experiment_modal():
+    exps = paths.list_experiments()
+    return html.Div(id="exp-modal", className="modal", style={"display": "none"}, children=html.Div([
+        html.H2("New experiment"),
+        html.Label("Name", className="flabel"),
+        dcc.Input(id="exp-name", type="text", placeholder="e.g. E0204", className="wide"),
+        html.Label("Data folder (empty = data/<name> in the Asphodel folder)", className="flabel"),
+        dcc.Input(id="exp-dir", type="text", className="wide", placeholder=paths.DATA_ROOT + "/<name>"),
+        html.Label("Copy the shared physics settings from", className="flabel"),
+        dcc.Dropdown(id="exp-copy", options=[{"label": "(built-in defaults)", "value": ""}] + exps,
+                     value=paths.experiment(), clearable=False),
+        html.Div([html.Button("Create", id="exp-create", className="btn primary small", n_clicks=0),
+                  html.Button("Cancel", id="exp-cancel", className="btn small", n_clicks=0),
+                  html.Span(id="exp-msg", className="note")], className="below"),
+    ], className="modal-box"))
+
+
+def serve_layout():
+    return html.Div([
+        dcc.Location(id="loc", refresh=True),
+        dcc.Interval(id="tick", interval=2000),
+        header(),
+        html.Div(id="msg", className="banner", children="Ready."),
+        html.Div([
+            sidebar(),
+            html.Main([tools_section(), data_section(), outputs_section(), notes_section()]),
+        ], className="wrap"),
+        new_experiment_modal(),
+    ])
+
+
+# ===========================================================================
+# App
+# ===========================================================================
+
+CSS = f"""
+:root{{--accent:{ACCENT};--pale:{PALE};--side:{SIDE};--line:{LINE};--muted:#777;--ok:#2e7d32}}
+*{{box-sizing:border-box}}
+body{{margin:0;font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#222;background:#fff;font-size:14px}}
+header{{height:52px;display:flex;align-items:center;gap:14px;padding:0 18px;border-bottom:3px solid var(--accent)}}
+header .logo{{font-weight:800;font-size:18px;letter-spacing:.5px}} header .logo span{{color:var(--accent)}}
+header .exp{{width:180px;font-size:13px}} header .path{{color:var(--muted);font-family:monospace;font-size:12px}}
+header .spacer{{flex:1}}
+.banner{{background:var(--pale);border-bottom:1px solid var(--line);padding:6px 18px;font-size:12px;color:#8a4a10;min-height:28px}}
+.wrap{{display:flex;min-height:calc(100vh - 82px)}}
+aside{{width:330px;min-width:330px;background:var(--side);border-right:1px solid var(--line);padding:14px 16px}}
+aside h3{{font-size:12px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin:18px 0 8px}}
+aside h3:first-child{{margin-top:0}}
+.src{{background:#fff;border:1px solid var(--line);border-radius:5px;padding:7px 9px;margin-bottom:6px;font-size:12px}}
+.src b{{display:block;font-size:13px}} .src code{{color:var(--muted);font-size:11px;word-break:break-all;display:block}}
+.kv{{display:grid;grid-template-columns:auto 1fr;gap:4px 8px;font-size:12px;align-items:center}}
+.kv label{{color:var(--muted)}} .kv input{{width:100%;font-family:monospace;font-size:12px;padding:2px 5px;border:1px solid var(--line);border-radius:3px}}
+.kv .unit{{font-size:12px}}
+.btn{{display:inline-block;border:1px solid var(--line);background:#fff;border-radius:4px;padding:5px 10px;font-size:12px;cursor:pointer;color:#222;margin:0 6px 4px 0}}
+.btn:hover{{border-color:var(--accent)}}
+.btn.primary{{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}}
+.btn.small{{padding:3px 8px;font-size:11px}}
+main{{flex:1;padding:16px 20px;min-width:0}}
+h2{{font-size:15px;margin:0 0 10px;padding-bottom:5px;border-bottom:1px solid var(--line)}}
+h3.sec{{font-size:12px;text-transform:uppercase;letter-spacing:.8px;color:var(--accent);margin:12px 0 6px}}
+section{{margin-bottom:24px}}
+.tools{{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}}
+.tool{{border:1px solid var(--line);border-radius:6px;padding:12px;background:#fff;border-top:3px solid var(--accent)}}
+.tool .name{{font-weight:700;font-size:15px}} .tool .from{{font-size:11px;color:var(--muted);font-family:monospace}}
+.tool p{{font-size:12px;color:#555;margin:6px 0 8px}}
+.status{{font-size:11px;margin-bottom:8px}}
+.dot{{display:inline-block;width:8px;height:8px;border-radius:50%;background:#bbb;margin-right:5px}} .dot.on{{background:var(--ok)}}
+.form{{border-top:1px dashed var(--line);margin-top:8px;padding-top:8px;font-size:12px}}
+.flabel{{display:block;color:var(--muted);font-size:11px;margin:6px 0 2px}}
+.form input,.wide{{width:100%;font-size:12px;padding:3px 6px;border:1px solid var(--line);border-radius:3px}}
+.form .btn{{margin-top:8px}}
+.row2{{display:grid;grid-template-columns:1fr 1fr;gap:8px}}
+table{{width:100%;border-collapse:collapse;font-size:12px}}
+th{{background:var(--accent);color:#fff;text-align:left;padding:6px 8px;font-weight:600}}
+td{{padding:5px 8px;border-bottom:1px solid var(--line);white-space:nowrap}}
+tbody tr:nth-child(even) td{{background:var(--pale)}}
+.mono{{font-family:monospace}}
+.note{{font-size:11px;color:var(--muted)}}
+.below{{margin-top:8px}}
+.otabs{{margin-bottom:8px}}
+.notes{{width:100%;min-height:140px;font-family:monospace;font-size:12px;border:1px solid var(--line);border-radius:4px;padding:8px}}
+.modal{{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:1000;align-items:center;justify-content:center}}
+.modal-box{{background:#fff;border-radius:8px;padding:18px 22px;width:520px;border-top:4px solid var(--accent)}}
+.chk input{{width:auto}}
+"""
+
+app = dash.Dash(__name__, title="Asphodel", suppress_callback_exceptions=True)
+app.index_string = app.index_string.replace("</head>", f"<style>{CSS}</style></head>")
+app.layout = serve_layout
+
+
+@app.callback(
+    Output("msg", "children"),
+    Input({"type": "act", "a": ALL, "p": ALL, "u": ALL}, "n_clicks"),
+    prevent_initial_call=True,
+)
+def actions(clicks):
+    """Every button made with act(): start/stop tools and the 'open with' buttons."""
+    tid = ctx.triggered_id
+    if not tid or not any(clicks) or not (ctx.triggered and ctx.triggered[0]["value"]):
+        return dash.no_update
+    a, p = tid["a"], tid["p"]
+    try:
+        if a == "start":
+            return start_tool(p)
+        if a == "stop":
+            return stop_tool(p)
+        if a == "spectrogram_file":
+            return start_tool("spectrogram", [p])
+        if a in ("viewer_file", "viewer_dir"):
+            d, name = (os.path.dirname(p), os.path.basename(p)) if a == "viewer_file" else (p, None)
+            changes = {"file_path": os.path.join(d, "")}
+            if name:
+                changes["spectrum_name"] = name
+            _update_json(paths.settings_file("viewer_config.json"), changes)
+            return start_tool("theia") + " Viewer set to " + (name or os.path.basename(d.rstrip("/"))) + \
+                (" – reload the Theia page if it was already open." if _port_open(THEIA_PORT) else "")
+        if a == "scan_dir":
+            _update_json(paths.settings_file("scanner_config.json"), {"spectra_dir": os.path.join(p, "")})
+            return start_tool("theia") + " Scan folder set to " + os.path.basename(p.rstrip("/")) + \
+                " (Scan tab; reload the page if Theia was already open)."
+        if a == "rerun_fit":
+            return start_tool("decay_fit", fit_rerun_args(_read_json(p)))
+        if a == "fit_spectrogram":
+            rec = _read_json(p)
+            w = (rec.get("settings") or {}).get("freq_window_hz") or []
+            pad = (w[1] - w[0]) * 2 if len(w) == 2 else 0
+            args = [rec["file"]] + ([repr(w[0] - pad), repr(w[1] + pad)] if pad else [])
+            return start_tool("spectrogram", args)
+        if a == "open_file":
+            open_in_system(p)
+            return f"Opened {os.path.basename(p)}."
+    except Exception as exc:
+        return f"⚠ {exc}"
+    return dash.no_update
+
+
+@app.callback(
+    Output("msg", "children", allow_duplicate=True),
+    Input("df-run", "n_clicks"), Input("ss-run", "n_clicks"), Input("cp-run", "n_clicks"),
+    Input("if-run", "n_clicks"), Input("ls-run", "n_clicks"),
+    State("df-file", "value"), State("df-fmin", "value"), State("df-fmax", "value"), State("df-opts", "value"),
+    State("ss-in", "value"), State("ss-out", "value"),
+    State("cp-file", "value"), State("cp-sheet", "value"),
+    State("if-file", "value"), State("if-exclude", "value"),
+    State("ls-file", "value"),
+    prevent_initial_call=True,
+)
+def run_forms(_d, _s, _c, _i, _l, df_file, fmin, fmax, df_opts, ss_in, ss_out,
+              cp_file, cp_sheet, if_file, if_ex, ls_file):
+    """The 'Run' buttons of the tool forms."""
+    t = ctx.triggered_id
+    try:
+        if t == "df-run":
+            if not df_file or fmin is None or fmax is None:
+                return "⚠ Decay fit: choose a file and give f min and f max."
+            return start_tool("decay_fit", [df_file, repr(float(fmin)), repr(float(fmax)),
+                                            *shlex.split(df_opts or "")])
+        if t == "ss-run":
+            if not ss_in or not ss_out:
+                return "⚠ Sum spectra: give the input and output folders."
+            return start_tool("sum_spectra", [os.path.expanduser(ss_in), os.path.expanduser(ss_out)])
+        if t == "cp-run":
+            if not cp_file:
+                return "⚠ No RionID table in rionid/."
+            return start_tool("correction_plot", [cp_file, cp_sheet or "New2ndOrderCorrection"])
+        if t == "if-run":
+            if not if_file:
+                return "⚠ No spreadsheet in the experiment folder."
+            ex = shlex.split(if_ex or "")
+            return start_tool("intensity_fit", [if_file] + (["--exclude", *ex] if ex else []))
+        if t == "ls-run":
+            if not ls_file:
+                return "⚠ No scheme files in levelschemes/."
+            return start_tool("levelschemer", [ls_file])
+    except Exception as exc:
+        return f"⚠ {exc}"
+    return dash.no_update
+
+
+@app.callback(
+    Output({"type": "status", "k": ALL}, "children"),
+    Input("tick", "n_intervals"),
+    State({"type": "status", "k": ALL}, "id"),
+)
+def refresh_status(_n, ids):
+    return [_status_children(*tool_status(i["k"])) for i in ids]
+
+
+@app.callback(
+    Output("phys-msg", "children"),
+    Input("phys-save", "n_clicks"),
+    State({"type": "phys", "k": ALL}, "value"),
+    State({"type": "phys", "k": ALL}, "id"),
+    prevent_initial_call=True,
+)
+def save_physics(_n, values, ids):
+    vals = {i["k"]: v for i, v in zip(ids, values)}
+    try:
+        checked = {k: physics.canonical(k, v) for k, v in vals.items()}
+        if not checked["harmonics"]:
+            raise ValueError("harmonics list is empty")
+        for k in ("z_lims", "n_lims", "el1", "el2"):
+            if len(checked[k]) != 2:
+                raise ValueError(f"{PHYS_LABELS[k]} needs two numbers")
+        physics.save_shared(checked)
+    except (TypeError, ValueError) as exc:
+        return f"⚠ Not saved: {exc}"
+    return f"Saved {datetime.datetime.now():%H:%M:%S}."
+
+
+@app.callback(
+    Output("notes-msg", "children"),
+    Input("notes-save", "n_clicks"),
+    State("notes", "value"),
+    prevent_initial_call=True,
+)
+def save_notes(_n, text):
+    path = paths.notes_file()
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(text or "")
+    os.replace(tmp, path)
+    return f"Saved {datetime.datetime.now():%H:%M:%S}."
+
+
+@app.callback(
+    Output("loc", "href"),
+    Input("exp-select", "value"),
+    Input("refresh", "n_clicks"),
+    prevent_initial_call=True,
+)
+def switch_experiment(exp, _r):
+    """Change the active experiment (or just refresh): reload the page."""
+    if ctx.triggered_id == "exp-select" and exp and exp != paths.experiment():
+        paths.set_experiment(exp)
+    return "/"
+
+
+@app.callback(
+    Output("exp-modal", "style"),
+    Output("exp-msg", "children"),
+    Output("loc", "href", allow_duplicate=True),
+    Input("exp-new-open", "n_clicks"), Input("exp-cancel", "n_clicks"), Input("exp-create", "n_clicks"),
+    State("exp-name", "value"), State("exp-dir", "value"), State("exp-copy", "value"),
+    prevent_initial_call=True,
+)
+def new_experiment(_o, _c, _k, name, data_dir, copy_from):
+    shown, hidden = {"display": "flex"}, {"display": "none"}
+    t = ctx.triggered_id
+    if t == "exp-new-open":
+        return shown, "", dash.no_update
+    if t == "exp-cancel":
+        return hidden, "", dash.no_update
+    try:
+        paths.create_experiment(name, (data_dir or "").strip() or None, copy_from or None)
+        paths.set_experiment(name.strip())
+    except (ValueError, OSError) as exc:
+        return shown, f"⚠ {exc}", dash.no_update
+    return hidden, "", "/"
+
+
+def _free_port(preferred):
+    if not _port_open(preferred):
+        return preferred
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+if __name__ == "__main__":
+    import logging
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)
+    port = _free_port(HOME_PORT)
+    url = f"http://127.0.0.1:{port}/"
+    print(f"Asphodel home page at {url}  (Ctrl-C to stop; tools started from here keep running)")
+    threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    app.run(debug=False, host="127.0.0.1", port=port)

@@ -138,7 +138,7 @@ def saved_view(file_path, fmin_req, fmax_req):
 
 
 # ---------------------------------------------------------------------------
-# Simulated ion lines (physics in core/physics.py, shared with theia/scanner.py)
+# Simulated ion lines (physics in core/physics.py, shared with theia/theia.py)
 # ---------------------------------------------------------------------------
 # The reference is the strongest bin of the summed power (all time frames, the
 # whole uncropped file). It is taken to be `ref_name` at
@@ -560,7 +560,7 @@ def sim_panel_html():
       <span>Z</span>{txt("z_lims", 64, "Z min, max")}
       <span>N</span>{txt("n_lims", 64, "N min, max")}
     </div>
-    <div class="opt-grp" title="Diagonal cuts (as in scanner.py): two (A, Z) points defining the selection band">
+    <div class="opt-grp" title="Diagonal cuts (as in Theia): two (A, Z) points defining the selection band">
       <span style="text-transform:none;">el1</span>{txt("el1", 64, "el1")}
       <span style="text-transform:none;">el2</span>{txt("el2", 64, "el2")}
     </div>
@@ -595,7 +595,7 @@ def sim_panel_html():
 
 
 SIM_JS = """
-// ── Simulated ion lines on the 2-D plot (physics from Theia/scanner.py) ────
+// ── Simulated ion lines on the 2-D plot (physics from core/physics.py, as in Theia) ────
 var SIM = null;              // last /simulate result
 var SIM_TRACES = [2, 3, 4, 5, 6, 7];  // heatPlot: outlines (2-4) then white lines (5-7)
                                       // for normal, excluded, reference
@@ -1036,7 +1036,7 @@ window.addEventListener('resize', function() {
   clearTimeout(_fitTimer); _fitTimer = setTimeout(fitPlots, 150);
 });
 
-// Built the same way as scanner.py's spectrum figure so it stays responsive:
+// Built the same way as Theia's spectrum figure so it stays responsive:
 // the spectrum is one WebGL trace with hover switched off, and each line group
 // is ONE WebGL trace (20 points per line, so tooltips work along it).
 function _renderFull() {
@@ -1103,7 +1103,7 @@ function _renderFull() {
     yaxis: {title: {text: pLabel}, range: [y0, y1],
             color: '#9ca3af', gridcolor: '#374151', zerolinecolor: '#374151'},
     paper_bgcolor: '#111827', plot_bgcolor: '#1f2937', font: {color: '#e5e7eb'},
-    hovermode: 'x', dragmode: 'pan', uirevision: 'full',   // as scanner.py
+    hovermode: 'x', dragmode: 'pan', uirevision: 'full',   // as Theia
     margin: {l: 90, r: 20, t: 40, b: 50}, height: 380
   }, {responsive: true, scrollZoom: true});
 }
