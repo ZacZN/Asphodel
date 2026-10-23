@@ -64,6 +64,14 @@ Error bars (default: automatic two-pass fit)
   3. Refit with σ_i = a·f(t_i) + b, absolute_sigma=True; parameter and
      half-life errors come from this weighted fit.
 
+Saving a fit
+------------
+  The plot window has a "Save fit" button (top left). It writes one JSON
+  record per fit to data/<experiment>/outputs/fits/ (see core/paths.py):
+  fit_<YYYYmmdd_HHMMSS>_<file>[_<title>].json with the input file, the
+  windows and options used, every parameter (value, error, fitted/fixed),
+  the half-lives (lab and c.o.m.), chi^2/ndf and the error model.
+
 Example
 -------
   # Simple decay
@@ -80,10 +88,16 @@ Example
 import sys
 import os
 import argparse
+import datetime
+import json
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.widgets import Button
 from scipy.optimize import curve_fit
+
+sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core import paths
 
 
 # ---------------------------------------------------------------------------
@@ -636,10 +650,188 @@ def _place_boxes_once(fig, ax, xy_sets, fixed, legend_kw, log, max_iter, pad_px,
     return leg is None   # fixed boxes alone may still overlap after max_iter
 
 
+# ---------------------------------------------------------------------------
+# Fit records (JSON, saved with the "Save fit" button in the plot window)
+# ---------------------------------------------------------------------------
+
+FIT_RECORD_FORMAT = "asphodel-decay-fit"
+FIT_RECORD_VERSION = 1
+
+
+def _num(v):
+    """JSON-safe number: numpy -> float, NaN/inf/None -> None."""
+    if v is None:
+        return None
+    v = float(v)
+    return v if np.isfinite(v) else None
+
+
+def _param(value, error, status):
+    """One parameter entry; the error is left out (None) for fixed parameters."""
+    return {"value": _num(value), "error": _num(error) if status == "fitted" else None,
+            "status": status}
+
+
+def _half_life(tau, dtau, fitted, gamma):
+    """Half-life entry from τ ± dτ (lab frame), with the c.o.m. value if γ is known."""
+    ln2 = np.log(2)
+    hl, dhl = tau * ln2, (dtau * ln2 if fitted else None)
+    out = {"lab_s": _num(hl), "lab_err_s": _num(dhl), "status": "fitted" if fitted else "fixed"}
+    if gamma:
+        out["com_s"] = _num(hl / gamma)
+        out["com_err_s"] = _num(dhl / gamma) if dhl is not None else None
+    return out
+
+
+def _settings_of(args):
+    """The inputs and options of this run, as given on the command line."""
+    return {
+        "freq_window_hz":         [_num(args.freq_min), _num(args.freq_max)],
+        "parent_window_hz":       ([_num(x) for x in args.parent_window]
+                                   if args.parent_window is not None else None),
+        "tmin_s":                 _num(args.tmin),
+        "tmax_s":                 _num(args.tmax),
+        "skip_bins":              [int(x) for x in args.skip],
+        "time_avg":               args.time_avg,
+        "gamma":                  _num(args.gamma),
+        "bateman":                bool(args.bateman),
+        "with_offset":            not args.no_offset,
+        "halflife_isomer_com_s":      _num(args.halflife_isomer),
+        "halflife_groundstate_com_s": _num(args.halflife_groundstate),
+        "err_coeffs":             ([_num(x) for x in args.err_coeffs]
+                                   if args.err_coeffs is not None else None),
+        "unweighted":             bool(args.unweighted),
+    }
+
+
+def _record_base(args, mode, model_text):
+    return {
+        "format":     FIT_RECORD_FORMAT,
+        "version":    FIT_RECORD_VERSION,
+        "saved":      None,                       # filled in when saved
+        "experiment": paths.experiment(),
+        "file":       os.path.abspath(args.file),
+        "label":      args.title_full or args.title or "",
+        "mode":       mode,                       # "decay" | "bateman" | "joint"
+        "model":      model_text,
+        "settings":   _settings_of(args),
+    }
+
+
+def _chi2_part(chi2, ndf):
+    return {"chi2": _num(chi2), "ndf": ndf,
+            "chi2_ndf": _num(chi2 / ndf) if (chi2 is not None and ndf) else None}
+
+
+def single_fit_record(args, time_fit, intensity_fit, popt, perr, model, resolved,
+                      with_offset, sigma_fit, err_note):
+    """Record of a single-window fit (exponential decay or Bateman)."""
+    residuals = intensity_fit - model(time_fit, *popt)
+    chi2 = ndf = None
+    if sigma_fit is not None:
+        chi2 = float(np.sum((residuals / sigma_fit) ** 2))
+        ndf = len(time_fit) - len(popt)
+    gamma = args.gamma
+    if args.bateman:
+        rec = _record_base(args, "bateman",
+                           "I(t) = P·(e^(-t/τ_A) - e^(-t/τ_B)) + B·e^(-t/τ_B) + C")
+        params = {k: _param(*resolved[k]) for k in ("P", "tau_A", "tau_B", "B", "C")}
+        half_lives = {
+            "A": _half_life(resolved["tau_A"][0], resolved["tau_A"][1],
+                            resolved["tau_A"][2] == "fitted", gamma),
+            "B": _half_life(resolved["tau_B"][0], resolved["tau_B"][1],
+                            resolved["tau_B"][2] == "fitted", gamma),
+        }
+    else:
+        rec = _record_base(args, "decay",
+                           "I(t) = A·exp(-t/τ)" + (" + C" if with_offset else ""))
+        params = {"A": _param(popt[0], perr[0], "fitted"),
+                  "tau": _param(popt[1], perr[1], "fitted")}
+        if with_offset:
+            params["C"] = _param(popt[2], perr[2], "fitted")
+        half_lives = {"decay": _half_life(popt[1], perr[1], True, gamma)}
+    rec["result"] = {
+        "n_points":       int(len(time_fit)),
+        "t_range_s":      [_num(time_fit[0]), _num(time_fit[-1])],
+        "parameters":     params,
+        "half_lives":     half_lives,
+        **_chi2_part(chi2, ndf),
+        "error_model":    err_note or ("unweighted" if sigma_fit is None else ""),
+        "mean_intensity": _num(np.mean(intensity_fit)),
+        "std_residual":   _num(np.std(residuals)),
+    }
+    return rec
+
+
+def joint_fit_record(args, tP, vals, errs, free, chi2, ndf, corr, err_note):
+    """Record of a joint parent + daughter Bateman fit."""
+    rec = _record_base(args, "joint",
+                       "I_P(t) = A·e^(-t/τ_A) + C_A;  "
+                       "I_D(t) = P·(e^(-t/τ_A) - e^(-t/τ_B)) + B·e^(-t/τ_B)")
+    params = {n: _param(vals[n], errs[n], "fitted" if n in free else "fixed")
+              for n in _JOINT_NAMES}
+    rec["result"] = {
+        "n_points":    int(len(tP)),              # per window
+        "t_range_s":   [_num(tP[0]), _num(tP[-1])],
+        "parameters":  params,
+        "half_lives":  {"A": _half_life(vals["tau_A"], errs["tau_A"], "tau_A" in free, args.gamma),
+                        "B": _half_life(vals["tau_B"], errs["tau_B"], "tau_B" in free, args.gamma)},
+        **_chi2_part(chi2, ndf),
+        "corr_tau_A_tau_B": _num(corr),
+        "error_model": err_note or ("unweighted" if chi2 is None else ""),
+    }
+    return rec
+
+
+def save_fit_record(record):
+    """Write the record to outputs/fits/ and return its path."""
+    rec = dict(record, saved=datetime.datetime.now().isoformat(timespec="seconds"))
+    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    stem = os.path.splitext(os.path.basename(rec["file"]))[0]
+    label = _re.sub(r"[^A-Za-z0-9+.-]+", "_", rec.get("label") or "").strip("_")
+    name = f"fit_{stamp}_{stem}" + (f"_{label[:40]}" if label else "") + ".json"
+    path = os.path.join(paths.outputs("fits"), name)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(rec, fh, indent=2, ensure_ascii=False)
+    return path
+
+
+def add_save_button(fig, record):
+    """'Save fit' button in the top-left corner of the figure. One click saves
+    the record; later clicks only say where it was saved."""
+    ax_btn = fig.add_axes([0.005, 0.945, 0.085, 0.045])
+    try:
+        ax_btn.set_in_layout(False)               # not moved by constrained layout
+    except AttributeError:
+        pass
+    btn = Button(ax_btn, "Save fit", color="#fff4ec", hovercolor="#f57d15")
+    btn.label.set_fontsize(13)
+    state = {"path": None}
+
+    def on_click(_event):
+        if state["path"] is None:
+            try:
+                state["path"] = save_fit_record(record)
+            except Exception as exc:
+                print(f"Could not save the fit: {exc}")
+                btn.label.set_text("Save failed")
+                fig.canvas.draw_idle()
+                return
+            print(f"Fit saved to {state['path']}")
+            btn.label.set_text("Saved ✓")
+        else:
+            print(f"Already saved: {state['path']}")
+        fig.canvas.draw_idle()
+
+    btn.on_clicked(on_click)
+    fig._save_fit_button = btn                    # keep a reference (else it stops responding)
+    return btn
+
+
 def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, resolved,
                with_offset, bateman, freq_min, freq_max, filename,
                gamma=None, title_suffix=None, sigma_fit=None, err_note=None,
-               title_full=None, log_plot=False, show_residuals=False):
+               title_full=None, log_plot=False, show_residuals=False, record=None):
 
     plt.rcParams.update({"font.size": 20})
 
@@ -863,6 +1055,8 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
     relayout_boxes()
     fig._relayout_boxes = relayout_boxes
     fig.canvas.mpl_connect("resize_event", relayout_boxes)
+    if record is not None:
+        add_save_button(fig, record)
     plt.show()
 
     # Console summary
@@ -1082,13 +1276,14 @@ def run_joint(args, halflife_isomer_lab, halflife_groundstate_lab):
         i, j = free.index("tau_A"), free.index("tau_B")
         corr = pcov[i, j] / np.sqrt(pcov[i, i] * pcov[j, j])
 
+    record = joint_fit_record(args, tP, vals, errs, free, chi2, ndf, corr, err_note)
     plot_joint(args, tP, IP, tD, ID, sigmaP, sigmaD, vals, errs,
                tau_A_fixed is not None, tau_B_fixed is not None,
-               chi2, ndf, corr, err_note, (pmin, pmax), (dmin, dmax))
+               chi2, ndf, corr, err_note, (pmin, pmax), (dmin, dmax), record=record)
 
 
 def plot_joint(args, tP, IP, tD, ID, sigmaP, sigmaD, vals, errs,
-               fixA, fixB, chi2, ndf, corr, err_note, pwin, dwin):
+               fixA, fixB, chi2, ndf, corr, err_note, pwin, dwin, record=None):
     gamma = args.gamma
     ln2   = np.log(2)
     hlA, dhlA = vals["tau_A"] * ln2, (None if fixA else errs["tau_A"] * ln2)
@@ -1148,6 +1343,8 @@ def plot_joint(args, tP, IP, tD, ID, sigmaP, sigmaD, vals, errs,
     axD.set_xlabel("Time (s)", fontsize=22)
     axD.set_xlim(left=0)
     fig.tight_layout()
+    if record is not None:
+        add_save_button(fig, record)
     plt.show()
 
     # Console summary
@@ -1336,6 +1533,8 @@ def main():
             print(f"  Pass 1 (unweighted): τ = {format_time(popt1[1], perr1[1])}")
             print(f"  Pass 2 (weighted):   τ = {format_time(popt[1], perr[1])}")
 
+    record = single_fit_record(args, time_fit, intensity_fit, popt, perr, model, resolved,
+                               with_offset, sigma_fit, err_note)
     plot_decay(
         time, intensity,
         time_fit, intensity_fit, popt, perr, model, resolved,
@@ -1349,6 +1548,7 @@ def main():
         show_residuals=args.residuals,
         sigma_fit=sigma_fit,
         err_note=err_note,
+        record=record,
     )
 
 

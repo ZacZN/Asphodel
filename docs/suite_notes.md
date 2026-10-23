@@ -116,11 +116,15 @@ Notes:
 - `core/physics.py`: simulation (`build_ion_database`, `simulate_frequencies`, `delta_f`, `apply_correction`, half-life cut, hover labels), used by scanner.py and plot_spectrogram.py. The Viewer tab still has its own `v_compute_frequencies_multi` (different output format) but uses the shared `delta_f`/`apply_correction`.
 - Shared physics defaults per experiment: `data/<exp>/settings/physics.json` (edit by hand until the home screen exists). Tools load `physics.with_shared(TOOL_DEFAULTS, saved)` and save `physics.strip_shared(cfg)`, so tool configs hold only overrides. Decided by Zac: shared default harmonics 212, 213, 214; the spectrogram keeps 211–215 as its override.
 
+## docs/ (done 23 Oct)
+
+`docs/asphodel_scripts_guide.pdf` (moved from spectrogram/, outdated: to be rewritten once the structure settles), `docs/scanner_design.md` (recreated from the handover copy, with the new locations), `docs/suite_notes.md` (copy of this note), `docs/suite_home_mockup.html`.
+
 ## Things that will break and need fixing
 
 - **Absolute paths** in `.asphodel_prefs.json` (`lastDir`, `session.file` → `.../Asphodel/summed/...`) and `viewer_config.json` (`file_path` → `Tartarus/`). `scanner_config.json` `spectra_dir` → `1dSpectra/...`.
 - **Paths relative to script location**: `scanner.py` writes `scans/` and `confirmed/` next to itself (`HERE`). `plot_spectrogram.py` finds `decay_fit.py` via `_HERE` and imports `nubase_reader` from its own folder. Both need pointing at `core/` and at the data/outputs folder.
-- `decay_fit.py` only plots/prints. For the home screen's "Decay fits" tab, it needs to write a small record (JSON/CSV) per fit.
+- ~~`decay_fit.py` only plots/prints.~~ Done 23 Oct: a "Save fit" button in the plot window (top left) writes one JSON per fit to `data/<exp>/outputs/fits/fit_<stamp>_<file>[_<label>].json` (format `asphodel-decay-fit` v1: file, label, mode decay/bateman/joint, settings, parameters with value/error/status, half-lives lab + c.o.m., χ²/ndf, error model; no data points). Decided by Zac: saving only on request, no figure saved.
 
 ## Current physics settings (E0203, 208Pb80+ setting)
 
