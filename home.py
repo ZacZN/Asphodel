@@ -57,9 +57,9 @@ TOOLS = {
     "spectrogram":     ("Spectrogram", "Spectrogram", "spectrogram/plot_spectrogram.py",
                         "2-D / 3-D time × frequency view, simulated lines, region selection "
                         "for decay fits.", False),
-    "decay_fit":       ("Spectrogram", "Decay fit", "spectrogram/decay_fit.py",
-                        "Exponential / Bateman / joint fits and half-lives. Usually started "
-                        "from the spectrogram.", False),
+    # no card: started from the spectrogram, or re-run from the Decay fits tab
+    "decay_fit":       (None, "Decay fit", "spectrogram/decay_fit.py",
+                        "Exponential / Bateman / joint fits and half-lives.", False),
     "sum_spectra":     ("Tartarus", "Sum spectra", "tartarus/sum_spectra.py",
                         "Sum all 1-D spectra of a folder (raw and drift-aligned).", False),
     "correction_plot": ("Tartarus", "2nd-order correction", "tartarus/new_2nd_order_correction_plot.py",
@@ -357,8 +357,6 @@ def tool_card(key):
         "spectrogram": [act("start", "spectrogram", "Open…", "btn primary small",
                             title="Reopens the last session, or the file chooser"),
                         act("stop", "spectrogram", "Stop all")],
-        "decay_fit": [html.Span("Run from the form below, the spectrogram or the Decay fits tab.",
-                                className="note")],
         "levelschemer": [act("start", "levelschemer", "Open", "btn primary small",
                              title="Reopens the last scheme"),
                          act("stop", "levelschemer", "Stop all")],
@@ -380,7 +378,6 @@ def _opts(files, base=None):
 def tool_forms():
     """Small forms for the command-line tools."""
     exp_dir = paths.experiment_dir()
-    spectrograms = sorted(glob.glob(os.path.join(paths.spectrograms(), "*.npz")))
     xlsx = sorted(glob.glob(os.path.join(paths.rionid(), "*.xls*")))
     sheets = sorted(f for ext in ("*.ods", "*.xlsx", "*.xls", "*.csv")
                     for f in glob.glob(os.path.join(exp_dir, ext)))
@@ -388,18 +385,6 @@ def tool_forms():
     ods_default = os.path.join(exp_dir, "Schottky_Uncertainties.ods")
     lbl = lambda t: html.Label(t, className="flabel")
     return {
-        "decay_fit": html.Div([
-            lbl("Spectrogram file"),
-            dcc.Dropdown(id="df-file", options=_opts(spectrograms), clearable=False,
-                         value=spectrograms[0] if spectrograms else None),
-            html.Div([html.Div([lbl("f min (Hz)"), dcc.Input(id="df-fmin", type="number")]),
-                      html.Div([lbl("f max (Hz)"), dcc.Input(id="df-fmax", type="number")])],
-                     className="row2"),
-            lbl("Options"),
-            dcc.Input(id="df-opts", type="text", placeholder="e.g. --bateman --gamma 1.43 --title m199Pt77+ h213",
-                      className="wide"),
-            html.Button("Run fit", id="df-run", className="btn primary small", n_clicks=0),
-        ], className="form"),
         "sum_spectra": html.Div([
             lbl("Input folder"), dcc.Input(id="ss-in", type="text", value=paths.spectra_1d(), className="wide"),
             lbl("Output folder"), dcc.Input(id="ss-out", type="text", value=paths.summed_1d(), className="wide"),
@@ -598,6 +583,9 @@ def header():
         html.Span(className="spacer"),
         html.Button("↻ Refresh", id="refresh", className="btn small", n_clicks=0,
                     title="Re-read files and outputs"),
+        html.Button("⏻ Quit", id="quit", className="btn small quit", n_clicks=0,
+                    title="Stop the home page (tools started from it keep running)"),
+        html.Div(id="quit-done", style={"display": "none"}),
     ])
 
 
@@ -685,6 +673,7 @@ tbody tr:nth-child(even) td{{background:var(--pale)}}
 .modal{{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:1000;align-items:center;justify-content:center}}
 .modal-box{{background:#fff;border-radius:8px;padding:18px 22px;width:520px;border-top:4px solid var(--accent)}}
 .chk input{{width:auto}}
+.btn.quit{{color:#c62828;border-color:#c62828}} .btn.quit:hover{{background:#c62828;color:#fff}}
 """
 
 app = dash.Dash(__name__, title="Asphodel", suppress_callback_exceptions=True)
@@ -740,25 +729,19 @@ def actions(clicks):
 
 @app.callback(
     Output("msg", "children", allow_duplicate=True),
-    Input("df-run", "n_clicks"), Input("ss-run", "n_clicks"), Input("cp-run", "n_clicks"),
+    Input("ss-run", "n_clicks"), Input("cp-run", "n_clicks"),
     Input("if-run", "n_clicks"), Input("ls-run", "n_clicks"),
-    State("df-file", "value"), State("df-fmin", "value"), State("df-fmax", "value"), State("df-opts", "value"),
     State("ss-in", "value"), State("ss-out", "value"),
     State("cp-file", "value"), State("cp-sheet", "value"),
     State("if-file", "value"), State("if-exclude", "value"),
     State("ls-file", "value"),
     prevent_initial_call=True,
 )
-def run_forms(_d, _s, _c, _i, _l, df_file, fmin, fmax, df_opts, ss_in, ss_out,
+def run_forms(_s, _c, _i, _l, ss_in, ss_out,
               cp_file, cp_sheet, if_file, if_ex, ls_file):
     """The 'Run' buttons of the tool forms."""
     t = ctx.triggered_id
     try:
-        if t == "df-run":
-            if not df_file or fmin is None or fmax is None:
-                return "⚠ Decay fit: choose a file and give f min and f max."
-            return start_tool("decay_fit", [df_file, repr(float(fmin)), repr(float(fmax)),
-                                            *shlex.split(df_opts or "")])
         if t == "ss-run":
             if not ss_in or not ss_out:
                 return "⚠ Sum spectra: give the input and output folders."
@@ -861,6 +844,40 @@ def new_experiment(_o, _c, _k, name, data_dir, copy_from):
     except (ValueError, OSError) as exc:
         return shown, f"⚠ {exc}", dash.no_update
     return hidden, "", "/"
+
+
+@app.server.route("/_asphodel_quit", methods=["POST"])
+def _quit_route():
+    """Stop the home page; tools started from it keep running."""
+    print("Quit pressed in the browser: stopping the home page.")
+    threading.Timer(0.5, lambda: os._exit(0)).start()
+    return "stopping"
+
+
+app.clientside_callback(
+    """
+    function(n) {
+        if (!n) return window.dash_clientside.no_update;
+        if (!window.confirm('Quit the Asphodel home page?\\n\\nTools started from it keep running.')) {
+            return window.dash_clientside.no_update;
+        }
+        fetch('_asphodel_quit', {method: 'POST'}).catch(function() {}).then(function() {
+            window.close();
+            // a script can only close tabs it opened itself; otherwise show a message
+            setTimeout(function() {
+                document.body.innerHTML =
+                    '<div style="font-family:sans-serif;padding:60px;text-align:center;">' +
+                    '<h3 style="color:#f57d15">The Asphodel home page has stopped</h3>' +
+                    '<p>You can close this tab. Start it again with <code>python home.py</code>.</p></div>';
+            }, 300);
+        });
+        return 'quit';
+    }
+    """,
+    Output("quit-done", "children"),
+    Input("quit", "n_clicks"),
+    prevent_initial_call=True,
+)
 
 
 def _free_port(preferred):
