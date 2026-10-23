@@ -42,17 +42,22 @@ from matplotlib.transforms import Affine2D, ScaledTranslation
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 
+sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core import paths
+
 APP_NAME = "LevelSchemer"
 HIGHLIGHT = "#f57d15"
 
 
 def settings_path():
-    """Per-user settings file (remembers the last scheme file)."""
-    if os.name == "nt":
-        base = os.environ.get("APPDATA") or os.path.expanduser("~")
-    else:
-        base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
-    return os.path.join(base, "levelschemer", "settings.json")
+    """Settings file (remembers the last scheme file), kept per experiment in
+    data/<experiment>/settings/levelschemer_settings.json."""
+    return paths.settings_file("levelschemer_settings.json")
+
+
+def _dir_or_none(d):
+    """`d` if it is an existing folder, else None (file dialogs then use their default)."""
+    return d if os.path.isdir(d) else None
 
 
 def load_settings():
@@ -2137,7 +2142,8 @@ class App:
     def open_dialog(self):
         if not self._confirm_discard():
             return
-        p = filedialog.askopenfilename(filetypes=[("Level scheme", "*.json"), ("All files", "*")])
+        p = filedialog.askopenfilename(initialdir=_dir_or_none(paths.levelschemes()),
+                                       filetypes=[("Level scheme", "*.json"), ("All files", "*")])
         if p:
             self.open_file(p)
 
@@ -2186,6 +2192,7 @@ class App:
 
     def save_as(self):
         p = filedialog.asksaveasfilename(defaultextension=".json",
+                                         initialdir=_dir_or_none(paths.levelschemes()),
                                          filetypes=[("Level scheme", "*.json")])
         if not p:
             return False
@@ -2198,6 +2205,7 @@ class App:
     def export_figure(self):
         p = filedialog.asksaveasfilename(
             defaultextension=".pdf", initialfile=self._stem() + ".pdf",
+            initialdir=paths.outputs("figures"),
             filetypes=[("PDF", "*.pdf"), ("SVG", "*.svg"), ("EPS", "*.eps"), ("PNG", "*.png")])
         if not p:
             return
@@ -2213,6 +2221,7 @@ class App:
     def export_script(self):
         p = filedialog.asksaveasfilename(defaultextension=".py",
                                          initialfile=self._stem() + "_plot.py",
+                                         initialdir=paths.outputs("figures"),
                                          filetypes=[("Python", "*.py")])
         if not p:
             return
@@ -2243,7 +2252,7 @@ def main():
     if len(sys.argv) > 1:                       # a file given on the command line wins
         App(root, sys.argv[1])
     else:                                       # otherwise reopen the last scheme file
-        last = load_settings().get("last_file")
+        last = paths.remap_legacy(load_settings().get("last_file"))
         App(root, last if last and os.path.isfile(last) else None, reopen=True)
     root.mainloop()
 

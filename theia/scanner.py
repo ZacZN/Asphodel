@@ -16,12 +16,14 @@ Usage
     python scanner.py
 then open  http://127.0.0.1:8052/
 
-Output
+Output  (in the active experiment's data folder, see core/paths.py)
 ------
-    scans/
+    data/<experiment>/outputs/scans/
       index.csv                               one row per run (human readable)
       scan_<YYYYmmdd_HHMMSS>_<hash>.sqlite    one database per run
       scan_<YYYYmmdd_HHMMSS>_<hash>.json      settings used for that run
+    data/<experiment>/outputs/confirmed/      confirmed identifications (*.csv)
+    data/<experiment>/settings/               scanner_config.json, viewer_config.json
 
 <hash> is a hash of the scan settings, so runs with identical settings share
 the same hash.
@@ -74,11 +76,15 @@ from dash import dcc, html, Input, Output, State, ALL, dash_table
 import dash_bootstrap_components as dbc
 
 
-HERE        = os.path.dirname(os.path.abspath(__file__))
-SCANS_DIR   = os.path.join(HERE, "scans")
+import sys
+sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core import paths
+
+SCANS_DIR   = paths.outputs("scans")
 INDEX_PATH  = os.path.join(SCANS_DIR, "index.csv")
-CONFIG_PATH = os.path.join(HERE, "scanner_config.json")
-CONFIRMED_DIR = os.path.join(HERE, "confirmed")
+CONFIG_PATH = paths.settings_file("scanner_config.json")
+CONFIRMED_DIR = paths.outputs("confirmed")
+VIEWER_CONFIG_PATH = paths.settings_file("viewer_config.json")
 ACCENT      = "#f57d15"
 ACCENT_PALE = "#fff4ec"
 
@@ -521,7 +527,7 @@ def list_spectra(directory, pattern="*.npz"):
 
 
 def load_spectrum(directory, name):
-    data = unpack_npz(os.path.join(directory, name))
+    data = unpack_npz(paths.remap_legacy(os.path.join(directory, name)))
     return np.asarray(data["arr_0"], dtype=float), np.asarray(data["arr_1"], dtype=float)
 
 
@@ -566,13 +572,11 @@ def _load_json(path):
         return {}
 
 
-_viewer_cfg = _load_json(os.path.join(HERE, "viewer_config.json"))
-_pf_cfg = _load_json(os.path.join(HERE, "peak_finder_config.json"))
+_viewer_cfg = _load_json(VIEWER_CONFIG_PATH)
 
 DEFAULTS = dict(
     run_label          = "",
-    spectra_dir        = _pf_cfg.get("file_path",
-                         "/home/zn00092/Desktop/1dSpectra/SplitTDMS_Output_2^17_nobaseline/"),
+    spectra_dir        = os.path.join(paths.spectra_1d(), ""),
     file_pattern       = "*.npz",
     ref_name           = _viewer_cfg.get("ref_name", "204Hg79+"),
     ref_frequency      = _viewer_cfg.get("ref_frequency", 411910517),
@@ -1204,14 +1208,16 @@ def list_npz(directory):
 
 
 def _fb_start_dir(path):
-    """Closest existing folder to `path` (else the home folder)."""
+    """Closest existing folder to `path` (else the experiment's data folder)."""
     p = os.path.expanduser((path or "").strip())
     while p and not os.path.isdir(p):
         parent = os.path.dirname(p.rstrip("/"))
         if parent == p:
             break
         p = parent
-    return os.path.abspath(p) if p and os.path.isdir(p) else os.path.expanduser("~")
+    if p and os.path.isdir(p):
+        return os.path.abspath(p)
+    return paths.experiment_dir() if os.path.isdir(paths.experiment_dir()) else os.path.expanduser("~")
 
 
 folder_browser = html.Div([
@@ -2159,7 +2165,7 @@ def v_build_figure(file_path, spectrum_name, ref_name, ref_frequency, ref_harmon
 
 
 VIEWER_DEFAULTS = dict(
-    file_path          = "/home/zn00092/Desktop/1dSpectra/SplitTDMS_Output_2^17_nobaseline/",
+    file_path          = os.path.join(paths.spectra_1d(), ""),
     spectrum_name      = "1129.1.noBKG.npz",
     ref_name           = "204Hg79+",
     ref_frequency      = 411910517,
@@ -2177,7 +2183,6 @@ VIEWER_DEFAULTS = dict(
     corr_c             = 0,
     highlight_ions     = "",
 )
-VIEWER_CONFIG_PATH = os.path.join(HERE, "viewer_config.json")
 VIEWER_KEYS = list(VIEWER_DEFAULTS)
 
 

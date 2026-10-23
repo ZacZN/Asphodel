@@ -10,7 +10,10 @@ Equivalent expanded form:
 
 Usage:
     python new_2nd_order_correction_plot.py [spreadsheet] [sheet name]
+
+The default spreadsheet is data/<experiment>/rionid/186hf_rionid-v8_PID.xlsx.
 """
+import os
 import re
 import sys
 
@@ -18,9 +21,13 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core import paths
+
 plt.rcParams["font.size"] = 2 * plt.rcParams["font.size"]  # all fonts doubled
 
-FILENAME = sys.argv[1] if len(sys.argv) > 1 else "/home/zn00092/Desktop/rionid-v8-186Hf/186hf_rionid-v8_PID.xlsx"
+FILENAME = (sys.argv[1] if len(sys.argv) > 1
+            else os.path.join(paths.rionid(), "186hf_rionid-v8_PID.xlsx"))
 SHEET = sys.argv[2] if len(sys.argv) > 2 else "New2ndOrderCorrection"
 ANCHOR_ION = "208Pb80+"
 COLUMNS = ["Ion", "Harmonic", "f_exp", "f_sim", "f_exp_true", "f_sim_true", "f_diff"]

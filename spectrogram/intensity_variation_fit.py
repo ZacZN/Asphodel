@@ -6,17 +6,25 @@ Works with .ods, .xlsx/.xls or .csv, with or without a header row.
 Reading .ods needs odfpy:  pip install odfpy
 
 Usage:
+    python intensity_variation_fit.py                  # data/<experiment>/Schottky_Uncertainties.ods
     python intensity_variation_fit.py data.ods
     python intensity_variation_fit.py data.ods --exclude 206Pb79+ 208Pb80+
+
+The plot is saved to data/<experiment>/outputs/figures/linear_fit.png.
 
 --exclude takes one or more ion names; each matches any ion whose name
 starts with it (so "206Pb" matches "206Pb79+"). Excluded points are left
 out of the fit and R^2 but still plotted as open grey circles.
 """
 import argparse
+import os
+import sys
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+
+sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core import paths
 
 
 def read_data(path):
@@ -111,13 +119,18 @@ def main(path, exclude=()):
     axr.set_ylabel("Residual")
     axr.grid(alpha=0.3)
 
-    fig.savefig("linear_fit.png", dpi=200, bbox_inches="tight")
+    out = os.path.join(paths.outputs("figures"), "linear_fit.png")
+    fig.savefig(out, dpi=200, bbox_inches="tight")
+    print(f"Saved {out}")
     plt.show()
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Linear fit of sigma vs intensity.")
-    ap.add_argument("file", nargs="?", default="data.ods", help="spreadsheet (.ods/.xlsx/.csv)")
+    ap.add_argument("file", nargs="?",
+                    default=os.path.join(paths.experiment_dir(), "Schottky_Uncertainties.ods"),
+                    help="spreadsheet (.ods/.xlsx/.csv); default: Schottky_Uncertainties.ods "
+                         "in the experiment's data folder")
     ap.add_argument("--exclude", nargs="+", default=[], metavar="ION",
                     help="ion name(s) to leave out of the fit, e.g. 206Pb79+")
     args = ap.parse_args()

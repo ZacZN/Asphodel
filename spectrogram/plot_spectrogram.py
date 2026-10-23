@@ -16,7 +16,7 @@ Session memory
 --------------
   The last loaded file, its frequency crop and the view settings (frequency /
   time sliders, title, dB, time-avg, 1-D overlay, 3-D camera angle) are saved
-  to .asphodel_prefs.json as you change them. Running with no arguments
+  to data/<experiment>/settings/spectrogram_prefs.json as you change them. Running with no arguments
   reopens exactly that view; with nothing saved (or the file gone) it opens
   the file chooser. --linear / --time-avg on a bare run override the saved
   values.
@@ -91,7 +91,9 @@ def slice_freq(freq, power, freq_min, freq_max):
 # ---------------------------------------------------------------------------
 
 _HERE       = os.path.dirname(os.path.abspath(__file__))
-PREFS_PATH  = os.path.join(_HERE, ".asphodel_prefs.json")
+sys.path.insert(1, os.path.dirname(_HERE))
+from core import paths
+PREFS_PATH  = paths.settings_file("spectrogram_prefs.json")
 DECAY_PATH  = os.path.join(_HERE, "decay_fit.py")
 
 
@@ -1269,7 +1271,7 @@ def loader_parts(file_path=None, fmin=None, fmax=None):
     if file_path:
         start_dir = os.path.dirname(os.path.abspath(file_path))
     else:
-        start_dir = prefs.get("lastDir") or os.getcwd()
+        start_dir = prefs.get("lastDir") or paths.spectrograms()
     esc = lambda v: str(v).replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
     html = (LOADER_HTML
             .replace("__PATH__", esc(os.path.abspath(file_path)) if file_path else "")
@@ -2484,7 +2486,7 @@ def load_dataset(path, fmin=None, fmax=None, linear=False, n_avg=1, ion=None):
     If not given, it is kept from the saved session when the same file and
     crop are reloaded (bare re-run, refresh), and dropped otherwise.
     """
-    path = os.path.abspath(os.path.expanduser(path))
+    path = os.path.abspath(os.path.expanduser(paths.remap_legacy(path)))
     if not os.path.isfile(path):
         raise FileNotFoundError(f"file not found — {path}")
     if not ion:
@@ -2610,7 +2612,7 @@ def serve(html, state):
 
             elif url.path == "/list-dir":
                 try:
-                    d = q.get("path", [""])[0].strip() or read_prefs().get("lastDir") or os.getcwd()
+                    d = q.get("path", [""])[0].strip() or read_prefs().get("lastDir") or paths.spectrograms()
                     d = os.path.abspath(os.path.expanduser(d))
                     if os.path.isfile(d):
                         d = os.path.dirname(d)
