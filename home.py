@@ -17,9 +17,10 @@ The suite's launcher and overview, as a Dash app (http://127.0.0.1:8050/):
 
 Usage
 -----
-    python home.py            (opens the browser; Ctrl-C to stop)
+    python home.py            (opens the browser)
 
-Tools started from here keep running when the home page is stopped.
+The Quit button (top right) closes all running tools and the home page, after
+asking. Ctrl-C in the terminal stops only the home page; the tools keep running.
 """
 
 import datetime
@@ -102,11 +103,55 @@ def start_tool(key, args=()):
         return f"{name} is already running."
     exp = paths.experiment()
     env = dict(os.environ, **{paths.ENV_EXPERIMENT: exp})
-    proc = subprocess.Popen([sys.executable, path, *[str(a) for a in args]], cwd=REPO, env=env)
+    # own process group, so Stop/Quit also end what the tool starts itself
+    # (e.g. decay fits opened from the spectrogram), and Ctrl-C in the home
+    # page's terminal does not reach the tools
+    proc = subprocess.Popen([sys.executable, path, *[str(a) for a in args]], cwd=REPO, env=env,
+                            start_new_session=True)
     with _PROCS_LOCK:
         _PROCS.setdefault(key, []).append((proc, exp))
     shown = " ".join(shlex.quote(str(a)) for a in args)
     return f"Started {name} ({exp})" + (f": {shown}" if shown else "") + "."
+
+
+def _terminate(proc):
+    """SIGTERM to the tool's whole process group (the tool and anything it started)."""
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        try:
+            proc.terminate()
+        except ProcessLookupError:
+            pass
+
+
+def running_summary():
+    """Running tools as text lines, for the Quit confirmation."""
+    lines = []
+    for key, t in TOOLS.items():
+        n = len(running(key))
+        if key == "theia":
+            if _port_open(THEIA_PORT):
+                lines.append("Theia" + ("" if n else " (started elsewhere)"))
+        elif n:
+            lines.append(f"{n} × {t[1]}" if n > 1 else t[1])
+    return lines
+
+
+def stop_everything():
+    """Stop every tool started from here, and Theia even if started elsewhere."""
+    with _PROCS_LOCK:
+        procs = [p for lst in _PROCS.values() for p, _ in lst if p.poll() is None]
+    for p in procs:
+        _terminate(p)
+    if _port_open(THEIA_PORT) and not running("theia"):
+        try:
+            import urllib.request
+            urllib.request.urlopen(urllib.request.Request(
+                f"http://127.0.0.1:{THEIA_PORT}/_theia_quit", method="POST"), timeout=2)
+        except Exception:
+            pass
+    return len(procs)
 
 
 def stop_tool(key):
@@ -118,7 +163,7 @@ def stop_tool(key):
             return "Theia was not started from here – use its Quit button."
         return f"{name} is not running."
     for p in procs:
-        p.send_signal(signal.SIGTERM)
+        _terminate(p)
     return f"Stopped {name} ({len(procs)} process{'es' if len(procs) > 1 else ''})."
 
 
@@ -584,7 +629,8 @@ def header():
         html.Button("↻ Refresh", id="refresh", className="btn small", n_clicks=0,
                     title="Re-read files and outputs"),
         html.Button("⏻ Quit", id="quit", className="btn small quit", n_clicks=0,
-                    title="Stop the home page (tools started from it keep running)"),
+                    title="Close all tools and the home page (asks first)"),
+        dcc.Store(id="quit-info"),
         html.Div(id="quit-done", style={"display": "none"}),
     ])
 
@@ -846,36 +892,53 @@ def new_experiment(_o, _c, _k, name, data_dir, copy_from):
     return hidden, "", "/"
 
 
+@app.callback(
+    Output("quit-info", "data"),
+    Input("quit", "n_clicks"),
+    prevent_initial_call=True,
+)
+def quit_info(n):
+    """Quit pressed: hand the list of running tools to the confirmation dialog."""
+    return {"n": n, "tools": running_summary()}
+
+
 @app.server.route("/_asphodel_quit", methods=["POST"])
 def _quit_route():
-    """Stop the home page; tools started from it keep running."""
-    print("Quit pressed in the browser: stopping the home page.")
-    threading.Timer(0.5, lambda: os._exit(0)).start()
+    """Close all tools, then stop the home page."""
+    n = stop_everything()
+    print(f"Quit pressed in the browser: closed {n} tool process(es), stopping the home page.")
+    threading.Timer(1.0, lambda: os._exit(0)).start()
     return "stopping"
 
 
 app.clientside_callback(
-    """
-    function(n) {
-        if (!n) return window.dash_clientside.no_update;
-        if (!window.confirm('Quit the Asphodel home page?\\n\\nTools started from it keep running.')) {
-            return window.dash_clientside.no_update;
+    r"""
+    function(info) {
+        if (!info) return window.dash_clientside.no_update;
+        var msg = 'Quit Asphodel?\n\n';
+        if (info.tools && info.tools.length) {
+            msg += 'This also closes all running tools:\n  • ' + info.tools.join('\n  • ') +
+                   '\n\nSave your work in them first (unsaved changes are lost).';
+        } else {
+            msg += 'No tools are running.';
         }
+        if (!window.confirm(msg)) return window.dash_clientside.no_update;
         fetch('_asphodel_quit', {method: 'POST'}).catch(function() {}).then(function() {
             window.close();
             // a script can only close tabs it opened itself; otherwise show a message
             setTimeout(function() {
                 document.body.innerHTML =
                     '<div style="font-family:sans-serif;padding:60px;text-align:center;">' +
-                    '<h3 style="color:#f57d15">The Asphodel home page has stopped</h3>' +
-                    '<p>You can close this tab. Start it again with <code>python home.py</code>.</p></div>';
+                    '<h3 style="color:#f57d15">Asphodel has stopped</h3>' +
+                    '<p>All tools are closed. You can close this tab; start again with ' +
+                    '<code>python home.py</code>.</p></div>';
             }, 300);
         });
         return 'quit';
     }
     """,
     Output("quit-done", "children"),
-    Input("quit", "n_clicks"),
+    Input("quit-info", "data"),
     prevent_initial_call=True,
 )
 
@@ -893,6 +956,6 @@ if __name__ == "__main__":
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
     port = _free_port(HOME_PORT)
     url = f"http://127.0.0.1:{port}/"
-    print(f"Asphodel home page at {url}  (Ctrl-C to stop; tools started from here keep running)")
+    print(f"Asphodel home page at {url}  (Quit button: closes everything; Ctrl-C: home page only)")
     threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     app.run(debug=False, host="127.0.0.1", port=port)

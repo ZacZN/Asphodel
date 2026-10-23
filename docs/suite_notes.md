@@ -126,7 +126,7 @@ Notes:
 - Sections: Theia (theia/theia.py, renamed from scanner.py), Spectrogram (plot_spectrogram.py, decay_fit.py), Tartarus (sum_spectra.py, new_2nd_order_correction_plot.py, intensity_variation_fit.py moved here), Elysium (levelschemer.py).
 - Contents: experiment switcher + new experiment, tool cards with status and small forms, data-file table with "open with", outputs tabs (scan runs, confirmed IDs, decay fits with Re-run/Spectrogram, figures), shared physics editor with the tool overrides, NUBASE info, notes (`<data_dir>/notes.md`). Left out for now: resume-last-session bar, activity log, diffing scan runs.
 - Experiment profiles (`core/paths.py`): `data/asphodel_settings.json` holds `experiment` and `profiles` {name: {data_dir}}; a profile's data folder can be anywhere; a folder in data/ without an entry is also a profile.
-- Decay fit has no card (Zac): it is started from the spectrogram or re-run from the Decay fits tab. A ⏻ Quit button in the header stops the home page; tools started from it keep running.
+- Decay fit has no card (Zac): it is started from the spectrogram or re-run from the Decay fits tab. The ⏻ Quit button lists the running tools, asks for confirmation (save your work first), then closes all of them (each tool runs in its own process group, so decay fits opened from a spectrogram close too; Theia is closed even if started elsewhere) and the home page. Ctrl-C in the terminal stops only the home page.
 - "Open with Viewer / Scan in Theia" works through the settings files (viewer_config.json file_path/spectrum_name, scanner_config.json spectra_dir), then reload the Theia page.
 
 ## Things that will break and need fixing
