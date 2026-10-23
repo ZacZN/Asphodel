@@ -78,6 +78,7 @@ from scipy.signal import find_peaks, peak_widths
 import plotly.graph_objects as go
 
 import dash
+from dash.exceptions import PreventUpdate
 from dash import dcc, html, Input, Output, State, ALL, dash_table
 import dash_bootstrap_components as dbc
 
@@ -1389,20 +1390,45 @@ FIT_PANEL_HIDDEN = {**FIT_PANEL_SHOWN, "display": "none"}
 SHAPE_LABELS = {"gauss": "Gaussian", "lorentz": "Lorentzian", "pvoigt": "Pseudo-Voigt"}
 
 
+# fix toggles: click the cell to switch between free (☐) and fixed (☑)
+FIX_OFF, FIX_ON = "☐", "☑"
+FIX_PARAMS = ("centre", "amp", "fwhm", "eta")
+# per-peak limits for the fit (blank = default: centre within the fit region,
+# FWHM between 0.05 bins and the region width)
+LIMIT_KEYS = ("centre_min", "centre_max", "fwhm_min", "fwhm_max")
+
 FIT_COLUMNS = [
     {"name": "peak", "id": "peak", "editable": False},
     {"name": "shape", "id": "shape", "presentation": "dropdown", "editable": True},
     {"name": "centre (Hz)", "id": "centre", "type": "numeric", "editable": True},
     {"name": "± centre", "id": "d_centre", "editable": False},
+    {"name": "fix", "id": "fix_centre", "editable": False},
+    {"name": "centre min", "id": "centre_min", "type": "numeric", "editable": True},
+    {"name": "centre max", "id": "centre_max", "type": "numeric", "editable": True},
     {"name": "amplitude", "id": "amp", "type": "numeric", "editable": True},
     {"name": "± amp", "id": "d_amp", "editable": False},
+    {"name": "fix", "id": "fix_amp", "editable": False},
     {"name": "FWHM (Hz)", "id": "fwhm", "type": "numeric", "editable": True},
     {"name": "± FWHM", "id": "d_fwhm", "editable": False},
+    {"name": "fix", "id": "fix_fwhm", "editable": False},
+    {"name": "FWHM min", "id": "fwhm_min", "type": "numeric", "editable": True},
+    {"name": "FWHM max", "id": "fwhm_max", "type": "numeric", "editable": True},
     {"name": "η (Lorentz fraction)", "id": "eta", "type": "numeric", "editable": True},
     {"name": "± η", "id": "d_eta", "editable": False},
+    {"name": "fix", "id": "fix_eta", "editable": False},
     {"name": "area", "id": "area", "editable": False},
     {"name": "± area", "id": "d_area", "editable": False},
 ]
+
+
+def fit_columns(pv, limits):
+    """Table columns: η only with a pseudo-Voigt peak, limits only when shown."""
+    drop = set()
+    if not pv:
+        drop |= {"eta", "d_eta", "fix_eta"}
+    if not limits:
+        drop |= set(LIMIT_KEYS)
+    return [c for c in FIT_COLUMNS if c["id"] not in drop]
 
 
 # Further output: reads files saved by confirmation mode (confirmed/*.csv) for
@@ -1434,9 +1460,13 @@ INFO_TEXTS = {
     ]),
     "fit": ("Peak fitting", [
         "Switch it on and click a peak to add it (the start values snap to the nearest maximum).",
-        "Edit any value in the table to adjust the curve by hand, or press Fit to fit over the "
-        "current view.  Delete a row to remove a peak.",
-        "Drag a peak's centre (the × marker, cursor ↔) sideways to move it.",
+        "Edit any value in the table to adjust the curve by hand, or press Fit.  Delete a row to "
+        "remove a peak.",
+        "The fit region is set by the two orange lines (set from the view when the first peak is "
+        "added).  Drag a line, type the limits, or press 'Region = view'.",
+        "Drag a peak's × marker to move its centre and amplitude together (cursor ✥); drag below "
+        "the marker to move the centre only (cursor ↔); drag a ◆ handle at half height to change "
+        "the FWHM.",
         "Each peak has its own line shape (shape column); 'Shape for new peaks' sets the shape of "
         "peaks added from then on.",
         "χ²/ndf uses a noise σ per bin estimated from the summed spectrum; uncertainties are "
@@ -1459,6 +1489,10 @@ INFO_TEXTS = {
         "(Lorentzian fraction) can be edited; the curve is redrawn straight away.",
         "± columns are the 1σ uncertainties from the last Fit (cleared when you change anything "
         "by hand).",
+        "Click a 'fix' cell (☐ / ☑) to hold that parameter at its value during the Fit; fixed "
+        "parameters show 'fixed' instead of an uncertainty.  b0 / b1 have their own fix boxes.",
+        "Tick 'limit columns' to set a min / max for each peak's centre and FWHM (blank = no "
+        "extra limit).  Centre limits are drawn as a grey band.",
         "Background = b0 + b1·(f − f_mid), where f_mid is the centre of the fit region.",
     ]),
 }
@@ -1714,9 +1748,24 @@ align_fit_tab = html.Div([
                                labelStyle={"marginRight": "10px", "fontSize": "13px"}),
             ], style={"display": "flex", "alignItems": "center", "marginBottom": "8px"}),
             html.Div([
+                html.Span("Fit region (Hz):", style={**LABEL_STYLE, "margin": "0 6px 0 0",
+                                                     "minWidth": "135px"}),
+                dcc.Input(id="fit-region-lo", type="number", step="any", debounce=True,
+                          className="form-control form-control-sm",
+                          style={"width": "170px", "marginRight": "4px"}),
+                html.Span("–", style={"margin": "0 4px"}),
+                dcc.Input(id="fit-region-hi", type="number", step="any", debounce=True,
+                          className="form-control form-control-sm",
+                          style={"width": "170px", "marginRight": "8px"}),
+                html.Button("Region = view", id="btn-fit-region-view",
+                            className="btn btn-outline-secondary btn-sm",
+                            title="Set the fit region to the current zoom range (you can also "
+                                  "drag the two orange lines in the plot)"),
+            ], style={"display": "flex", "alignItems": "center", "marginBottom": "8px"}),
+            html.Div([
                 html.Button("Fit", id="btn-fit-run", className="btn btn-sm",
-                            title="Least-squares fit over the current view, starting from the "
-                                  "values in the table",
+                            title="Least-squares fit over the fit region (orange lines), "
+                                  "starting from the values in the table",
                             style={"backgroundColor": ACCENT, "color": "white",
                                    "marginRight": "8px", "minWidth": "70px"}),
                 html.Button("Clear peaks", id="btn-fit-clear",
@@ -1725,12 +1774,17 @@ align_fit_tab = html.Div([
             html.Div(id="fit-status", style={"fontSize": "12px"}),
         ]),
             html.Div([
-                html.Div(["Fit parameters", info_button("params", {"marginLeft": "6px"})],
-                         style={"fontWeight": "700", "fontSize": "13px",
-                                                  "margin": "6px 0 4px 0"}),
+                html.Div(["Fit parameters", info_button("params", {"marginLeft": "6px"}),
+                          dcc.Checklist(id="fit-show-limits", value=[],
+                                        options=[{"label": "limit columns", "value": "on"}],
+                                        inputStyle={"marginRight": "4px"},
+                                        labelStyle={"fontSize": "12px", "fontWeight": "400"},
+                                        style={"marginLeft": "16px"})],
+                         style={"fontWeight": "700", "fontSize": "13px", "display": "flex",
+                                "alignItems": "center", "margin": "6px 0 4px 0"}),
                 dash_table.DataTable(
                     id="fit-table", data=[], editable=True, row_deletable=True,
-                    columns=FIT_COLUMNS,
+                    columns=fit_columns(False, False),
                     dropdown={"shape": {"clearable": False, "options": [
                         {"label": v, "value": k} for k, v in SHAPE_LABELS.items()]}},
                     # compact, so the table fits beside the energy box
@@ -1740,6 +1794,15 @@ align_fit_tab = html.Div([
                                 "fontSize": "11px"},
                     style_data_conditional=TABLE_ODD + [
                         {"if": {"column_editable": False}, "color": "#666"},
+                        # fix toggles: clickable, fixed values tinted
+                        *[{"if": {"column_id": f"fix_{k}"}, "cursor": "pointer",
+                           "textAlign": "center", "color": "#222", "fontSize": "13px"}
+                          for k in FIX_PARAMS],
+                        *[{"if": {"column_id": k, "filter_query": f'{{fix_{k}}} = "{FIX_ON}"'},
+                           "backgroundColor": ACCENT_PALE, "fontWeight": "600"}
+                          for k in FIX_PARAMS],
+                        *[{"if": {"column_id": k}, "backgroundColor": "#f9f9f9"}
+                          for k in LIMIT_KEYS],
                         # eta only applies to pseudo-Voigt peaks
                         {"if": {"column_id": "eta", "filter_query": '{shape} != "pvoigt"'},
                          "color": "transparent", "backgroundColor": "#f2f2f2"}],
@@ -1761,13 +1824,19 @@ align_fit_tab = html.Div([
                     dcc.Input(id="fit-b0", type="number", step="any", debounce=True,
                               className="form-control form-control-sm",
                               style={"width": "120px", "marginRight": "4px"}),
-                    html.Span(id="fit-b0-unc", style={"fontSize": "12px", "marginRight": "16px",
+                    html.Span(id="fit-b0-unc", style={"fontSize": "12px", "marginRight": "6px",
                                                       "fontFamily": "monospace"}),
                     html.Span("b1 (per Hz)", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
                     dcc.Input(id="fit-b1", type="number", step="any", debounce=True,
                               className="form-control form-control-sm",
                               style={"width": "120px", "marginRight": "4px"}),
-                    html.Span(id="fit-b1-unc", style={"fontSize": "12px", "fontFamily": "monospace"}),
+                    html.Span(id="fit-b1-unc", style={"fontSize": "12px", "marginRight": "16px",
+                                                      "fontFamily": "monospace"}),
+                    dcc.Checklist(id="fit-bg-fix", value=[], inline=True,
+                                  options=[{"label": "fix b0", "value": "b0"},
+                                           {"label": "fix b1", "value": "b1"}],
+                                  inputStyle={"marginRight": "4px"},
+                                  labelStyle={"marginRight": "10px", "fontSize": "12px"}),
                 ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap",
                           "marginTop": "6px"}),
             ], id="fit-panel", style=FIT_PANEL_HIDDEN),
@@ -1787,6 +1856,7 @@ align_fit_tab = html.Div([
         dcc.Store(id="fit-click", data=None),
         dcc.Store(id="fit-drag", data=None),
         dcc.Store(id="fit-run", data=None),
+        dcc.Store(id="fit-region-set", data=None),
         dcc.Store(id="fit-state", data=None),
         html.Div(id="_fit-mode-hook", style={"display": "none"}),
         html.Div(id="_sum-sims-hook", style={"display": "none"}),
@@ -2125,6 +2195,8 @@ body.dark .theia-calib-table { border-color: #6a6a6a !important; }
 _FIT_CSS = """
 #sum-graph.fit-mode .nsewdrag { cursor: crosshair !important; }
 #sum-graph.fit-grab .nsewdrag { cursor: ew-resize !important; }
+#sum-graph.fit-grab-move .nsewdrag { cursor: move !important; }
+#sum-graph.fit-grab-region .nsewdrag { cursor: col-resize !important; }
 """
 
 _DARK_CSS = """
@@ -3572,7 +3644,12 @@ FIT_TRACE_STYLES = [
     dict(name="fit peaks", mode="markers+text", textposition="top center",
          textfont=dict(color=ACCENT, size=15, family="Arial Black, Arial, sans-serif"),
          marker=dict(symbol="x-thin", size=12, color=ACCENT, line=dict(width=2.5, color=ACCENT))),
+    # FWHM handles: one at each half-height point of every peak (draggable)
+    dict(name="fit width handles", mode="markers",
+         marker=dict(symbol="diamond", size=8, color="white", line=dict(width=1.5, color=ACCENT))),
 ]
+FIT_PEAKS_INDEX = 4          # trace index of "fit peaks" (trace 0 is the spectrum)
+SHAPE_CODES = {"gauss": 0, "lorentz": 1, "pvoigt": 2}     # for the drag preview in the browser
 
 
 def _fit_into_patch(patch, fit_state, cached):
@@ -3582,7 +3659,13 @@ def _fit_into_patch(patch, fit_state, cached):
         patch["data"][i]["y"] = y
     # peak numbers (as in the table) next to the markers
     n = len((fit_state or {}).get("peaks") or [])
-    patch["data"][len(FIT_TRACE_STYLES)]["text"] = [str(k) for k in range(1, n + 1)]
+    patch["data"][FIT_PEAKS_INDEX]["text"] = [str(k) for k in range(1, n + 1)]
+    # peak parameters for the drag preview: centre, amp, fwhm, eta, shape code
+    peaks = (fit_state or {}).get("peaks") or []
+    shapes = _shapes(fit_state) if peaks else []
+    patch["data"][FIT_PEAKS_INDEX]["customdata"] = [
+        [pk["centre"], pk["amp"], pk["fwhm"], pk.get("eta", 0.5), SHAPE_CODES.get(sh, 0)]
+        for pk, sh in zip(peaks, shapes)]
 
 
 @app.callback(
@@ -3821,10 +3904,18 @@ def fit_overlay(ff, state):
         cy += (comp + back).tolist() + [None]
     mx = [pk["centre"] for pk in state["peaks"]]
     my = [float(np.interp(c, x, total)) for c in mx]
+    # FWHM handles at the half-height points of each component (on its curve)
+    hx, hy = [], []
+    for pk in state["peaks"]:
+        for side in (-1, 1):
+            xh = pk["centre"] + side * 0.5 * pk["fwhm"]
+            hx.append(xh)
+            hy.append(float(np.interp(xh, x, back)) + 0.5 * pk["amp"])
     return [(x.tolist(), total.tolist()),
             (cx, cy),
             (x.tolist(), back.tolist()) if nb else ([], []),
-            (mx, my)]
+            (mx, my),
+            (hx, hy)]
 
 
 def _region_mask(ff, region):
@@ -3839,48 +3930,88 @@ def run_fit(ff, pp, sigma, state):
     m = _region_mask(ff, state["region"]) & np.isfinite(pp)
     u, y = ff[m] - state["xref"], pp[m]
     p0, names = _pack(state)
-    if len(u) <= len(p0):
-        raise ValueError(f"Only {len(u)} bins in the view for {len(p0)} parameters: zoom out a little")
     lo_u, hi_u = float(u.min()), float(u.max())
     bin_hz = float(np.median(np.diff(ff[m])))
+    xref = state["xref"]
     lb, ub = [], []
     cb = state.get("centre_bounds")             # optional per-peak centre limits (Hz)
+    fb = state.get("fwhm_bounds")
+
+    def _lim(pk, key):
+        v = (pk.get("lim") or {}).get(key)
+        return None if v is None or not np.isfinite(v) else float(v)
     for (i, what) in names:
-        if what == "centre" and cb and cb[i]:
-            lb.append(max(lo_u, cb[i][0] - state["xref"])); ub.append(min(hi_u, cb[i][1] - state["xref"]))
-        elif what == "centre":
-            lb.append(lo_u); ub.append(hi_u)
+        pk = state["peaks"][i] if i is not None else {}
+        if what == "centre":
+            lo, hi = lo_u, hi_u
+            if cb and cb[i]:
+                lo, hi = max(lo, cb[i][0] - xref), min(hi, cb[i][1] - xref)
+            if _lim(pk, "centre_min") is not None:
+                lo = max(lo, _lim(pk, "centre_min") - xref)
+            if _lim(pk, "centre_max") is not None:
+                hi = min(hi, _lim(pk, "centre_max") - xref)
+            if not lo < hi:
+                raise ValueError(f"peak {i + 1}: the centre limits do not overlap the fit region")
+            lb.append(lo); ub.append(hi)
         elif what == "amp":
             lb.append(0.0); ub.append(np.inf)
-        elif what == "fwhm" and state.get("fwhm_bounds") and state["fwhm_bounds"][i]:
-            lb.append(state["fwhm_bounds"][i][0]); ub.append(state["fwhm_bounds"][i][1])
         elif what == "fwhm":
-            lb.append(0.05 * bin_hz); ub.append(max(hi_u - lo_u, bin_hz))
+            lo, hi = 0.05 * bin_hz, max(hi_u - lo_u, bin_hz)
+            if fb and fb[i]:
+                lo, hi = fb[i]
+            if _lim(pk, "fwhm_min") is not None:
+                lo = max(_lim(pk, "fwhm_min"), 1e-9)
+            if _lim(pk, "fwhm_max") is not None:
+                hi = _lim(pk, "fwhm_max")
+            if not lo < hi:
+                raise ValueError(f"peak {i + 1}: FWHM min must be below FWHM max")
+            lb.append(lo); ub.append(hi)
         elif what == "eta":
             lb.append(0.0); ub.append(1.0)
         else:
             lb.append(-np.inf); ub.append(np.inf)
     lb, ub = np.array(lb), np.array(ub)
-    for q in range(len(p0)):                      # start strictly inside the bounds
+
+    # fixed parameters are left out of the fit (held at their current value)
+    bg_fix = set(state.get("bg_fix") or [])
+    free = np.array([(what not in bg_fix) if i is None
+                     else (what not in (state["peaks"][i].get("fix") or []))
+                     for (i, what) in names], dtype=bool)
+    n_free = int(free.sum())
+    if n_free == 0:
+        raise ValueError("every parameter is fixed: free at least one")
+    if len(u) <= n_free:
+        raise ValueError(f"Only {len(u)} bins in the fit region for {n_free} free parameters")
+    for q in np.flatnonzero(free):                # start strictly inside the bounds
         if not (lb[q] < p0[q] < ub[q]):
             span = (ub[q] - lb[q]) if np.isfinite(ub[q] - lb[q]) else max(abs(p0[q]), 1.0)
             p0[q] = min(max(p0[q], lb[q] + 1e-6 * span), ub[q] - 1e-6 * span)
     shapes, bg = _shapes(state), state["bg"]
     n_peaks = len(shapes)
+    p_all = p0.copy()
 
-    def f(uu, *p):
-        return _model_from_vector(uu, np.array(p), shapes, bg)
+    def full(pf):
+        p = p_all.copy()
+        p[free] = pf
+        return p
+
+    def f_free(uu, *pf):
+        return _model_from_vector(uu, full(np.array(pf)), shapes, bg)
 
     # absolute_sigma=False: the covariance is scaled by chi2/ndf, i.e. the
     # uncertainties are scaled by sqrt(chi2/ndf).  The noise sigma is only a
     # rough estimate (and real peaks are not perfect line shapes), so this
     # lets the scatter of the data about the fit set the uncertainties.
-    popt, pcov = curve_fit(f, u, y, p0=p0, sigma=np.full(len(u), sigma), absolute_sigma=False,
-                           bounds=(lb, ub), maxfev=20000)
-    ok_cov = np.all(np.isfinite(pcov))
+    popt_f, pcov_f = curve_fit(f_free, u, y, p0=p0[free], sigma=np.full(len(u), sigma),
+                               absolute_sigma=False, bounds=(lb[free], ub[free]), maxfev=20000)
+    popt = full(popt_f)
+    pcov = np.zeros((len(p0), len(p0)))
+    pcov[np.ix_(free, free)] = pcov_f
+    ok_cov = np.all(np.isfinite(pcov_f))
     perr = np.sqrt(np.clip(np.diag(pcov), 0, None)) if ok_cov else np.full(len(popt), np.nan)
-    resid = y - f(u, *popt)
-    ndf = max(len(u) - len(popt), 1)
+    perr[~free] = 0.0
+    resid = y - _model_from_vector(u, popt, shapes, bg)
+    ndf = max(len(u) - n_free, 1)
 
     new = dict(state)
     new["peaks"] = [dict(pk) for pk in state["peaks"]]
@@ -3950,17 +4081,46 @@ def fit_table_rows(state):
     rows = []
     for i, (pk, e, shape) in enumerate(zip(state["peaks"], unc, _shapes(state)), start=1):
         pv = shape == "pvoigt"
+        fix = set(pk.get("fix") or [])
+        lim = pk.get("lim") or {}
+
+        def err(key, fmt):
+            return "fixed" if key in fix else _fmt_num(e.get(key), fmt)
         area = _peak_area(pk["amp"], pk["fwhm"], pk.get("eta", 0.5), shape)
         rows.append({
             "peak": i, "shape": shape,
-            "centre": round(pk["centre"], 2), "d_centre": _fmt_num(e.get("centre"), ".2f"),
-            "amp": float(f"{pk['amp']:.6g}"), "d_amp": _fmt_num(e.get("amp"), ".3g"),
-            "fwhm": round(pk["fwhm"], 2), "d_fwhm": _fmt_num(e.get("fwhm"), ".2f"),
+            "centre": round(pk["centre"], 2), "d_centre": err("centre", ".2f"),
+            "amp": float(f"{pk['amp']:.6g}"), "d_amp": err("amp", ".3g"),
+            "fwhm": round(pk["fwhm"], 2), "d_fwhm": err("fwhm", ".2f"),
             "eta": round(pk.get("eta", 0.5), 4) if pv else None,
-            "d_eta": _fmt_num(e.get("eta"), ".3f") if pv else "",
+            "d_eta": err("eta", ".3f") if pv else "",
             "area": _fmt_num(area, ".5g"), "d_area": _fmt_num(e.get("area"), ".3g"),
+            **{f"fix_{k}": (FIX_ON if k in fix else FIX_OFF) if (k != "eta" or pv) else ""
+               for k in FIX_PARAMS},
+            **{k: lim.get(k) for k in LIMIT_KEYS},
         })
     return rows
+
+
+def _set_region(state, region):
+    """New fit region [lo, hi]; xref moves to its middle (a linear background
+    keeps the same line)."""
+    lo, hi = sorted(float(v) for v in region)
+    if not hi > lo:
+        raise ValueError("the fit region needs min < max")
+    old_ref = state.get("xref") or 0.5 * (lo + hi)
+    state["region"], state["xref"] = [lo, hi], 0.5 * (lo + hi)
+    if _n_bg(state["bg"]) == 2:
+        state["bgp"][0] += state["bgp"][1] * (state["xref"] - old_ref)
+    return state
+
+
+def _num_or_none(v):
+    try:
+        v = float(v)
+        return v if np.isfinite(v) else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _fit_status(state):
@@ -4026,87 +4186,175 @@ app.clientside_callback(
             gd.addEventListener('mousedown', function(e) {
                 down = [e.clientX, e.clientY]; window._theiaSkipClick = false; }, true);
 
-            // ---- drag a fitted peak sideways to move its centre ----------
-            // Grabbing within a few pixels of a peak's centre (the x marker)
-            // starts a drag instead of a pan.  While dragging, the peak's
-            // curve is shifted in the browser; on release the new centre is
-            // sent to the server (fit-drag store).
+            // ---- drag on the fit overlay ---------------------------------
+            //  * x marker of a peak: move centre + amplitude (cursor: move)
+            //  * below the marker (the peak's column): centre only (cursor: <->)
+            //  * diamond handle at half height: FWHM (cursor: <->)
+            //  * orange region line: fit region edge (cursor: col-resize)
+            // The curve is redrawn in the browser while dragging (from the peak
+            // parameters in the marker trace's customdata); on release the new
+            // values go to the server (fit-drag / fit-region-set stores).
             function traceIdx(name) {
                 for (var i = 0; i < gd.data.length; i++) if (gd.data[i].name === name) return i;
                 return -1;
             }
-            function hitPeak(e) {
-                var L = gd._fullLayout, ip = traceIdx('fit peaks');
-                if (!L || !L.xaxis || ip < 0) return -1;
-                var mx = gd.data[ip].x || [], my = gd.data[ip].y || [];
+            function shapeIdx(name) {
+                var S = (gd.layout && gd.layout.shapes) || [];
+                for (var i = 0; i < S.length; i++) if (S[i] && S[i].name === name) return i;
+                return -1;
+            }
+            function profile(code, u, w, eta) {
+                w = Math.max(Math.abs(w), 1e-9);
+                var s = w / (2 * Math.sqrt(2 * Math.LN2));
+                var g = Math.exp(-0.5 * (u / s) * (u / s));
+                var l = 1 / (1 + (2 * u / w) * (2 * u / w));
+                if (code === 0) return g;
+                if (code === 1) return l;
+                eta = Math.min(Math.max(eta, 0), 1);
+                return eta * l + (1 - eta) * g;
+            }
+            function interp(X, Y, x) {
+                var n = X.length;
+                if (!n) return 0;
+                if (x <= X[0]) return Y[0];
+                if (x >= X[n - 1]) return Y[n - 1];
+                var f = (x - X[0]) / (X[n - 1] - X[0]) * (n - 1), i = Math.floor(f), w = f - i;
+                return Y[i] * (1 - w) + Y[Math.min(i + 1, n - 1)] * w;
+            }
+            function pos(e) {
+                var L = gd._fullLayout;
+                if (!L || !L.xaxis || !L.yaxis) return null;
                 var r = gd.getBoundingClientRect();
                 var px = e.clientX - r.left - L.xaxis._offset;
                 var py = e.clientY - r.top - L.yaxis._offset;
-                if (px < 0 || px > L.xaxis._length || py < 0 || py > L.yaxis._length) return -1;
-                var best = -1, bestd = 9;
-                for (var k = 0; k < mx.length; k++) {
-                    var d = Math.abs(L.xaxis.d2p(mx[k]) - px);
-                    var top = L.yaxis.d2p(my[k]);
-                    if (d < bestd && py >= top - 15) { best = k; bestd = d; }
+                if (px < 0 || px > L.xaxis._length || py < 0 || py > L.yaxis._length) return null;
+                return {px: px, py: py, L: L};
+            }
+            function hit(e) {
+                var p = pos(e);
+                if (!p) return null;
+                var L = p.L, ih = traceIdx('fit width handles'), ip = traceIdx('fit peaks');
+                if (ih >= 0) {
+                    var hx = gd.data[ih].x || [], hy = gd.data[ih].y || [];
+                    for (var j = 0; j < hx.length; j++)
+                        if (Math.abs(L.xaxis.d2p(hx[j]) - p.px) < 7 &&
+                            Math.abs(L.yaxis.d2p(hy[j]) - p.py) < 7)
+                            return {kind: 'width', k: Math.floor(j / 2), side: (j % 2) ? 1 : -1};
                 }
-                return best;
+                if (ip >= 0) {
+                    var mx = gd.data[ip].x || [], my = gd.data[ip].y || [];
+                    var best = -1, bestd = 9, onTop = false;
+                    for (var k = 0; k < mx.length; k++) {
+                        var d = Math.abs(L.xaxis.d2p(mx[k]) - p.px), top = L.yaxis.d2p(my[k]);
+                        if (d < bestd && p.py >= top - 15) {
+                            best = k; bestd = d; onTop = Math.abs(p.py - top) < 11; }
+                    }
+                    if (best >= 0) return {kind: onTop ? 'move' : 'centre', k: best};
+                }
+                var names = ['fit-region-lo', 'fit-region-hi'];
+                for (var q = 0; q < 2; q++) {
+                    var si = shapeIdx(names[q]);
+                    if (si >= 0 && Math.abs(L.xaxis.d2p(gd.layout.shapes[si].x0) - p.px) < 6)
+                        return {kind: 'region', which: q};
+                }
+                return null;
             }
             var drag = null;
             gd.addEventListener('mousedown', function(e) {
                 if (e.button !== 0) return;
-                var k = hitPeak(e);
-                if (k < 0) return;
+                var h = hit(e);
+                if (!h) return;
                 e.stopPropagation(); e.preventDefault();      // no pan
+                window._theiaSkipClick = true;
+                if (h.kind === 'region') {
+                    drag = {kind: 'region', which: h.which, x0: e.clientX, y0: e.clientY,
+                            lo: gd.layout.shapes[shapeIdx('fit-region-lo')].x0,
+                            hi: gd.layout.shapes[shapeIdx('fit-region-hi')].x0};
+                    return;
+                }
                 var it = traceIdx('fit'), ic = traceIdx('fit components'),
-                    ib = traceIdx('fit background'), ip = traceIdx('fit peaks');
+                    ib = traceIdx('fit background'), ip = traceIdx('fit peaks'),
+                    ih = traceIdx('fit width handles');
                 var X = (gd.data[it].x || []).map(Number), T = (gd.data[it].y || []).map(Number);
-                var n = X.length;
-                var cx = gd.data[ic].x, cy = gd.data[ic].y;
-                var seg = k * (n + 1);                            // segments split by null
+                var n = X.length, k = h.k;
+                var cy = gd.data[ic].y, seg = k * (n + 1);       // segments split by null
                 var B = (gd.data[ib].x && gd.data[ib].x.length) ? gd.data[ib].y.map(Number)
                                                                : X.map(function() { return 0; });
                 var C = [];
                 for (var j = 0; j < n; j++) C.push(Number(cy[seg + j]) - B[j]);
-                drag = {k: k, x0: e.clientX, X: X, T: T, C: C, B: B, seg: seg, n: n,
-                        it: it, ic: ic, ip: ip, cx: cx.slice(), cy: cy.slice(),
-                        mx: gd.data[ip].x.slice(), my: gd.data[ip].y.slice(), dx: 0};
-                window._theiaSkipClick = true;
+                var par = (gd.data[ip].customdata || [])[k];
+                if (!par) { drag = null; return; }
+                drag = {kind: h.kind, side: h.side, k: k, x0: e.clientX, y0: e.clientY,
+                        X: X, T: T, C: C, B: B, seg: seg, n: n, it: it, ic: ic, ip: ip, ih: ih,
+                        cx: gd.data[ic].x.slice(), cy: cy.slice(),
+                        mx: gd.data[ip].x.slice(), my: gd.data[ip].y.slice(),
+                        hx: gd.data[ih].x.slice(), hy: gd.data[ih].y.slice(),
+                        c0: Number(par[0]), a0: Number(par[1]), w0: Number(par[2]),
+                        eta: Number(par[3]), code: Number(par[4])};
+                drag.c = drag.c0; drag.a = drag.a0; drag.w = drag.w0;
             }, true);
             // redraw at most once per animation frame while dragging
-            var pendingX = null;
+            var pending = null;
             document.addEventListener('mousemove', function(e) {
                 if (!drag) return;
-                var first = (pendingX === null);
-                pendingX = e.clientX;
+                var first = (pending === null);
+                pending = [e.clientX, e.clientY];
                 if (first) requestAnimationFrame(function() {
-                    var cxp = pendingX; pendingX = null;
-                    if (drag) dragTo(cxp);
+                    var q = pending; pending = null;
+                    if (drag) dragTo(drag, q[0], q[1]);
                 });
             });
-            function dragTo(clientX) {
+            function deltas(d, clientX, clientY, xRef, yRef) {
+                // pixel offsets -> data offsets, measured from a reference point
                 var L = gd._fullLayout;
-                var dx = L.xaxis.p2d(L.xaxis.d2p(drag.mx[drag.k]) + (clientX - drag.x0))
-                         - drag.mx[drag.k];
-                drag.dx = dx;
-                var X = drag.X, n = drag.n, step = (X[n - 1] - X[0]) / (n - 1);
-                var newT = [], cx = drag.cx.slice(), cy = drag.cy.slice();
-                for (var j = 0; j < n; j++) {
-                    var f = (X[j] - dx - X[0]) / step, i0 = Math.floor(f), w = f - i0;
-                    var c = (i0 >= 0 && i0 < n - 1) ? drag.C[i0] * (1 - w) + drag.C[i0 + 1] * w : 0;
-                    newT.push(drag.T[j] - drag.C[j] + c);
-                    cx[drag.seg + j] = X[j];
-                    cy[drag.seg + j] = c + drag.B[j];
+                return [L.xaxis.p2d(L.xaxis.d2p(xRef) + (clientX - d.x0)) - xRef,
+                        L.yaxis.p2d(L.yaxis.d2p(yRef) + (clientY - d.y0)) - yRef];
+            }
+            function dragTo(d, clientX, clientY) {
+                if (d.kind === 'region') {
+                    var L = gd._fullLayout, r = gd.getBoundingClientRect();
+                    var x = L.xaxis.p2d(clientX - r.left - L.xaxis._offset);
+                    if (d.which === 0) d.lo = x; else d.hi = x;
+                    var upd = {}, ilo = shapeIdx('fit-region-lo'), ihi = shapeIdx('fit-region-hi'),
+                        it = shapeIdx('fit-region-tint');
+                    upd['shapes[' + ilo + '].x0'] = d.lo; upd['shapes[' + ilo + '].x1'] = d.lo;
+                    upd['shapes[' + ihi + '].x0'] = d.hi; upd['shapes[' + ihi + '].x1'] = d.hi;
+                    if (it >= 0) { upd['shapes[' + it + '].x0'] = Math.min(d.lo, d.hi);
+                                   upd['shapes[' + it + '].x1'] = Math.max(d.lo, d.hi); }
+                    Plotly.relayout(gd, upd);
+                    return;
                 }
-                var mx = drag.mx.slice(), my = drag.my.slice();
-                mx[drag.k] = drag.mx[drag.k] + dx;
-                Plotly.restyle(gd, {x: [X, cx, mx], y: [newT, cy, my]}, [drag.it, drag.ic, drag.ip]);
+                var k = d.k;
+                if (d.kind === 'width') {
+                    var xh = d.c0 + d.side * d.w0 / 2;
+                    var dx = deltas(d, clientX, clientY, xh, 0)[0];
+                    d.w = Math.max(2 * d.side * (xh + dx - d.c0), 1e-3);
+                } else {
+                    var dd = deltas(d, clientX, clientY, d.mx[k], d.my[k]);
+                    d.c = d.c0 + dd[0];
+                    if (d.kind === 'move') d.a = Math.max(d.a0 + dd[1], 0);
+                }
+                var X = d.X, n = d.n, newT = [], cy = d.cy.slice();
+                for (var j = 0; j < n; j++) {
+                    var c = d.a * profile(d.code, X[j] - d.c, d.w, d.eta);
+                    newT.push(d.T[j] - d.C[j] + c);
+                    cy[d.seg + j] = c + d.B[j];
+                }
+                var mx = d.mx.slice(), my = d.my.slice(), hx = d.hx.slice(), hy = d.hy.slice();
+                mx[k] = d.c; my[k] = interp(X, newT, d.c);
+                hx[2 * k] = d.c - d.w / 2; hx[2 * k + 1] = d.c + d.w / 2;
+                hy[2 * k] = interp(X, d.B, hx[2 * k]) + d.a / 2;
+                hy[2 * k + 1] = interp(X, d.B, hx[2 * k + 1]) + d.a / 2;
+                Plotly.restyle(gd, {x: [X, d.cx, mx, hx], y: [newT, cy, my, hy]},
+                               [d.it, d.ic, d.ip, d.ih]);
             }
             document.addEventListener('mouseup', function(e) {
                 if (!drag) return;
                 var d = drag; drag = null;
-                if (Math.abs(e.clientX - d.x0) < 2) {           // no real move
+                var moved = Math.abs(e.clientX - d.x0) >= 2 || Math.abs(e.clientY - d.y0) >= 2;
+                if (!moved) {
                     // energy mode: a tap on a fitted peak picks that peak
-                    if (window._theiaEnergyMode) {
+                    if (window._theiaEnergyMode && (d.kind === 'move' || d.kind === 'centre')) {
                         var L0 = gd._fullLayout;
                         window.dash_clientside.set_props('energy-click', {data: {
                             x: d.mx[d.k], xrange: [Number(L0.xaxis.range[0]), Number(L0.xaxis.range[1])],
@@ -4114,16 +4362,27 @@ app.clientside_callback(
                     }
                     return;
                 }
-                var L = gd._fullLayout;                          // final position
-                d.dx = L.xaxis.p2d(L.xaxis.d2p(d.mx[d.k]) + (e.clientX - d.x0)) - d.mx[d.k];
-                window.dash_clientside.set_props('fit-drag', {data: {
-                    peak: d.k, centre: d.mx[d.k] + d.dx, t: Date.now()}});
+                dragTo(d, e.clientX, e.clientY);                 // final position
+                if (d.kind === 'region') {
+                    window.dash_clientside.set_props('fit-region-set', {data: {
+                        xrange: [Math.min(d.lo, d.hi), Math.max(d.lo, d.hi)], t: Date.now()}});
+                    return;
+                }
+                var out = {peak: d.k, t: Date.now()};
+                if (d.kind === 'width') out.fwhm = d.w;
+                else out.centre = d.c;
+                if (d.kind === 'move') out.amp = d.a;
+                window.dash_clientside.set_props('fit-drag', {data: out});
             });
-            // cursor: left-right arrow when over a draggable peak centre
+            // cursor over a draggable element
             gd.addEventListener('mousemove', function(e) {
                 if (drag) return;
                 var box = document.getElementById('sum-graph');
-                if (box) box.classList.toggle('fit-grab', hitPeak(e) >= 0);
+                if (!box) return;
+                var h = hit(e);
+                box.classList.toggle('fit-grab', !!h && (h.kind === 'centre' || h.kind === 'width'));
+                box.classList.toggle('fit-grab-move', !!h && h.kind === 'move');
+                box.classList.toggle('fit-grab-region', !!h && h.kind === 'region');
             });
 
             gd.addEventListener('click', function(e) {
@@ -4255,6 +4514,23 @@ app.clientside_callback(
 )
 
 
+# "Region = view": the current zoom range becomes the fit region
+app.clientside_callback(
+    """
+    function(n) {
+        var gd = document.querySelector('#sum-graph .js-plotly-plot');
+        if (!n || !gd || !gd._fullLayout || !gd._fullLayout.xaxis)
+            return window.dash_clientside.no_update;
+        var R = gd._fullLayout.xaxis.range;
+        return {xrange: [Number(R[0]), Number(R[1])], t: Date.now()};
+    }
+    """,
+    Output("fit-region-set", "data"),
+    Input("btn-fit-region-view", "n_clicks"),
+    prevent_initial_call=True,
+)
+
+
 @app.callback(
     Output("fit-state", "data"),
     Output("fit-table", "data"),
@@ -4265,25 +4541,42 @@ app.clientside_callback(
     Output("fit-b1-unc", "children"),
     Output("fit-status", "children"),
     Output("fit-panel", "style"),
+    Output("fit-table", "active_cell"),
+    Output("fit-table", "selected_cells"),
+    Output("fit-region-lo", "value"),
+    Output("fit-region-hi", "value"),
+    Output("fit-bg-fix", "value"),
     Input("fit-click", "data"),
     Input("fit-drag", "data"),
     Input("fit-run", "data"),
     Input("fit-table", "data_timestamp"),
+    Input("fit-table", "active_cell"),
     Input("fit-shape", "value"),
     Input("fit-bg", "value"),
     Input("fit-b0", "value"),
     Input("fit-b1", "value"),
+    Input("fit-bg-fix", "value"),
+    Input("fit-region-set", "data"),
+    Input("fit-region-lo", "value"),
+    Input("fit-region-hi", "value"),
+    Input("fit-show-limits", "value"),
     Input("btn-fit-clear", "n_clicks"),
     Input("sum-key", "data"),
     State("fit-state", "data"),
     State("fit-table", "data"),
     prevent_initial_call=True,
 )
-def update_fit(click, dragged, run, _ts, shape, bg, b0, b1, _clear, key, state, table):
+def update_fit(click, dragged, run, _ts, active, shape, bg, b0, b1, bg_fix, region_set,
+               region_lo, region_hi, show_limits, _clear, key, state, table):
     """Every change to the fit goes through here (one callback, because these
     outputs also feed its inputs): clicks add peaks, table / background edits
     change the curve by hand, Fit runs the least-squares fit."""
     trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
+    if trig.startswith("fit-table.active_cell"):
+        # a click on a "fix" cell toggles that parameter; any other cell: nothing
+        col = (active or {}).get("column_id") or ""
+        if not col.startswith("fix_") or not state or not state.get("peaks"):
+            raise PreventUpdate
     with _SUM_CACHE_LOCK:
         cached = _SUM_CACHE.get(key)
     error = None
@@ -4303,10 +4596,10 @@ def update_fit(click, dragged, run, _ts, shape, bg, b0, b1, _clear, key, state, 
         try:
             if trig.startswith("fit-click") and click:
                 if not state["peaks"]:
-                    region = sorted(click["xrange"])
-                    state["region"], state["xref"] = region, 0.5 * (region[0] + region[1])
-                    # background start value: median of the data in view
-                    m = _region_mask(ff, region)
+                    if not state.get("region"):           # region: the view, unless set
+                        _set_region(state, click["xrange"])
+                    # background start value: median of the data in the region
+                    m = _region_mask(ff, state["region"])
                     state["bgp"] = [float(np.nanmedian(pp[m])) if m.any() else 0.0, 0.0]
                 new_pk = _snap_peak(ff, pp, click["x"], state["bgp"], bg)
                 new_pk["shape"] = shape              # shape chosen for new peaks
@@ -4316,18 +4609,36 @@ def update_fit(click, dragged, run, _ts, shape, bg, b0, b1, _clear, key, state, 
                 k = int(dragged["peak"])
                 if 0 <= k < len(state["peaks"]):
                     state["peaks"] = [dict(pk) for pk in state["peaks"]]
-                    state["peaks"][k]["centre"] = float(dragged["centre"])
+                    pk = state["peaks"][k]
+                    for what in ("centre", "amp", "fwhm"):     # whichever were dragged
+                        if dragged.get(what) is not None:
+                            pk[what] = float(dragged[what])
+                    pk["amp"], pk["fwhm"] = max(pk["amp"], 0.0), max(abs(pk["fwhm"]), 1e-6)
                     state["fitted"], state["unc"] = False, None
             elif trig.startswith("fit-run") and run:
                 if not state["peaks"]:
                     raise ValueError("add at least one peak first (turn on Peak fitting, then "
                                      "click on a peak)")
-                region = sorted(run["xrange"])
-                old_ref = state["xref"]
-                state["region"], state["xref"] = region, 0.5 * (region[0] + region[1])
-                if _n_bg(bg) == 2:          # keep the same line about the new centre
-                    state["bgp"][0] += state["bgp"][1] * (state["xref"] - old_ref)
+                if not state.get("region"):
+                    _set_region(state, run["xrange"])
                 state = run_fit(ff, pp, sigma, state)
+            elif trig.startswith("fit-region-set") and region_set:
+                _set_region(state, region_set["xrange"])     # dragged lines / "Region = view"
+                state["fitted"], state["unc"] = False, None
+            elif trig.startswith("fit-region-lo") or trig.startswith("fit-region-hi"):
+                if region_lo is not None and region_hi is not None:
+                    _set_region(state, [region_lo, region_hi])
+                    state["fitted"], state["unc"] = False, None
+            elif trig.startswith("fit-table.active_cell"):
+                k, what = int(active["row"]), active["column_id"][4:]
+                if 0 <= k < len(state["peaks"]) and (
+                        what != "eta" or _shapes(state)[k] == "pvoigt"):
+                    state["peaks"] = [dict(pk) for pk in state["peaks"]]
+                    fix = set(state["peaks"][k].get("fix") or [])
+                    fix ^= {what}
+                    state["peaks"][k]["fix"] = sorted(fix)
+            elif trig.startswith("fit-bg-fix"):
+                state["bg_fix"] = list(bg_fix or [])
             elif trig.startswith("fit-table"):
                 # hand edits (or deleted rows): rebuild the peaks from the table
                 peaks = []
@@ -4340,7 +4651,11 @@ def update_fit(click, dragged, run, _ts, shape, bg, b0, b1, _clear, key, state, 
                             old.get("shape", shape)
                         pk = {"centre": float(r["centre"]), "amp": float(r["amp"]),
                               "fwhm": abs(float(r["fwhm"])), "shape": shp,
-                              "eta": float(eta) if eta not in (None, "") else old.get("eta", 0.5)}
+                              "eta": float(eta) if eta not in (None, "") else old.get("eta", 0.5),
+                              "fix": list(old.get("fix") or []),
+                              "lim": {k: (_num_or_none(r[k]) if k in r
+                                          else (old.get("lim") or {}).get(k))
+                                      for k in LIMIT_KEYS}}
                         pk["eta"] = min(max(pk["eta"], 0.0), 1.0)
                     except (TypeError, ValueError, KeyError):
                         pk = dict(old)
@@ -4362,11 +4677,17 @@ def update_fit(click, dragged, run, _ts, shape, bg, b0, b1, _clear, key, state, 
 
     # eta columns only when at least one peak is pseudo-Voigt
     pv = bool(state) and "pvoigt" in _shapes(state)
-    cols = [c for c in FIT_COLUMNS if pv or c["id"] not in ("eta", "d_eta")]
+    cols = fit_columns(pv, bool(show_limits))
+    nu = dash.no_update
     if state is None:
         msg = ("Sum the spectra first, then turn on peak fitting."
                if trig.startswith(("fit-click", "fit-run")) else "")
-        return None, [], cols, None, None, "", "", msg, FIT_PANEL_HIDDEN
+        return None, [], cols, None, None, "", "", msg, FIT_PANEL_HIDDEN, None, [], None, None, []
+    # fix-cell clicks: deselect the cell so the next click toggles again
+    act, sel = (None, []) if trig.startswith("fit-table.active_cell") else (nu, nu)
+    reg = state.get("region")
+    rlo = round(reg[0], 1) if reg else None
+    rhi = round(reg[1], 1) if reg else None
     nb = _n_bg(state["bg"])
     bunc = (state.get("unc") or {}).get("bgp") or [None, None]
     b0v = float(f"{state['bgp'][0]:.6g}") if nb >= 1 else None
@@ -4375,10 +4696,16 @@ def update_fit(click, dragged, run, _ts, shape, bg, b0, b1, _clear, key, state, 
     if error:
         status = html.Span(f"Fit error: {error}", style={"color": "#c0392b"})
     panel = FIT_PANEL_SHOWN if state["peaks"] else FIT_PANEL_HIDDEN
-    return (state, fit_table_rows(state), cols, b0v, b1v,
-            ("± " + _fmt_num(bunc[0], ".3g")) if nb >= 1 and bunc[0] is not None else "",
-            ("± " + _fmt_num(bunc[1], ".3g")) if nb == 2 and bunc[1] is not None else "",
-            status, panel)
+    bfix = set(state.get("bg_fix") or [])
+
+    def bunc_txt(j):
+        if j == 0 and nb < 1 or j == 1 and nb < 2:
+            return ""
+        if f"b{j}" in bfix:
+            return "fixed"
+        return ("± " + _fmt_num(bunc[j], ".3g")) if bunc[j] is not None else ""
+    return (state, fit_table_rows(state), cols, b0v, b1v, bunc_txt(0), bunc_txt(1),
+            status, panel, act, sel, rlo, rhi, sorted(bfix))
 
 
 @app.callback(
@@ -4500,7 +4827,7 @@ ENERGY_TRACE = "energy picks"
 ENERGY_PAIR_TRACE = "energy pairs"
 # index of the first simulated-line trace in the summed figure: spectrum,
 # 4 fit traces, energy picks, energy pairs, then the 3 simulated-line traces
-SIM_TRACE_INDEX = 1 + 4 + 2
+SIM_TRACE_INDEX = 1 + len(FIT_TRACE_STYLES) + 2
 
 
 @lru_cache(maxsize=1)
@@ -4900,6 +5227,33 @@ def draw_overlays(fit_state, est, view, key):
     return patch
 
 
+def _fit_shapes(fit_state, key):
+    """Fit region (two draggable orange lines, named fit-region-lo/hi, with a
+    pale tint between them) and each peak's centre limits (grey band)."""
+    if not fit_state or fit_state.get("sum_key") != key or not fit_state.get("region"):
+        return []
+    lo, hi = fit_state["region"]
+    line = dict(color=ACCENT, width=2)
+    out = [dict(type="rect", xref="x", yref="paper", x0=lo, x1=hi, y0=0, y1=1,
+                fillcolor=ACCENT_PALE, opacity=0.5, line_width=0, layer="below",
+                name="fit-region-tint"),
+           dict(type="line", xref="x", yref="paper", x0=lo, x1=lo, y0=0, y1=1, line=line,
+                layer="above", name="fit-region-lo"),
+           dict(type="line", xref="x", yref="paper", x0=hi, x1=hi, y0=0, y1=1, line=line,
+                layer="above", name="fit-region-hi")]
+    for pk in fit_state.get("peaks") or []:
+        lim = pk.get("lim") or {}
+        cmin, cmax = lim.get("centre_min"), lim.get("centre_max")
+        if cmin is None and cmax is None:
+            continue
+        out.append(dict(type="rect", xref="x", yref="paper",
+                        x0=lo if cmin is None else max(cmin, lo),
+                        x1=hi if cmax is None else min(cmax, hi), y0=0, y1=0.04,
+                        fillcolor="#999999", opacity=0.5, line_width=0, layer="above",
+                        name="fit-centre-limits"))
+    return out
+
+
 def _energy_into_patch(patch, est, fit_state, view, key, cached, trig):
     """Picked-peak labels (C1, C2, A1/B1, ...) and the pair brackets + labels."""
     ff, pp, _ = cached
@@ -4954,7 +5308,8 @@ def _energy_into_patch(patch, est, fit_state, view, key, cached, trig):
                            opacity=1))
     patch["data"][idx + 1]["x"] = []                 # (old bracket trace, no longer used)
     patch["data"][idx + 1]["y"] = []
-    patch["layout"]["shapes"] = list(_SUM_SHAPES.get(key, [])) + shapes
+    patch["layout"]["shapes"] = (list(_SUM_SHAPES.get(key, [])) + _fit_shapes(fit_state, key)
+                                 + shapes)
     patch["layout"]["annotations"] = list(_SUM_ANNOTATIONS.get(key, [])) + labels
     return patch
 
