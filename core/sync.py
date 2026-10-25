@@ -1,8 +1,13 @@
 """
 Synchronise files between this computer and APPC256 (scp via lxlogin).
 
-    push   outputs/confirmed/*.csv                    ->  <remote_root>/confirmed/
-    pull   <remote_root>/summed_spectrograms/*.npz    ->  spectrograms/   (picked by hand)
+    push   outputs/confirmed/*.csv                        ->  <remote_root>/confirmed/
+    pull   <remote_root>/summed_spectrograms/[<sub>/]*.npz ->  spectrograms/[<sub>/]  (picked by hand)
+
+Spectrograms are looked for at the top of summed_spectrograms/ and one
+subfolder down; the subfolder is kept locally, and files are compared by their
+path relative to the folder. A .txt file with the same name as a pulled .npz
+comes along with it.
 
 "New" means the file name does not exist on the other side yet. Nothing is
 ever overwritten or deleted on either side. A pull downloads into
@@ -55,6 +60,14 @@ PART = ".part"
 # names / paths that go through the remote shell unquoted (scp's remote side)
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9._+=,@%-]+$")
 _SAFE_PATH = re.compile(r"^[A-Za-z0-9._+=,@%/~-]+$")
+SPEC_DEPTH = 2              # top of summed_spectrograms/ and one subfolder down
+
+
+def safe_relpath(rel):
+    """True for a relative path of plain names (no '..', no odd characters)."""
+    parts = rel.split("/")
+    return (0 < len(parts) <= SPEC_DEPTH and
+            all(p not in ("", ".", "..") and _SAFE_NAME.match(p) for p in parts))
 
 ASKPASS = r"""#!/bin/sh
 # Asphodel sync: answers one password prompt per ssh/scp command (see core/sync.py)
@@ -180,14 +193,15 @@ def _run(cmd, password, timeout=None, on_start=None):
 # --------------------------------------------------------------------------- what is where
 
 def remote_listing(password, cfg):
-    """{"confirmed": {name: size} or None, "spectrograms": {...} or None} on the remote
-    machine (None: folder missing). Only plain files at the top of each folder."""
-    keys = {"confirmed": "remote_confirmed", "spectrograms": "remote_spectrograms"}
+    """{"confirmed": {name: size} or None, "spectrograms": {relpath: size} or None} on
+    the remote machine (None: folder missing). Confirmed: files at the top of the
+    folder; spectrograms: also one subfolder down (relpath "<sub>/<name>")."""
+    keys = {"confirmed": ("remote_confirmed", 1), "spectrograms": ("remote_spectrograms", SPEC_DEPTH)}
     parts = []
-    for k, ck in keys.items():
+    for k, (ck, depth) in keys.items():
         d = shlex.quote(remote_dir(cfg, ck))
-        parts.append(f"echo '@@{k}'; if [ -d {d} ]; then find {d} -mindepth 1 -maxdepth 1 -type f "
-                     f"-printf '%f\\t%s\\n'; else echo '@@missing'; fi")
+        parts.append(f"echo '@@{k}'; if [ -d {d} ]; then find {d} -mindepth 1 -maxdepth {depth} -type f "
+                     f"-printf '%P\\t%s\\n'; else echo '@@missing'; fi")
     text = _run(["ssh", *SSH_OPTS, cfg["host"], "; ".join(parts)], password, LIST_TIMEOUT)
     res, cur = {}, None
     for line in text.splitlines():
@@ -210,9 +224,17 @@ def local_confirmed(exp=None):
 
 
 def local_spectrograms(exp=None):
+    """Relative paths of the files in spectrograms/ and its subfolders (one level)."""
     d = paths.spectrograms(exp)
     os.makedirs(d, exist_ok=True)
-    return {n for n in os.listdir(d) if os.path.isfile(os.path.join(d, n)) and not n.endswith(PART)}
+    out = set()
+    for n in os.listdir(d):
+        p = os.path.join(d, n)
+        if os.path.isfile(p):
+            out.add(n)
+        elif os.path.isdir(p):
+            out.update(f"{n}/{m}" for m in os.listdir(p) if os.path.isfile(os.path.join(p, m)))
+    return {r for r in out if not r.endswith(PART)}
 
 
 def check(password, exp=None):
@@ -230,10 +252,24 @@ def check(password, exp=None):
         "remote_spectrograms_missing": rs is None,
         "to_push": [n for n in loc_conf if rc is not None and n not in rc],
         "remote_only_confirmed": sorted(n for n in (rc or {}) if n not in loc_conf),
-        "to_pull": sorted([n, s] for n, s in (rs or {}).items()
-                          if n.endswith(".npz") and n not in loc_spec),
+        "to_pull": _pull_candidates(rs or {}, loc_spec),
         "free": shutil.disk_usage(paths.spectrograms(exp)).free,
     }
+
+
+def _pull_candidates(remote, local):
+    """[{"path": relpath, "size": n, "files": [[relpath, size], ...]}] for every remote
+    .npz that is not here; "files" is the .npz plus its same-named .txt, if any."""
+    out = []
+    for rel, size in sorted(remote.items()):
+        if not rel.endswith(".npz") or rel in local:
+            continue
+        files = [[rel, size]]
+        txt = rel[:-4] + ".txt"
+        if txt in remote and txt not in local:
+            files.append([txt, remote[txt]])
+        out.append({"path": rel, "size": sum(s for _, s in files), "files": files})
+    return out
 
 
 # --------------------------------------------------------------------------- push
@@ -262,14 +298,14 @@ class PullJob:
         self.state = {"running": False}
 
     def start(self, items, password, exp):
-        """items: [[name, size], ...] as returned by check()."""
+        """items: [[relpath, size], ...] (the "files" of check()'s to_pull entries)."""
         with self._lock:
             if self.state.get("running"):
                 raise SyncError("A pull is already running.")
             if not items:
                 raise SyncError("Nothing selected.")
             for name, _ in items:
-                if not _SAFE_NAME.match(name):
+                if not safe_relpath(name):
                     raise SyncError(f"Can't pull {name!r}: unusual characters in the name.")
             dest = paths.spectrograms(exp)
             need = sum(s for _, s in items)
@@ -292,8 +328,9 @@ class PullJob:
                     self.state["index"] = i
                     if self._cancel:
                         break
-                final = os.path.join(dest, name)
+                final = os.path.join(dest, *name.split("/"))
                 part = final + PART
+                os.makedirs(os.path.dirname(final), exist_ok=True)
                 if os.path.exists(final):
                     self.state["skipped"].append(name)
                     continue

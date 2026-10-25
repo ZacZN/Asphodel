@@ -254,8 +254,10 @@ def _mtime(path):
         return ""
 
 
-def folder_summary(d, pattern="*.npz"):
+def folder_summary(d, pattern="*.npz", subfolders=False):
     files = glob.glob(os.path.join(d, pattern))
+    if subfolders:
+        files += glob.glob(os.path.join(d, "*", pattern))
     total = 0
     for f in files:
         try:
@@ -274,8 +276,11 @@ def data_rows():
     rows.append(dict(name=f"spectra_1d/  ({n} files)", kind="1-D folder", size=total,
                      mtime=_mtime(d1), path=d1))
     for kind, d in (("spectrogram", paths.spectrograms()), ("summed 1-D", paths.summed_1d())):
-        for f in sorted(glob.glob(os.path.join(d, "*.npz"))):
-            rows.append(dict(name=os.path.basename(f), kind=kind, size=os.path.getsize(f),
+        files = sorted(glob.glob(os.path.join(d, "*.npz")))
+        if kind == "spectrogram":          # also one subfolder down (as synced from APPC256)
+            files += sorted(glob.glob(os.path.join(d, "*", "*.npz")))
+        for f in files:
+            rows.append(dict(name=os.path.relpath(f, d), kind=kind, size=os.path.getsize(f),
                              mtime=_mtime(f), path=f))
     return rows
 
@@ -613,7 +618,7 @@ def sidebar():
     srcs = []
     for title, d in (("1-D spectra", paths.spectra_1d()), ("Spectrograms", paths.spectrograms()),
                      ("Summed 1-D", paths.summed_1d())):
-        n, total = folder_summary(d)
+        n, total = folder_summary(d, subfolders=(title == "Spectrograms"))
         srcs.append(html.Div([html.B(title), html.Code(os.path.relpath(d, paths.experiment_dir())),
                               html.Div(f"{n} .npz · {_size(total)}")], className="src"))
     nub = os.path.join(paths.REPO_ROOT, "core", "nubase_4.mas20")
@@ -698,7 +703,8 @@ def sync_modal():
                  className="below"),
         dcc.Loading(html.Div(id="sync-result", className="below"), type="dot", color=ACCENT),
         html.Div(id="sync-pull-box", style=hidden, className="below", children=[
-            html.Label("Summed spectrograms on APPC256 that are not here", className="flabel"),
+            html.Label("Summed spectrograms on APPC256 that are not here (subfolders are kept)",
+                       className="flabel"),
             dcc.Checklist(id="sync-pull-list", options=[], value=[], className="pull-list"),
             html.Div(id="sync-space", className="note below"),
             html.Div([html.Button("Pull selected", id="sync-pull", className="btn primary small", n_clicks=0),
@@ -1009,8 +1015,10 @@ def sync_check(_n, pw):
         return f"⚠ {exc}", [], [], hidden, None
     except OSError as exc:
         return f"⚠ {exc}", [], [], hidden, None
-    opts = [{"label": f" {n}  ({_size(s)})", "value": n} for n, s in res["to_pull"]]
-    data = {"exp": res["exp"], "sizes": dict(res["to_pull"])}
+    opts = [{"label": f" {c['path']}  ({_size(c['size'])}" + (" + .txt" if len(c["files"]) > 1 else "") + ")",
+             "value": c["path"]} for c in res["to_pull"]]
+    data = {"exp": res["exp"], "sizes": {c["path"]: c["size"] for c in res["to_pull"]},
+            "files": {c["path"]: c["files"] for c in res["to_pull"]}}
     return ([html.Div(l) for l in lines], opts, [],
             {"display": "block"} if opts else hidden, data)
 
@@ -1043,12 +1051,12 @@ def sync_pull(_p, _c, sel, pw, data):
         return "Cancelling…" if sync.JOB.cancel() else "No pull running."
     if not data:
         return "⚠ Press “Check” first."
-    items = [[n, data["sizes"][n]] for n in sorted(sel or []) if n in data["sizes"]]
+    items = [f for n in sorted(sel or []) if n in data["files"] for f in data["files"][n]]
     try:
         sync.JOB.start(items, pw, data["exp"])
     except (sync.SyncError, OSError) as exc:
         return f"⚠ {exc}"
-    return f"Pulling {len(items)} file(s)…"
+    return f"Pulling {len(items)} file(s)…" if items else "⚠ Nothing selected."
 
 
 @app.callback(
