@@ -703,8 +703,21 @@ async function _fetchFull() {
   } catch (e) { console.log('[full1d] ' + e.message); }
 }
 
-// ── Search ions: list an ion's simulated lines, load ±10 kHz around one ─────
-var SEARCH_HALF_WIDTH_HZ = 10000;
+// ── Search ions: list an ion's simulated lines, load ±width around one ─────
+var SEARCH_HALF_WIDTH_HZ = 10000;   // default when the width box is empty/invalid
+function _srchHalfWidthHz() {
+  var el = document.getElementById('srchWidth');
+  var v = el ? parseFloat(el.value) : NaN;
+  return (isFinite(v) && v > 0) ? v * 1000 : SEARCH_HALF_WIDTH_HZ;   // box is in kHz
+}
+function srchWidthChanged() {
+  var el = document.getElementById('srchWidth');
+  var v = parseFloat(el.value);
+  el.style.borderColor = (el.value.trim() === '' || (isFinite(v) && v > 0)) ? '' : '#f87171';
+  savePref('srchWidth', (isFinite(v) && v > 0) ? String(v) : '');
+  // refresh the per-line tooltips with the new range
+  if (document.getElementById('srchIon').value.trim()) searchIonsSoon();
+}
 var _srchTimer = null, _srchSeq = 0;
 function _srchStatus(msg, kind) {
   var s = document.getElementById('srchStatus');
@@ -737,8 +750,9 @@ async function searchIons() {
       var it = document.createElement('div');
       it.className = 'item' + (l.excluded ? ' ex' : '');
       it.tabIndex = 0;
-      it.title = 'Load ' + Math.round(l.f - SEARCH_HALF_WIDTH_HZ).toLocaleString('en-GB') + ' – ' +
-                 Math.round(l.f + SEARCH_HALF_WIDTH_HZ).toLocaleString('en-GB') + ' Hz' +
+      var hw = _srchHalfWidthHz();
+      it.title = 'Load ' + Math.round(l.f - hw).toLocaleString('en-GB') + ' – ' +
+                 Math.round(l.f + hw).toLocaleString('en-GB') + ' Hz' +
                  (l.excluded ? '  (below the T½ cut)' : '');
       [l.ion + (l.is_ref ? '  (ref)' : ''), 'h' + l.h,
        l.f.toLocaleString('en-GB', {maximumFractionDigits: 1}), l.t_half || '?'].forEach(function(t) {
@@ -750,10 +764,11 @@ async function searchIons() {
     });
   } catch (e) { if (seq === _srchSeq) _srchStatus('✗ ' + e.message, 'err'); }
 }
-// Load the same file cropped to f ± 10 kHz through the same /load request as
+// Load the same file cropped to f ± width (Width box, kHz) through the same /load request as
 // File Settings → Load (keeps the current dB / time-avg); errors shown here
 async function loadAroundIon(file, l) {
-  var fMin = l.f - SEARCH_HALF_WIDTH_HZ, fMax = l.f + SEARCH_HALF_WIDTH_HZ;
+  var hw = _srchHalfWidthHz();
+  var fMin = l.f - hw, fMax = l.f + hw;
   document.getElementById('ldPath').value = file;
   document.getElementById('ldFmin').value = fMin.toFixed(1);
   document.getElementById('ldFmax').value = fMax.toFixed(1);
@@ -1191,6 +1206,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
     _saved_skip1  = str(_prefs.get("skipEnd", ""))
     _saved_pmin   = str(_prefs.get("parentMin", ""))
     _saved_pmax   = str(_prefs.get("parentMax", ""))
+    _saved_srch_w = str(_prefs.get("srchWidth", "10"))
     _chk_bateman    = "checked" if _prefs.get("bateman")    else ""
     _chk_unweighted = "checked" if _prefs.get("unweighted") else ""
     _chk_logplot    = "checked" if _prefs.get("logPlot")    else ""
@@ -1462,7 +1478,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
       <button onclick="modalOpen('generalModal', 'colorscaleSel')" title="Colour scheme, dB scale, 3-D style, 1-D overlay">General Settings…</button>
       <button onclick="modalOpen('fileModal', 'ldPath')" title="Load a file / change the frequency crop">File Settings…</button>
       <button onclick="simOpen()" title="Particle-identification settings: simulated ion lines">PID Settings…</button>
-      <button onclick="modalOpen('searchModal', 'srchIon')" title="Find an ion's simulated lines and load ±10 kHz around one">Search ions…</button>
+      <button onclick="modalOpen('searchModal', 'srchIon')" title="Find an ion's simulated lines and load a window around one">Search ions…</button>
       <button onclick="modalOpen('decayModal', 'batemanChk')" title="Decay-fit settings and Run">Decay fit…</button>
     </div>
     <div class="title-row">
@@ -1630,10 +1646,15 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
       <input type="text" id="srchIon" placeholder="e.g. 186Hf or m186Hf72+" style="width:220px;"
              oninput="searchIonsSoon()" onkeydown="if(event.key==='Enter') searchIons()">
       <button onclick="searchIons()">Search</button>
+      <span title="Half-width of the frequency window loaded around the chosen line">±</span>
+      <input type="number" id="srchWidth" min="0" step="any" style="width:72px;" value="{_saved_srch_w}"
+             placeholder="10" title="Half-width of the frequency window loaded around the chosen line (kHz)"
+             oninput="srchWidthChanged()" onkeydown="if(event.key==='Enter') searchIons()">
+      <span>kHz</span>
       <span id="srchStatus"></span>
     </div>
     <div class="srch-hint">Simulated lines across the whole file (current PID settings). Click one to load
-      ±10 kHz around it.</div>
+      ± the width above around it (default ±10 kHz).</div>
     <div id="srchList" class="srch-list"></div>
     </div>
    </div>
@@ -2665,7 +2686,7 @@ def serve(html, state):
                     if pref_key not in ("gamma", "errA", "errB", "hlIso", "hlGs",
                                         "skipStart", "skipEnd", "bateman", "unweighted",
                                         "parentMin", "parentMax", "bars3d", "fullOpen", "colorscale", "decayRegion",
-                                        "logPlot", "residuals"):
+                                        "logPlot", "residuals", "srchWidth"):
                         raise ValueError(f"unknown pref key: {pref_key!r}")
                     with _PREFS_LOCK:
                         prefs = read_prefs()
