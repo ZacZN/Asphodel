@@ -958,6 +958,46 @@ app.clientside_callback(
 )
 
 
+# Browsers that take --new-window, by the name of their .desktop file / command
+_NEW_WINDOW_BROWSERS = [
+    ("firefox", ["firefox", "firefox-esr"]),
+    ("google-chrome", ["google-chrome", "google-chrome-stable"]),
+    ("chromium", ["chromium", "chromium-browser"]),
+    ("brave", ["brave-browser", "brave"]),
+    ("microsoft-edge", ["microsoft-edge", "microsoft-edge-stable"]),
+    ("vivaldi", ["vivaldi", "vivaldi-stable"]),
+]
+
+
+def _default_browser_commands():
+    """Commands of the default browser first (xdg-settings), then the others."""
+    try:
+        desktop = subprocess.run(["xdg-settings", "get", "default-web-browser"],
+                                 capture_output=True, text=True, timeout=3).stdout.strip().lower()
+    except (OSError, subprocess.SubprocessError):
+        desktop = ""
+    first = [cmds for name, cmds in _NEW_WINDOW_BROWSERS if name in desktop]
+    return first + [cmds for name, cmds in _NEW_WINDOW_BROWSERS if name not in desktop]
+
+
+def open_in_new_window(url):
+    """Open the home page in a new browser window (the tools' tabs then open
+    in that window too).  Uses the default browser's --new-window option;
+    falls back to Python's webbrowser if no known browser is found."""
+    import shutil
+    for cmds in _default_browser_commands():
+        for cmd in cmds:
+            exe = shutil.which(cmd)
+            if exe:
+                try:
+                    subprocess.Popen([exe, "--new-window", url], stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL, start_new_session=True)
+                    return
+                except OSError:
+                    continue
+    webbrowser.open_new(url)
+
+
 def _free_port(preferred):
     if not _port_open(preferred):
         return preferred
@@ -972,5 +1012,5 @@ if __name__ == "__main__":
     port = _free_port(HOME_PORT)
     url = f"http://127.0.0.1:{port}/"
     print(f"Asphodel home page at {url}  (Quit button: closes everything; Ctrl-C: home page only)")
-    threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    threading.Timer(1.0, lambda: open_in_new_window(url)).start()
     app.run(debug=False, host="127.0.0.1", port=port)
