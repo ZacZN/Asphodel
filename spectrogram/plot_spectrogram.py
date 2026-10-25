@@ -766,7 +766,8 @@ async function searchIons() {
 }
 // Load the same file cropped to f ± width (Width box, kHz) through the same /load request as
 // File Settings → Load (keeps the current dB / time-avg); errors shown here
-async function loadAroundIon(file, l) {
+async function loadAroundIon(file, l, statusFn) {
+  var _st = statusFn || _srchStatus;
   var hw = _srchHalfWidthHz();
   var fMin = l.f - hw, fMax = l.f + hw;
   document.getElementById('ldPath').value = file;
@@ -774,7 +775,7 @@ async function loadAroundIon(file, l) {
   document.getElementById('ldFmax').value = fMax.toFixed(1);
   var db  = document.getElementById('dbCheck');
   var nav = document.getElementById('nAvg');
-  _srchStatus('Loading ' + l.ion + ', h' + l.h + '…');
+  _st('Loading ' + l.ion + ', h' + l.h + '…');
   try {
     var r = await fetch('/load', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -784,11 +785,56 @@ async function loadAroundIon(file, l) {
                             ion: l.ion + ', h' + l.h})
     });
     var d = await r.json();
-    if (!r.ok) { _srchStatus('✗ ' + (d.error || 'load failed'), 'err'); return; }
+    if (!r.ok) { _st('✗ ' + (d.error || 'load failed'), 'err'); return; }
     // replace (not a new history entry), so the tab stays closable by script
     window.location.replace('/spectrogram.html?t=' + Date.now());
-  } catch (e) { _srchStatus('✗ ' + e.message, 'err'); }
+  } catch (e) { _st('✗ ' + e.message, 'err'); }
 }
+
+// ── Harmonic step: toolbar h−1 / h+1 for the ion loaded by Search ions ──────
+// CUR_ION_LABEL ("m186Hf72+, h213") is set by the page; the neighbouring
+// harmonics come from the same simulated lines as Search ions, and a button
+// is disabled when that harmonic isn't among them (outside the file, etc.).
+var _harmLines = {};   // {-1: line, +1: line}
+function _harmStatus(msg, kind) {
+  var s = document.getElementById('harmStatus');
+  if (!s) return;
+  s.textContent = msg;
+  s.style.color = kind === 'err' ? '#f87171' : kind === 'ok' ? '#4ade80' : '#fbbf24';
+}
+async function _harmInit() {
+  var grp = document.getElementById('harmGrp');
+  if (!grp || typeof CUR_ION_LABEL !== 'string' || !CUR_ION_LABEL) return;
+  var m = /^(.*),\\s*h(\\d+)$/.exec(CUR_ION_LABEL.trim());
+  if (!m) return;
+  var ion = m[1].trim(), h = parseInt(m[2], 10);
+  grp.style.display = 'inline-flex';
+  document.getElementById('harmCur').textContent = 'h' + h;
+  var btns = {'-1': document.getElementById('harmDn'), '1': document.getElementById('harmUp')};
+  btns['-1'].disabled = btns['1'].disabled = true;
+  try {
+    var r = await fetch('/search-ion', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                        body: JSON.stringify({q: ion})});
+    var d = await r.json();
+    if (!r.ok) { _harmStatus('✗ ' + (d.error || 'error'), 'err'); return; }
+    [-1, 1].forEach(function(step) {
+      var b = btns[String(step)];
+      var l = d.hits.filter(function(x) { return x.ion === ion && x.h === h + step; })[0];
+      if (!l) { b.title = 'h' + (h + step) + ' of ' + ion + ' is not among the simulated lines in this file'; return; }
+      _harmLines[step] = {file: d.file, line: l};
+      b.disabled = false;
+      var hw = _srchHalfWidthHz();
+      b.title = 'Load ' + ion + ', h' + l.h + ': ' +
+                Math.round(l.f - hw).toLocaleString('en-GB') + ' – ' +
+                Math.round(l.f + hw).toLocaleString('en-GB') + ' Hz';
+    });
+  } catch (e) { _harmStatus('✗ ' + e.message, 'err'); }
+}
+function harmStep(step) {
+  var t = _harmLines[step];
+  if (t) loadAroundIon(t.file, t.line, _harmStatus);
+}
+window.addEventListener('load', _harmInit);
 
 // ── Decay-fit region: slider window or a box dragged on the 2-D heatmap ─────
 // Drawing uses the heatmap's normal drag-to-zoom: while drawing, the zoom
@@ -1182,7 +1228,7 @@ ldToggle(true);
 # ---------------------------------------------------------------------------
 
 def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None,
-               fmin_req=None, fmax_req=None):
+               fmin_req=None, fmax_req=None, ion=None):
     """Build the spectrogram page. Returns (html, state) for the server."""
     try:
         import plotly.graph_objects as go
@@ -1479,6 +1525,12 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
       <button onclick="modalOpen('fileModal', 'ldPath')" title="Load a file / change the frequency crop">File Settings…</button>
       <button onclick="simOpen()" title="Particle-identification settings: simulated ion lines">PID Settings…</button>
       <button onclick="modalOpen('searchModal', 'srchIon')" title="Find an ion's simulated lines and load a window around one">Search ions…</button>
+      <span id="harmGrp" style="display:none; align-items:center; gap:6px;">
+        <button id="harmDn" onclick="harmStep(-1)" disabled>h−1</button>
+        <span id="harmCur" title="Harmonic of the ion loaded by Search ions"></span>
+        <button id="harmUp" onclick="harmStep(1)" disabled>h+1</button>
+        <span id="harmStatus" style="text-transform:none; font-weight:400;"></span>
+      </span>
       <button onclick="modalOpen('decayModal', 'batemanChk')" title="Decay-fit settings and Run">Decay fit…</button>
     </div>
     <div class="title-row">
@@ -1682,6 +1734,7 @@ const T_RAW = {t_raw_json};
 const F_PLOT = {f_raw_json};  // freq array, low-to-high (2-D heatmap y-axis)
 const F_1D   = {f_1d_json};   // full-resolution freq array for the 1-D spectrum
 const DEFAULT_TITLE = {_default_title_js};
+var CUR_ION_LABEL = {json.dumps(ion or "")};   // Search ions label, e.g. "m186Hf72+, h213"
 var APPLIED_N = {n_avg_init};
 var LAST_CAMERA = {json.dumps(_camera)};
 
@@ -2373,7 +2426,7 @@ def load_dataset(path, fmin=None, fmax=None, linear=False, n_avg=1, ion=None):
           f"{power_s.shape[0]} time bins  [{lo:,.0f} – {hi:,.0f} Hz]")
     html, state = build_page(freq_s, time, power_s, make_title(path, lo, hi, linear, ion),
                              log_scale=not linear, n_avg=max(1, int(n_avg)),
-                             file_path=path, fmin_req=fmin, fmax_req=fmax)
+                             file_path=path, fmin_req=fmin, fmax_req=fmax, ion=ion)
     # Whole (uncropped) file, summed over all frames: used for the simulated-
     # line reference and the whole-file 1-D plot
     state["file_freq"] = np.asarray(freq, dtype=float)
