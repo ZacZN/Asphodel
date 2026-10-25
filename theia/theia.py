@@ -51,7 +51,7 @@ Peak detection (no smoothing is ever applied to the data)
 import os
 import sys
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import paths, physics
+from core import paths, physics, tabwatch
 from core.nubase_reader import (df_nubase, rect_restrict, diag_restrict, index_by_name, unpack_npz,
                                 get_base_dataframe)
 from core.physics import (delta_f, apply_correction, ion_base_name, build_hover_label, HL_UNITS,
@@ -2314,6 +2314,9 @@ body.dark .js-plotly-plot { filter: invert(1) hue-rotate(180deg) contrast(1.15);
 """
 app.index_string = app.index_string.replace(
     "{%css%}", "{%css%}\n<style>" + _TABLE_CSS + _FB_CSS + _CALIB_CSS + _FIT_CSS + _DARK_CSS + "</style>")
+# close this tab when Theia stops (Quit / Stop on the home page, Quit here, crash)
+app.index_string = app.index_string.replace(
+    "{%scripts%}", "{%scripts%}\n<script>" + tabwatch.watch_js("Theia") + "</script>")
 # Spectrum graphs that get the bottom-right coordinate readout
 READOUT_GRAPHS = ["viewer-graph", "preview-graph", "snippet-graph", "refview-graph", "sum-graph"]
 TAB_STYLE = {"padding": "8px 16px", "fontWeight": "600"}
@@ -4985,6 +4988,12 @@ def show_further_page(page):
 # ---------------------------------------------------------------------------
 # Quit
 # ---------------------------------------------------------------------------
+
+@app.server.route(tabwatch.ALIVE_PATH)
+def _theia_alive():
+    """Answered while Theia runs; the page closes its tab once this stops."""
+    return "ok"
+
 
 @app.server.route("/_theia_quit", methods=["POST"])
 def _theia_quit():

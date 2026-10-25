@@ -92,7 +92,7 @@ def slice_freq(freq, power, freq_min, freq_max):
 
 _HERE       = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(1, os.path.dirname(_HERE))
-from core import paths
+from core import paths, tabwatch
 PREFS_PATH  = paths.settings_file("spectrogram_prefs.json")
 DECAY_PATH  = os.path.join(_HERE, "decay_fit.py")
 
@@ -437,7 +437,8 @@ async function ldLoad() {
     var d = await r.json();
     if (!r.ok) { ldStatus('✗ ' + (d.error || 'load failed'), 'err'); return; }
     ldStatus('✓ Loaded', 'ok');
-    window.location.href = '/spectrogram.html?t=' + Date.now();
+    // replace (not a new history entry), so the tab stays closable by script
+    window.location.replace('/spectrogram.html?t=' + Date.now());
   } catch (e) { ldStatus('✗ ' + e.message, 'err'); }
 }
 """
@@ -769,7 +770,8 @@ async function loadAroundIon(file, l) {
     });
     var d = await r.json();
     if (!r.ok) { _srchStatus('✗ ' + (d.error || 'load failed'), 'err'); return; }
-    window.location.href = '/spectrogram.html?t=' + Date.now();
+    // replace (not a new history entry), so the tab stays closable by script
+    window.location.replace('/spectrogram.html?t=' + Date.now());
   } catch (e) { _srchStatus('✗ ' + e.message, 'err'); }
 }
 
@@ -1124,6 +1126,8 @@ def loader_parts(file_path=None, fmin=None, fmax=None):
             .replace("__FMIN__", "" if fmin is None else esc(repr(float(fmin))))
             .replace("__FMAX__", "" if fmax is None else esc(repr(float(fmax)))))
     js = LOADER_JS.replace("__INIT__", json.dumps({"dir": start_dir}).replace("</", "<\\/"))
+    # every page has the loader: close the tab when this program stops
+    js += tabwatch.watch_js("plot_spectrogram.py", dark=True)
     return html, js
 
 
@@ -2411,6 +2415,10 @@ def serve(html, state):
             q   = parse_qs(url.query)
             if url.path in ("/", "/spectrogram.html"):
                 self._send(200, STATE["html"], "text/html; charset=utf-8")
+
+            elif url.path == tabwatch.ALIVE_PATH:
+                # the page closes its tab once this stops answering
+                self._send(200, {"ok": True})
 
             elif url.path == "/get-region":
                 # saved decay-fit region mode + drawn box for the loaded file/crop
