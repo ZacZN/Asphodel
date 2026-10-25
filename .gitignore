@@ -6,3 +6,4 @@ __pycache__/
 _viewer_output.html
 .~lock.*#
 data/
+Claude outputs/
