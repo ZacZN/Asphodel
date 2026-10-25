@@ -14,6 +14,8 @@ The suite's launcher and overview, as a Dash app (http://127.0.0.1:8050/):
   * outputs: scan runs, confirmed identifications, decay fits, figures
   * the shared physics settings (physics.json) and the overrides of each tool
   * notes per experiment
+  * "Sync with APPC256": sends new confirmed lists to APPC256 and pulls the
+    summed spectrograms you pick from it (core/sync.py)
 
 Usage
 -----
@@ -34,10 +36,11 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 
 sys.path.insert(1, os.path.dirname(os.path.abspath(__file__)))
-from core import paths, physics, tabwatch
+from core import paths, physics, sync, tabwatch
 
 import dash
 from dash import dcc, html, Input, Output, State, ALL, ctx
@@ -137,11 +140,18 @@ def running_summary():
                 lines.append("Theia" + ("" if n else " (started elsewhere)"))
         elif n:
             lines.append(f"{n} × {t[1]}" if n > 1 else t[1])
+    if sync.JOB.state.get("running"):
+        lines.append("Pull from APPC256 (cancelled; the partial file is removed)")
     return lines
 
 
 def stop_everything():
     """Stop every tool started from here, and Theia even if started elsewhere."""
+    if sync.JOB.cancel():
+        for _ in range(50):                    # let it remove the partial file
+            if not sync.JOB.state.get("running"):
+                break
+            time.sleep(0.1)
     with _PROCS_LOCK:
         procs = [p for lst in _PROCS.values() for p, _ in lst if p.poll() is None]
     for p in procs:
@@ -637,6 +647,8 @@ def header():
         html.Button("+ New experiment…", id="exp-new-open", className="btn small", n_clicks=0),
         html.Span(paths.experiment_dir(), className="path"),
         html.Span(className="spacer"),
+        html.Button("⇅ Sync with APPC256", id="sync-open", className="btn small", n_clicks=0,
+                    title="Send new confirmed lists to APPC256, pull new summed spectrograms"),
         html.Button("↻ Refresh", id="refresh", className="btn small", n_clicks=0,
                     title="Re-read files and outputs"),
         html.Button("⏻ Quit", id="quit", className="btn small quit", n_clicks=0,
@@ -663,6 +675,41 @@ def new_experiment_modal():
     ], className="modal-box"))
 
 
+def sync_modal():
+    try:
+        cfg = sync.settings()
+        where = f"{cfg['host']}:{cfg['remote_root']}"
+    except sync.SyncError as exc:
+        where = f"⚠ {exc}"
+    hidden = {"display": "none"}
+    return html.Div(id="sync-modal", className="modal", style=hidden, children=html.Div([
+        html.H2("Sync with APPC256"),
+        html.Div([html.Span(where, className="mono"),
+                  " (change in settings/sync.json of the experiment)"], className="note"),
+        html.Div("Sends confirmed lists that APPC256 doesn't have yet; lists the summed "
+                 "spectrograms this computer doesn't have, to pull the ones you tick. "
+                 "Nothing is overwritten or deleted on either side.", className="note below"),
+        html.Label("lxlogin password (not stored; leave empty if a connection to appc256 is "
+                   "already open, e.g. an ssh session from the last 4 h)", className="flabel"),
+        dcc.Input(id="sync-pw", type="password", className="wide", autoComplete="off"),
+        html.Div([html.Button("Check and send confirmed lists", id="sync-check",
+                              className="btn primary small", n_clicks=0),
+                  html.Button("Close", id="sync-close", className="btn small", n_clicks=0)],
+                 className="below"),
+        dcc.Loading(html.Div(id="sync-result", className="below"), type="dot", color=ACCENT),
+        html.Div(id="sync-pull-box", style=hidden, className="below", children=[
+            html.Label("Summed spectrograms on APPC256 that are not here", className="flabel"),
+            dcc.Checklist(id="sync-pull-list", options=[], value=[], className="pull-list"),
+            html.Div(id="sync-space", className="note below"),
+            html.Div([html.Button("Pull selected", id="sync-pull", className="btn primary small", n_clicks=0),
+                      html.Button("Cancel pull", id="sync-cancel", className="btn small", n_clicks=0),
+                      html.Span(id="sync-msg", className="note")], className="below"),
+        ]),
+        html.Div(id="sync-progress", className="below"),
+        dcc.Store(id="sync-data"),
+    ], className="modal-box wide-box"))
+
+
 def serve_layout():
     return html.Div([
         dcc.Location(id="loc", refresh=True),
@@ -674,6 +721,7 @@ def serve_layout():
             html.Main([tools_section(), data_section(), outputs_section(), notes_section()]),
         ], className="wrap"),
         new_experiment_modal(),
+        sync_modal(),
     ])
 
 
@@ -734,6 +782,10 @@ tbody tr:nth-child(even) td{{background:var(--pale)}}
 .modal-box{{background:#fff;border-radius:8px;padding:18px 22px;width:520px;border-top:4px solid var(--accent)}}
 .chk input{{width:auto}}
 @media (max-width:1100px){{.trow,.tools{{grid-template-columns:1fr !important}} .tsec{{grid-column:auto !important}}}}
+.modal-box.wide-box{{width:640px;max-height:90vh;overflow:auto}}
+.pull-list label{{display:flex;align-items:center;gap:6px;font-family:monospace;font-size:12px;padding:2px 0}}
+.pbar{{height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin:4px 0}}
+.pbar div{{height:100%;background:var(--accent)}}
 .btn.quit{{color:#c62828;border-color:#c62828}} .btn.quit:hover{{background:#c62828;color:#fff}}
 """
 
@@ -908,6 +960,131 @@ def new_experiment(_o, _c, _k, name, data_dir, copy_from):
     except (ValueError, OSError) as exc:
         return shown, f"⚠ {exc}", dash.no_update
     return hidden, "", "/"
+
+
+# ---------------------------------------------------------------------------- sync with APPC256
+
+@app.callback(
+    Output("sync-modal", "style"),
+    Input("sync-open", "n_clicks"), Input("sync-close", "n_clicks"),
+    prevent_initial_call=True,
+)
+def sync_modal_show(_o, _c):
+    return {"display": "flex"} if ctx.triggered_id == "sync-open" else {"display": "none"}
+
+
+@app.callback(
+    Output("sync-result", "children"),
+    Output("sync-pull-list", "options"),
+    Output("sync-pull-list", "value"),
+    Output("sync-pull-box", "style"),
+    Output("sync-data", "data"),
+    Input("sync-check", "n_clicks"),
+    State("sync-pw", "value"),
+    prevent_initial_call=True,
+)
+def sync_check(_n, pw):
+    """Compare both sides, send the new confirmed lists, offer the new spectrograms."""
+    hidden = {"display": "none"}
+    try:
+        res = sync.check(pw)
+        lines = []
+        if res["remote_confirmed_missing"]:
+            lines.append(f"⚠ {sync.remote_dir(res['cfg'], 'remote_confirmed')} does not exist on "
+                         f"APPC256 – nothing sent.")
+        elif res["to_push"]:
+            sent = sync.push_confirmed(res["to_push"], pw, res["exp"])
+            lines.append(html.Div([html.B(f"Sent {len(sent)} confirmed list(s):"),
+                                   html.Ul([html.Li(n, className="mono") for n in sent])]))
+        else:
+            lines.append("Confirmed lists: APPC256 already has all of them.")
+        if res["remote_only_confirmed"]:
+            lines.append(f"({len(res['remote_only_confirmed'])} confirmed list(s) exist only on "
+                         f"APPC256; they are not pulled.)")
+        if res["remote_spectrograms_missing"]:
+            lines.append(f"⚠ {sync.remote_dir(res['cfg'], 'remote_spectrograms')} does not exist on APPC256.")
+        elif not res["to_pull"]:
+            lines.append("Spectrograms: this computer already has all of them.")
+    except sync.SyncError as exc:
+        return f"⚠ {exc}", [], [], hidden, None
+    except OSError as exc:
+        return f"⚠ {exc}", [], [], hidden, None
+    opts = [{"label": f" {n}  ({_size(s)})", "value": n} for n, s in res["to_pull"]]
+    data = {"exp": res["exp"], "sizes": dict(res["to_pull"])}
+    return ([html.Div(l) for l in lines], opts, [],
+            {"display": "block"} if opts else hidden, data)
+
+
+@app.callback(
+    Output("sync-space", "children"),
+    Input("sync-pull-list", "value"),
+    State("sync-data", "data"),
+)
+def sync_space(sel, data):
+    if not data:
+        return ""
+    import shutil
+    need = sum(data["sizes"].get(n, 0) for n in sel or [])
+    free = shutil.disk_usage(paths.spectrograms(data["exp"])).free
+    txt = f"Selected {len(sel or [])} file(s), {_size(need)} · free here: {_size(free)}"
+    if need + sync.FREE_MARGIN > free:
+        txt += f" – ⚠ too much (keeps {_size(sync.FREE_MARGIN)} spare)"
+    return txt
+
+
+@app.callback(
+    Output("sync-msg", "children"),
+    Input("sync-pull", "n_clicks"), Input("sync-cancel", "n_clicks"),
+    State("sync-pull-list", "value"), State("sync-pw", "value"), State("sync-data", "data"),
+    prevent_initial_call=True,
+)
+def sync_pull(_p, _c, sel, pw, data):
+    if ctx.triggered_id == "sync-cancel":
+        return "Cancelling…" if sync.JOB.cancel() else "No pull running."
+    if not data:
+        return "⚠ Press “Check” first."
+    items = [[n, data["sizes"][n]] for n in sorted(sel or []) if n in data["sizes"]]
+    try:
+        sync.JOB.start(items, pw, data["exp"])
+    except (sync.SyncError, OSError) as exc:
+        return f"⚠ {exc}"
+    return f"Pulling {len(items)} file(s)…"
+
+
+@app.callback(
+    Output("sync-progress", "children"),
+    Input("tick", "n_intervals"),
+    State("sync-modal", "style"),
+)
+def sync_progress(_n, style):
+    if not style or style.get("display") == "none":
+        return dash.no_update
+    st = sync.JOB.status()
+    if "items" not in st:
+        return ""
+    n = len(st["items"])
+    out = []
+    if st["running"]:
+        size, got = st["current_size"], st["current_got"]
+        pct = 100 * got / size if size else 0
+        out += [html.Div(f"Pulling {st['index'] + 1}/{n}: {st['current']} – "
+                         f"{_size(got)} of {_size(size)}", className="note"),
+                html.Div(html.Div(style={"width": f"{pct:.1f}%"}), className="pbar")]
+    else:
+        if st.get("cancelled"):
+            out.append(html.Div("Pull cancelled.", className="note"))
+        if st.get("error"):
+            out.append(html.Div(f"⚠ {st['error']}", className="note"))
+        if not st.get("cancelled") and not st.get("error"):
+            out.append(html.Div("Pull finished.", className="note"))
+    if st["done"]:
+        out.append(html.Div(f"Pulled into {os.path.relpath(st['dest'], paths.experiment_dir(st['exp']))}/: "
+                            + ", ".join(st["done"])
+                            + ("" if st["running"] else " – press ↻ Refresh to see them in Data files."),
+                            className="note"))
+    if st["skipped"]:
+        out.append(html.Div("Already here, skipped: " + ", ".join(st["skipped"]), className="note"))
+    return out
 
 
 @app.callback(
