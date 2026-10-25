@@ -37,7 +37,7 @@ import threading
 import webbrowser
 
 sys.path.insert(1, os.path.dirname(os.path.abspath(__file__)))
-from core import paths, physics
+from core import paths, physics, tabwatch
 
 import dash
 from dash import dcc, html, Input, Output, State, ALL, ctx
@@ -739,6 +739,9 @@ tbody tr:nth-child(even) td{{background:var(--pale)}}
 
 app = dash.Dash(__name__, title="Asphodel", suppress_callback_exceptions=True)
 app.index_string = app.index_string.replace("</head>", f"<style>{CSS}</style></head>")
+# tab and home page stop together: closing the home tab/window works like Quit
+app.index_string = app.index_string.replace(
+    "{%scripts%}", "{%scripts%}\n<script>" + tabwatch.watch_js("Asphodel") + "</script>")
 app.layout = serve_layout
 
 
@@ -915,6 +918,17 @@ def new_experiment(_o, _c, _k, name, data_dir, copy_from):
 def quit_info(n):
     """Quit pressed: hand the list of running tools to the confirmation dialog."""
     return {"n": n, "tools": running_summary()}
+
+
+def _home_tab_closed():
+    """The home page's last tab/window was closed: same as Quit."""
+    n = stop_everything()
+    print(f"Closed {n} tool process(es), stopping the home page.", flush=True)
+    os._exit(0)
+
+
+_TABS = tabwatch.TabTracker(on_last_closed=_home_tab_closed, name="Asphodel home page")
+tabwatch.install_flask(app.server, _TABS)
 
 
 @app.server.route("/_asphodel_quit", methods=["POST"])

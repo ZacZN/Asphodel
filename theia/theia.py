@@ -4989,10 +4989,10 @@ def show_further_page(page):
 # Quit
 # ---------------------------------------------------------------------------
 
-@app.server.route(tabwatch.ALIVE_PATH)
-def _theia_alive():
-    """Answered while Theia runs; the page closes its tab once this stops."""
-    return "ok"
+# The page checks in regularly: its tab closes when Theia stops, and Theia
+# stops (a running scan too) a few seconds after its last tab is closed.
+_TABS = tabwatch.TabTracker(on_last_closed=lambda: os._exit(0), name="Theia")
+tabwatch.install_flask(app.server, _TABS)
 
 
 @app.server.route("/_theia_quit", methods=["POST"])

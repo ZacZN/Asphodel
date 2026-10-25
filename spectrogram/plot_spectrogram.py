@@ -2388,6 +2388,8 @@ def serve(html, state):
 
     STATE = dict(state or {})
     STOP  = threading.Event()          # set by the page's Quit button
+    # ...or once the last browser tab of this program has been closed
+    TABS  = tabwatch.TabTracker(on_last_closed=STOP.set, name="plot_spectrogram.py")
     STATE["html"] = html
 
     with socket.socket() as _s:
@@ -2417,7 +2419,9 @@ def serve(html, state):
                 self._send(200, STATE["html"], "text/html; charset=utf-8")
 
             elif url.path == tabwatch.ALIVE_PATH:
-                # the page closes its tab once this stops answering
+                # regular check from the page (its tab closes once this stops
+                # answering; the program stops once no tab checks in)
+                TABS.seen(q.get("id", [""])[0])
                 self._send(200, {"ok": True})
 
             elif url.path == "/get-region":
@@ -2494,7 +2498,11 @@ def serve(html, state):
                 self._send(404, {"error": "not found"})
 
         def do_POST(self):
-            if self.path == "/load":
+            if urlparse(self.path).path == tabwatch.BYE_PATH:
+                # the page's tab is being closed or reloaded
+                TABS.bye(parse_qs(urlparse(self.path).query).get("id", [""])[0])
+                self._send(200, {"ok": True})
+            elif self.path == "/load":
                 try:
                     b = self._body()
                     html_new, st = load_dataset(b.get("file", ""), b.get("fMin"), b.get("fMax"),
