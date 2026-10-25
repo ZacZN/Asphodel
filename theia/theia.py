@@ -996,7 +996,8 @@ def section(title):
 # ---------------------------------------------------------------------------
 # Browse buttons and the field each one fills in
 BROWSE_TARGETS = {"btn-browse-spectra_dir": "s-spectra_dir",
-                  "btn-browse-v-file_path": "v-file_path"}
+                  "btn-browse-v-file_path": "v-file_path",
+                  "btn-browse-fsrc-dir": "fsrc-dir"}
 
 
 def with_browse(field_div, btn_id):
@@ -1457,6 +1458,10 @@ INFO_TEXTS = {
         "Simulated ion lines: the strongest peak of the sum is taken as the reference ion (at its "
         "reference harmonic), with the scan settings stored in the first loaded file.  Ions in the "
         "loaded files are dark dashed, others light dashed, half-life-excluded dotted.",
+        "Data source 'Single spectrum file': any .npz spectrum (e.g. a Tartarus sum in "
+        "summed_1d, or the file open in the Viewer via 'Use Viewer spectrum') is shown as it is, "
+        "for fitting and the energy calculation.  Its simulated lines use the Viewer settings "
+        "(no half-life cut), with the strongest peak as the reference.",
     ]),
     "fit": ("Peak fitting", [
         "Switch it on and click a peak to add it (the start values snap to the nearest maximum).",
@@ -1535,6 +1540,13 @@ PID_FIELDS = [   # key, label
 PID_KEYS = [k for k, _ in PID_FIELDS] + ["min_half_life_unit", "correction_enabled",
                                          "exclude_unknown_hl"]
 
+# Aligning and fitting: controls shown for the "confirmation files" source
+# only, and the row of the "single spectrum file" source
+SUM_CONTROLS_SHOWN = {"display": "flex", "alignItems": "center", "flexWrap": "wrap",
+                      "rowGap": "6px"}
+FILE_SRC_SHOWN = {"display": "flex", "alignItems": "center", "flexWrap": "wrap", "rowGap": "6px",
+                  "marginBottom": "10px"}
+
 def _pid_field(key, label):
     return html.Div([
         html.Label(label, style=LABEL_STYLE),
@@ -1551,8 +1563,10 @@ pid_modal = html.Div([
             html.Button("✕", id="pid-cancel", className="btn btn-outline-secondary btn-sm"),
         ], style={"display": "flex", "justifyContent": "space-between", "alignItems": "center",
                   "marginBottom": "4px"}),
-        html.Small("The reference position is always the strongest peak of the summed spectrum.  "
-                   "Values start from the scan settings of the first loaded file.",
+        html.Small("The reference position is always the strongest peak of the plotted spectrum.  "
+                   "Values start from the scan settings of the first loaded confirmation file, "
+                   "or from the Viewer settings for a single spectrum file (each data source "
+                   "keeps its own edits).",
                    style={**HELP_STYLE, "marginBottom": "8px"}),
         # shows / hides the lines straight away (no Apply needed)
         dcc.Checklist(id="sum-show-sims", value=["on"],
@@ -1599,39 +1613,78 @@ pid_modal = html.Div([
 
 align_fit_tab = html.Div([
     html.H5("Aligning and fitting", style={"fontWeight": "700"}),
-    # Numbered list of loaded confirmation files (any number); "+ Add file"
-    # opens a picker, choosing a file appends it to the list.
-    html.Div(id="further-list"),
+    # Data source: the sum of the spectra in the confirmation files, or one
+    # spectrum file (e.g. a Tartarus sum, or the file open in the Viewer)
     html.Div([
-        html.Button("+ Add file", id="btn-further-add", className="btn btn-sm",
-                    style={"backgroundColor": ACCENT, "color": "white", "marginRight": "10px"}),
+        html.Span("Data source:", style={**LABEL_STYLE, "margin": "0 8px 0 0"}),
+        dcc.RadioItems(id="further-source", value="sum", inline=True,
+                       options=[{"label": "Confirmation files (summed)", "value": "sum"},
+                                {"label": "Single spectrum file", "value": "file"}],
+                       inputStyle={"marginRight": "4px"},
+                       labelStyle={"marginRight": "14px", "fontSize": "13px"}),
+    ], style={"display": "flex", "alignItems": "center", "marginBottom": "8px"}),
+    html.Div([
+        # Numbered list of loaded confirmation files (any number); "+ Add file"
+        # opens a picker, choosing a file appends it to the list.
+        html.Div(id="further-list"),
         html.Div([
-            dcc.Dropdown(id="further-file", options=[], placeholder="Choose a confirmation file…",
-                         style={"fontSize": "13px", "width": "720px"}),
-        ], id="further-picker", style={"display": "none"}),
-    ], style={"display": "flex", "alignItems": "center", "margin": "8px 0 10px 0"}),
-    html.Div(id="further-total", style={"fontSize": "13px", "fontWeight": "600", "marginBottom": "8px"}),
+            html.Button("+ Add file", id="btn-further-add", className="btn btn-sm",
+                        style={"backgroundColor": ACCENT, "color": "white", "marginRight": "10px"}),
+            html.Div([
+                dcc.Dropdown(id="further-file", options=[], placeholder="Choose a confirmation file…",
+                             style={"fontSize": "13px", "width": "720px"}),
+            ], id="further-picker", style={"display": "none"}),
+        ], style={"display": "flex", "alignItems": "center", "margin": "8px 0 10px 0"}),
+        html.Div(id="further-total", style={"fontSize": "13px", "fontWeight": "600",
+                                            "marginBottom": "8px"}),
+    ], id="further-sum-src"),
+    # Single spectrum file: folder (Browse…) + .npz dropdown, or take the
+    # file that is open in the Viewer tab
+    html.Div([
+        html.Span("Folder:", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
+        dcc.Input(id="fsrc-dir", type="text", debounce=True, value=os.path.join(paths.summed_1d(), ""),
+                  className="form-control form-control-sm",
+                  style={"width": "460px", "fontSize": "13px", "fontFamily": "monospace"}),
+        html.Button("Browse…", id="btn-browse-fsrc-dir", className="btn btn-outline-secondary btn-sm",
+                    title="Choose the folder in a folder browser",
+                    style={"marginLeft": "6px", "marginRight": "14px", "whiteSpace": "nowrap"}),
+        html.Span("File:", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
+        dcc.Dropdown(id="fsrc-name", options=[], placeholder="Choose a .npz spectrum…",
+                     clearable=False, style={"fontSize": "13px", "width": "320px",
+                                             "marginRight": "14px"}),
+        html.Button("Use Viewer spectrum", id="btn-fsrc-viewer",
+                    className="btn btn-outline-secondary btn-sm",
+                    title="Load the spectrum that is open in the Viewer tab"),
+    ], id="further-file-src", style={"display": "none"}),
+    dcc.Store(id="fsrc-load-req", data=None),
     dcc.Store(id="further-files", data=[]),
     html.Div([
         # Sum the spectra referenced by the loaded files, optionally aligned.
         html.Div([
-            html.Span("Sum spectra", style={"fontWeight": "700", "marginRight": "4px"}),
-            info_button("sum", {"marginRight": "14px"}),
-            html.Span("Align on:", style={**LABEL_STYLE, "marginRight": "8px"}),
-            dcc.RadioItems(id="sum-align", value="none", inline=True,
-                           options=[{"label": "Not aligned", "value": "none"},
-                                    {"label": "Strongest peak", "value": "strongest"},
-                                    {"label": "Identified peak", "value": "identified"}],
-                           inputStyle={"marginRight": "4px"},
-                           labelStyle={"marginRight": "14px", "fontSize": "13px"}),
-            dcc.Dropdown(id="sum-ion", options=[], placeholder="Ion / harmonic…",
-                         clearable=False, style={"fontSize": "13px", "width": "240px",
-                                                 "marginRight": "14px"}),
-            dcc.Checklist(id="sum-unsure", value=["on"],
-                          options=[{"label": " include unsure", "value": "on"}],
-                          style={"fontSize": "13px", "marginRight": "14px"}),
-            html.Button("Sum spectra", id="btn-sum", className="btn btn-sm",
-                        style={"backgroundColor": ACCENT, "color": "white", "marginRight": "14px"}),
+            html.Div([
+                html.Span("Sum spectra", style={"fontWeight": "700", "marginRight": "4px"}),
+                info_button("sum", {"marginRight": "14px"}),
+                html.Span("Align on:", style={**LABEL_STYLE, "marginRight": "8px"}),
+                dcc.RadioItems(id="sum-align", value="none", inline=True,
+                               options=[{"label": "Not aligned", "value": "none"},
+                                        {"label": "Strongest peak", "value": "strongest"},
+                                        {"label": "Identified peak", "value": "identified"}],
+                               inputStyle={"marginRight": "4px"},
+                               labelStyle={"marginRight": "14px", "fontSize": "13px"}),
+                dcc.Dropdown(id="sum-ion", options=[], placeholder="Ion / harmonic…",
+                             clearable=False, style={"fontSize": "13px", "width": "240px",
+                                                     "marginRight": "14px"}),
+                dcc.Checklist(id="sum-unsure", value=["on"],
+                              options=[{"label": " include unsure", "value": "on"}],
+                              style={"fontSize": "13px", "marginRight": "14px"}),
+                html.Button("Sum spectra", id="btn-sum", className="btn btn-sm",
+                            style={"backgroundColor": ACCENT, "color": "white",
+                                   "marginRight": "14px"}),
+            ], id="sum-only-controls", style=SUM_CONTROLS_SHOWN),
+            html.Button("Load spectrum", id="btn-fsrc-load", className="btn btn-sm",
+                        title="Show the chosen spectrum file for fitting",
+                        style={"backgroundColor": ACCENT, "color": "white", "marginRight": "14px",
+                               "display": "none"}),
             html.Button("PID Settings", id="btn-pid", className="btn btn-outline-secondary btn-sm",
                         title="Settings used for the simulated ion lines"),
         ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap", "rowGap": "6px",
@@ -2356,6 +2409,15 @@ def serve_layout():
     st = load_config().get("further_state") or {}
     files = [f for f in (st.get("files") or []) if os.path.isfile(f)]
     fit = st.get("fit") or {}
+    plot = st.get("plot") or {"source": "sum"}
+    if plot.get("source") == "file":
+        try:
+            restorable = os.path.isfile(paths.remap_legacy(os.path.join(
+                os.path.expanduser(plot.get("dir") or ""), plot.get("name") or "")))
+        except Exception:
+            restorable = False
+    else:
+        restorable = bool(files)
     for cid, prop, value in [
         ("further-files", "data", files),
         ("sum-align", "value", st.get("align") or "none"),
@@ -2363,8 +2425,12 @@ def serve_layout():
         ("sum-unsure", "value", st.get("unsure") if st.get("unsure") is not None else ["on"]),
         ("fit-shape", "value", fit.get("shape") or "gauss"),
         ("fit-bg", "value", fit.get("bg") or "const"),
-        ("further-restore", "data", (dict(st, files=files) if st.get("summed") and files else None)),
+        ("further-restore", "data", (dict(st, files=files) if st.get("summed") and restorable
+                                     else None)),
         ("pid-settings", "data", st.get("pid")),
+        ("further-source", "value", st.get("source") or "sum"),
+        ("fsrc-dir", "value", st.get("file_dir") or os.path.join(paths.summed_1d(), "")),
+        ("fsrc-name", "value", st.get("file_name")),
     ]:
         comp = _find_component(_BASE_LAYOUT, cid)
         if comp is not None:
@@ -2509,8 +2575,7 @@ def _fb_listing(path):
     Output("fb-list", "children"),
     Output("fb-path-input", "value"),
     Output("fb-info", "children"),
-    Output("s-spectra_dir", "value"),
-    Output("v-file_path", "value"),
+    *[Output(f, "value", allow_duplicate=True) for f in BROWSE_TARGETS.values()],
     *[Input(b, "n_clicks") for b in BROWSE_TARGETS],
     Input({"type": "fb-dir", "index": ALL}, "n_clicks"),
     Input("fb-up", "n_clicks"),
@@ -2520,37 +2585,38 @@ def _fb_listing(path):
     Input("fb-cancel", "n_clicks"),
     State("fb-path", "data"),
     State("fb-target", "data"),
-    State("s-spectra_dir", "value"),
-    State("v-file_path", "value"),
+    *[State(f, "value") for f in BROWSE_TARGETS.values()],
     prevent_initial_call=True,
 )
 def folder_browser_cb(*args):
     """Open the browser at the field's current folder, navigate, and on
     'Select this folder' write the folder into the field that opened it."""
-    path, target, scan_dir, viewer_dir = args[-4:]
+    fields = list(BROWSE_TARGETS.values())
+    nf = len(fields)
+    path, target = args[-nf - 2:-nf]
+    current = dict(zip(fields, args[-nf:]))
     nu = dash.no_update
+    keep = (nu,) * nf
     trig = dash.callback_context.triggered[0] if dash.callback_context.triggered else None
     if trig is None:
-        return (nu,) * 8
+        return (nu,) * 6 + keep
     pid, val = trig["prop_id"], trig["value"]
 
     def show(p, tgt):
         rows, info = _fb_listing(p)
-        return FB_SHOWN, p, tgt, rows, p, info, nu, nu
+        return (FB_SHOWN, p, tgt, rows, p, info) + keep
 
     for btn, field in BROWSE_TARGETS.items():
         if pid.startswith(btn + "."):
-            current = scan_dir if field == "s-spectra_dir" else viewer_dir
-            return show(_fb_start_dir(current), field)
+            return show(_fb_start_dir(current[field]), field)
     if pid.startswith("fb-cancel"):
-        return FB_HIDDEN, nu, None, nu, nu, nu, nu, nu
+        return (FB_HIDDEN, nu, None, nu, nu, nu) + keep
     if pid.startswith("fb-select"):
         chosen = os.path.join(path, "") if path else None      # with trailing '/'
-        return (FB_HIDDEN, nu, None, nu, nu, nu,
-                chosen if target == "s-spectra_dir" and chosen else nu,
-                chosen if target == "v-file_path" and chosen else nu)
+        return (FB_HIDDEN, nu, None, nu, nu, nu) + tuple(
+            chosen if target == f and chosen else nu for f in fields)
     if not path:
-        return (nu,) * 8
+        return (nu,) * 6 + keep
     if pid.startswith("fb-up"):
         return show(os.path.dirname(path.rstrip("/")) or "/", target)
     if pid.startswith("fb-home"):
@@ -2559,12 +2625,12 @@ def folder_browser_cb(*args):
         p = os.path.expanduser((val or "").strip())
         if os.path.isdir(p):
             return show(os.path.abspath(p), target)
-        return nu, nu, nu, nu, nu, html.Span("Not a folder: " + (val or ""),
-                                             style={"color": "#c0392b"}), nu, nu
+        return (nu, nu, nu, nu, nu, html.Span("Not a folder: " + (val or ""),
+                                              style={"color": "#c0392b"})) + keep
     if '"fb-dir"' in pid and val:                     # a sub-folder was clicked
         name = json.loads(pid.rsplit(".", 1)[0])["index"]
         return show(os.path.join(path, name), target)
-    return (nu,) * 8
+    return (nu,) * 6 + keep
 
 
 @app.callback(
@@ -3520,6 +3586,65 @@ def toggle_sum_ion(align):
             "display": "none" if align == "none" else "block"}
 
 
+@app.callback(
+    Output("further-sum-src", "style"),
+    Output("further-file-src", "style"),
+    Output("sum-only-controls", "style"),
+    Output("btn-fsrc-load", "style"),
+    Input("further-source", "value"),
+)
+def toggle_further_source(source):
+    """Show the controls of the chosen data source (confirmation files / one file)."""
+    hidden = {"display": "none"}
+    load = {"backgroundColor": ACCENT, "color": "white", "marginRight": "14px"}
+    if source == "file":
+        return hidden, FILE_SRC_SHOWN, hidden, load
+    return {}, hidden, SUM_CONTROLS_SHOWN, {**load, "display": "none"}
+
+
+@app.callback(
+    Output("fsrc-dir", "value"),
+    Output("fsrc-name", "options"),
+    Output("fsrc-name", "value"),
+    Output("fsrc-load-req", "data"),
+    Input("fsrc-dir", "value"),
+    Input("btn-fsrc-viewer", "n_clicks"),
+    State("fsrc-name", "value"),
+    State("v-file_path", "value"),
+    State("v-spectrum_name", "value"),
+)
+def fsrc_options(directory, _viewer, current, v_dir, v_name):
+    """Single-file source: the .npz files in the folder.  'Use Viewer spectrum'
+    takes the Viewer's folder and file and loads it straight away."""
+    trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
+    nu = dash.no_update
+    req = nu
+    if trig.startswith("btn-fsrc-viewer"):
+        if not v_dir or not v_name:
+            return nu, nu, nu, nu
+        directory, current = v_dir, v_name
+        req = {"t": time.time()}
+    d = paths.remap_legacy(os.path.expanduser((directory or "").strip()))
+    names = list_npz(d)
+    opts = [{"label": n, "value": n} for n in names]
+    value = current if current in names else (names[0] if names else None)
+    return (directory if req is not nu else nu), opts, value, req
+
+
+def load_single_spectrum(directory, name):
+    """(freq, power) of one .npz spectrum file, sorted by frequency."""
+    if not directory or not name:
+        raise ValueError("Choose a folder and a spectrum file first.")
+    ff, pp = load_spectrum(os.path.expanduser(directory.strip()), name)
+    ff, pp = np.asarray(ff, dtype=float), np.asarray(pp, dtype=float)
+    if len(ff) != len(pp) or not len(ff):
+        raise ValueError(f"{name}: frequency and power arrays do not match")
+    if np.any(np.diff(ff) < 0):
+        order = np.argsort(ff)
+        ff, pp = ff[order], pp[order]
+    return ff, pp
+
+
 _SUM_ANNOTATIONS = {}   # sum key -> the figure's own annotations (energy labels go after)
 _SUM_SHAPES = {}        # ... and its own shapes (the energy brackets go after)
 _SUM_SIMS = {}      # sum key -> simulated lines (ion, harmonic, f_sim), for name suggestions
@@ -3549,9 +3674,36 @@ def file_scan_settings(files):
     return st
 
 
-def pid_settings(files, overrides):
-    """Parsed settings for the simulated lines: file settings + overrides."""
-    return parse_settings({**file_scan_settings(files), **(overrides or {})})
+def viewer_pid_settings():
+    """Raw settings for the simulated lines of a single spectrum file: the
+    scanner settings for anything the Viewer has not got, then the Viewer's
+    settings (viewer_config.json + shared physics); no half-life cut, as in
+    the Viewer."""
+    raw = dict(load_config())
+    v = load_viewer_config()
+    raw.update({k: v[k] for k in VIEWER_KEYS if k in raw})
+    raw["min_half_life"], raw["exclude_unknown_hl"] = 0, []
+    return raw
+
+
+def pid_base(source, files):
+    """Raw settings the PID popup starts from, for the data source."""
+    return viewer_pid_settings() if source == "file" else file_scan_settings(files)
+
+
+def pid_overrides(store, source):
+    """The PID edits stored for one data source.  The store holds
+    {"sum": ..., "file": ...}; an older store (one flat dict) is the sum's."""
+    if not store:
+        return None
+    if "sum" in store or "file" in store:
+        return store.get(source)
+    return store if source == "sum" else None
+
+
+def pid_settings(files, overrides, source="sum"):
+    """Parsed settings for the simulated lines: base settings + overrides."""
+    return parse_settings({**pid_base(source, files), **(overrides or {})})
 
 
 def _pid_display(raw, key):
@@ -3568,11 +3720,13 @@ def _pid_display(raw, key):
     return str(v)
 
 
-def sum_sim_traces(ff, pp, files, include_unsure, overrides, key=None):
+def sum_sim_traces(ff, pp, files, include_unsure, overrides, key=None, source="sum"):
     """(x, y, hovertext) for the three simulated-line traces of the summed plot
     (no peak / identified / half-life excluded) and a one-line description.
-    Same calculation as the scanner; the strongest peak is the reference."""
-    s = pid_settings(files, overrides)
+    Same calculation as the scanner; the strongest peak is the reference.
+    source 'file': a single spectrum, with the Viewer settings and no
+    'identified' ions."""
+    s = pid_settings(files, overrides, source)
     k = int(np.nanargmax(pp))
     ref_f = float(ff[k])
     ion_db, ref_mq = build_ion_database(*s["ion_key"])
@@ -3586,7 +3740,8 @@ def sum_sim_traces(ff, pp, files, include_unsure, overrides, key=None):
                                        "f_sim": sims["f_sim"].to_numpy()})
         for k_old in list(_SUM_SIMS)[:-4]:
             _SUM_SIMS.pop(k_old, None)
-    t = pd.concat([read_confirmed(f)[1] for f in files], ignore_index=True)
+    t = (pd.concat([read_confirmed(f)[1] for f in files], ignore_index=True)
+         if source == "sum" and files else pd.DataFrame())
     if not include_unsure and "decision" in t:
         t = t[t["decision"] != "unsure"]
     listed = t[["ion", "harmonic"]].drop_duplicates() if len(t) else \
@@ -3604,13 +3759,17 @@ def sum_sim_traces(ff, pp, files, include_unsure, overrides, key=None):
         out.append(([] if tr is None else list(tr.x), [] if tr is None else list(tr.y),
                     [] if tr is None else list(tr.hovertext)))
     cut = hl_cut_text(s)
-    src = "PID settings (edited)" if overrides else (
-        "settings of file 1" + (f" of {len(files)}" if len(files) > 1 else ""))
+    if overrides:
+        src = "PID settings (edited)"
+    elif source == "file":
+        src = "Viewer settings"
+    else:
+        src = "settings of file 1" + (f" of {len(files)}" if len(files) > 1 else "")
     text = (f"Simulated lines: reference {s['ref_name']} (h={s['ref_harmonic']}) taken as the "
             f"strongest peak at {ref_f:.1f} Hz · harmonics {', '.join(map(str, s['harmonics']))}"
             f" · correction {'on' if s['correction_enabled'] else 'off'}"
             + (f" · half-life cut: {cut}" if cut else "") + f" · from {src}"
-            + " · dark dashed: ions in the loaded files")
+            + (" · dark dashed: ions in the loaded files" if source == "sum" else ""))
     return out, text
 
 
@@ -3621,6 +3780,9 @@ _SUM_CACHE_LOCK = threading.Lock()
 # fit saved last session, waiting for its restored sum (sum key -> fit state)
 _RESTORE_FIT = {}
 _RESTORE_ENERGY = {}    # same for the energy calculation (state + peak names)
+# sum key -> what the plot shows: {"source": "sum"} or
+# {"source": "file", "dir": ..., "name": ...} (saved with the tab)
+_SUM_META = {}
 
 
 def _cache_sum(ff, pp):
@@ -3632,6 +3794,7 @@ def _cache_sum(ff, pp):
         _SUM_CACHE[key] = (ff, pp, sigma or 1.0)
         for k in list(_SUM_CACHE)[:-4]:          # keep the last few sums only
             _SUM_CACHE.pop(k, None)
+            _SUM_META.pop(k, None)
     return key
 
 
@@ -3674,6 +3837,8 @@ def _fit_into_patch(patch, fit_state, cached):
     Output("sum-key", "data"),
     Output("sum-sim-info", "children"),
     Input("btn-sum", "n_clicks"),
+    Input("btn-fsrc-load", "n_clicks"),
+    Input("fsrc-load-req", "data"),
     Input("further-restore", "data"),
     State("further-files", "data"),
     State("sum-align", "value"),
@@ -3681,39 +3846,72 @@ def _fit_into_patch(patch, fit_state, cached):
     State("sum-unsure", "value"),
     State("sum-show-sims", "value"),
     State("pid-settings", "data"),
+    State("fsrc-dir", "value"),
+    State("fsrc-name", "value"),
 )
-def show_sum(_, restore, files, align, ion_key, unsure, show_sims, pid_over):
-    """'Sum spectra' button, or (on page load) rebuild the sum saved last time
-    with its zoom; the saved fit is then picked up by update_fit."""
+def show_sum(_, _load, _req, restore, files, align, ion_key, unsure, show_sims, pid_store,
+             f_dir, f_name):
+    """'Sum spectra' button, 'Load spectrum' / 'Use Viewer spectrum' (single
+    spectrum file), or (on page load) rebuild the plot saved last time with
+    its zoom; the saved fit is then picked up by update_fit."""
     trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
-    restoring = not trig.startswith("btn-sum")
-    if restoring:
+    nu = dash.no_update
+    # anything but the buttons (e.g. the initial call on page load) = restore
+    restoring = not (trig.startswith("btn-sum") or trig.startswith("btn-fsrc-load")
+                     or trig.startswith("fsrc-load-req"))
+    if trig.startswith("btn-sum"):
+        source = "sum"
+    elif not restoring:
+        if not (_load if trig.startswith("btn-fsrc-load") else _req):
+            return nu, nu, nu, nu
+        source = "file"
+    else:
         if not restore or not restore.get("summed"):
-            return dash.no_update, dash.no_update, dash.no_update, dash.no_update
-        files, align = restore.get("files") or files, restore.get("align") or align
-        ion_key = restore.get("ion") or ion_key
-        unsure = restore.get("unsure") if restore.get("unsure") is not None else unsure
-    if not files:
-        return empty_fig("No confirmation files loaded"), "Load at least one file first.", None, ""
-    try:
-        ff, pp, info = sum_spectra(files, align, ion_key, bool(unsure))
-    except Exception as exc:
-        return (empty_fig(str(exc)), html.Span(f"Error: {exc}", style={"color": "#c0392b"}),
-                None, "")
+            return nu, nu, nu, nu
+        plot = restore.get("plot") or {"source": "sum"}
+        source = plot.get("source") or "sum"
+        if source == "file":
+            f_dir, f_name = plot.get("dir"), plot.get("name")
+        else:
+            files, align = restore.get("files") or files, restore.get("align") or align
+            ion_key = restore.get("ion") or ion_key
+            unsure = restore.get("unsure") if restore.get("unsure") is not None else unsure
+    pid_over = pid_overrides(pid_store, source)
+
+    if source == "file":
+        try:
+            ff, pp = load_single_spectrum(f_dir, f_name)
+        except Exception as exc:
+            return (empty_fig(str(exc)), html.Span(f"Error: {exc}", style={"color": "#c0392b"}),
+                    None, "")
+        info = dict(n=1, n_requested=1, failed=[], target=None, zoom=None, zoom_on_ion=False,
+                    shifts=np.array([]), names=[f_name], n_dirs=1)
+        how, title = "", f_name
+        meta = {"source": "file", "dir": f_dir, "name": f_name}
+    else:
+        if not files:
+            return (empty_fig("No confirmation files loaded"), "Load at least one file first.",
+                    None, "")
+        try:
+            ff, pp, info = sum_spectra(files, align, ion_key, bool(unsure))
+        except Exception as exc:
+            return (empty_fig(str(exc)), html.Span(f"Error: {exc}", style={"color": "#c0392b"}),
+                    None, "")
+        if align == "identified":
+            ion, harm = ion_key.rsplit("|", 1)
+            how = f"aligned on {ion} h={harm}"
+        elif align == "strongest":
+            how = "aligned on the strongest peak"
+        else:
+            how = "not aligned"
+        title = f"Sum of {info['n']} spectra ({how})"
+        meta = {"source": "sum"}
     key = _cache_sum(ff, pp)
+    _SUM_META[key] = meta
     if restoring and restore.get("fit"):
         _RESTORE_FIT[key] = restore["fit"]
     if restoring and restore.get("energy"):
         _RESTORE_ENERGY[key] = restore["energy"]
-
-    if align == "identified":
-        ion, harm = ion_key.rsplit("|", 1)
-        how = f"aligned on {ion} h={harm}"
-    elif align == "strongest":
-        how = "aligned on the strongest peak"
-    else:
-        how = "not aligned"
-    title = f"Sum of {info['n']} spectra ({how})"
 
     fig = go.Figure()
     # name "Spectrum" + no Plotly hover, as in the other spectrum plots: the
@@ -3734,7 +3932,8 @@ def show_sum(_, restore, files, align, ion_key, unsure, show_sims, pid_over):
     # excluded) after the fit and energy traces, so "PID Settings" can redraw
     # them in place
     try:
-        sim_traces, sim_text = sum_sim_traces(ff, pp, files, bool(unsure), pid_over, key=key)
+        sim_traces, sim_text = sum_sim_traces(ff, pp, files, bool(unsure), pid_over, key=key,
+                                              source=source)
     except Exception as exc:
         traceback.print_exc()
         sim_traces, sim_text = [([], [], [])] * 3, f"simulated lines not drawn: {exc}"
@@ -3759,7 +3958,8 @@ def show_sum(_, restore, files, align, ion_key, unsure, show_sims, pid_over):
         fig.update_xaxes(range=view["x"], autorange=False)
         fig.update_yaxes(range=view["y"], autorange=False)
     fig.update_layout(title=title, xaxis_title="Frequency (Hz)",
-                      yaxis_title="Summed Schottky Power (a.u.)",
+                      yaxis_title=("Schottky Power (a.u.)" if source == "file"
+                                   else "Summed Schottky Power (a.u.)"),
                       # hover only reaches the simulated lines (the spectrum
                       # and fit traces skip hover), as in the other plots
                       hovermode="x",
@@ -3771,6 +3971,10 @@ def show_sum(_, restore, files, align, ion_key, unsure, show_sims, pid_over):
     _SUM_ANNOTATIONS[key] = [a.to_plotly_json() for a in fig.layout.annotations]
     _SUM_SHAPES[key] = [sh.to_plotly_json() for sh in fig.layout.shapes]
 
+    if source == "file":
+        status = [html.Span(f"Single spectrum {f_name}  ·  {len(ff)} bins, "
+                            f"{ff.min():.1f} – {ff.max():.1f} Hz  ·  from {f_dir}")]
+        return fig, status, key, sim_text
     sh = info["shifts"]
     parts = [f"Summed {info['n']} spectra ({how})"]
     if align == "identified":
@@ -4452,16 +4656,23 @@ app.clientside_callback(
     Input("energy-name-1", "value"),
     Input("energy-name-2", "value"),
     Input("pid-settings", "data"),
+    Input("further-source", "value"),
+    Input("fsrc-dir", "value"),
+    Input("fsrc-name", "value"),
     prevent_initial_call=True,
 )
-def save_further_state(files, align, ion, unsure, key, view, fit, energy, name1, name2, pid):
+def save_further_state(files, align, ion, unsure, key, view, fit, energy, name1, name2, pid,
+                       source, f_dir, f_name):
     """Save the Further output tab after every change, so it is restored the
     next time Theia runs (scanner_config.json -> further_state)."""
     trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
     old = load_config().get("further_state") or {}
     st = {"files": files or [], "align": align, "ion": ion, "unsure": unsure or [],
           "summed": key is not None, "view": view or old.get("view"), "fit": old.get("fit"),
-          "energy": old.get("energy"), "pid": pid}
+          "energy": old.get("energy"), "pid": pid,
+          # chosen data source and single file; "plot" = what the plot shows
+          "source": source or "sum", "file_dir": f_dir, "file_name": f_name,
+          "plot": _SUM_META.get(key) if key is not None else old.get("plot")}
     if trig.startswith("sum-key"):
         st["view"] = view if view else old.get("view")
     if trig.startswith("fit-state"):
@@ -4475,6 +4686,7 @@ def save_further_state(files, align, ion, unsure, key, view, fit, energy, name1,
     if key is None and not trig.startswith("sum-key"):
         # page just loaded and the restored sum is not back yet: keep it
         st["summed"] = old.get("summed", False)
+        st["plot"] = old.get("plot")
     save_config({"further_state": st})
     return dash.no_update
 
@@ -5326,12 +5538,21 @@ def _energy_into_patch(patch, est, fit_state, view, key, cached, trig):
     *[State(f"pid-{k}", "value") for k in PID_KEYS],
     State("further-files", "data"),
     State("pid-settings", "data"),
+    State("further-source", "value"),
     prevent_initial_call=True,
 )
 def pid_popup(_open, _apply, _reset, _cancel, *args):
-    """PID Settings popup: opens filled with the settings in use (file +
-    edits); Apply validates and stores the edits; Reset to file drops them."""
-    values, (files, overrides) = list(args[:len(PID_KEYS)]), args[len(PID_KEYS):]
+    """PID Settings popup: opens filled with the settings in use for the
+    chosen data source (file / Viewer settings + edits); Apply validates and
+    stores the edits; Reset to file drops them."""
+    values, (files, store, source) = list(args[:len(PID_KEYS)]), args[len(PID_KEYS):]
+    source = source or "sum"
+    overrides = pid_overrides(store, source)
+
+    def stored(over):
+        new = {"sum": pid_overrides(store, "sum"), "file": pid_overrides(store, "file")}
+        new[source] = over
+        return new
     shown = {"display": "flex", "position": "fixed", "inset": "0", "zIndex": "1000",
              "background": "rgba(0,0,0,0.35)", "alignItems": "center", "justifyContent": "center"}
     hidden = {**shown, "display": "none"}
@@ -5340,7 +5561,7 @@ def pid_popup(_open, _apply, _reset, _cancel, *args):
     trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
 
     def filled(over):
-        raw = {**file_scan_settings(files), **(over or {})}
+        raw = {**pid_base(source, files), **(over or {})}
         return [_pid_display(raw, k) for k in PID_KEYS]
 
     if trig.startswith("pid-cancel"):
@@ -5349,12 +5570,14 @@ def pid_popup(_open, _apply, _reset, _cancel, *args):
         if trig.startswith("btn-pid"):
             return (shown, *filled(overrides), "", nu)
         if trig.startswith("pid-reset"):
-            return (shown, *filled(None), "Reset to the settings of the loaded file.", None)
+            msg = ("Reset to the Viewer settings." if source == "file"
+                   else "Reset to the settings of the loaded file.")
+            return (shown, *filled(None), msg, stored(None))
         if trig.startswith("pid-apply"):
             new = dict(zip(PID_KEYS, values))
-            s = pid_settings(files, new)                     # validates the numbers
+            s = pid_settings(files, new, source)             # validates the numbers
             build_ion_database(*s["ion_key"])                # ...and the reference ion
-            return (hidden, *keep, "", new)
+            return (hidden, *keep, "", stored(new))
     except Exception as exc:
         msg = html.Span(f"⚠ {exc}", style={"color": "#c0392b"})
         if trig.startswith("btn-pid"):
@@ -5373,16 +5596,18 @@ def pid_popup(_open, _apply, _reset, _cancel, *args):
     State("sum-show-sims", "value"),
     prevent_initial_call=True,
 )
-def apply_pid(overrides, key, files, unsure, show_sims):
-    """Redraw only the simulated lines with the new PID settings (no re-sum;
-    the zoom is kept)."""
+def apply_pid(store, key, files, unsure, show_sims):
+    """Redraw only the simulated lines with the new PID settings of the
+    plotted data source (no re-sum; the zoom is kept)."""
     with _SUM_CACHE_LOCK:
         cached = _SUM_CACHE.get(key)
     if cached is None:
         return dash.no_update, dash.no_update
     ff, pp, _ = cached
+    source = (_SUM_META.get(key) or {}).get("source", "sum")
     try:
-        traces, text = sum_sim_traces(ff, pp, files, bool(unsure), overrides, key=key)
+        traces, text = sum_sim_traces(ff, pp, files, bool(unsure), pid_overrides(store, source),
+                                      key=key, source=source)
     except Exception as exc:
         traceback.print_exc()
         return dash.no_update, f"simulated lines not drawn: {exc}"
