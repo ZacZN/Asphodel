@@ -1525,6 +1525,10 @@ INFO_TEXTS = {
         "already ≤ 1).  f covers what the peak-fit errors miss (alignment, background, line "
         "shape, close neighbours) and is shown with the result; treat it as an upper limit.  "
         "Light wide bars: total error; dark thin bars: statistical.",
+        "Bin-width error: bin = recording frequency / number of frequency bins (type e.g. "
+        "10e6 and 2^17 → 76.294 Hz).  ±½ bin is taken as an extra FWHM error and converted "
+        "like err σ(T): (½ bin / centre) · T · 1000 / 2√(2 ln 2), added in quadrature.  With "
+        "the auto floor also ticked, the floor is fitted on top of it (what is left over).",
         "Settings are saved per experiment (settings/isocurve.json).",
         "'Save figure' draws the plot and residuals with matplotlib and saves PNG + PDF in "
         "outputs/figures/.",
@@ -2088,6 +2092,7 @@ ISO_CURVE_COLUMNS = [
 ISO_FIT_DEFAULTS = {"circumference_m": 108.36, "c_m_s": 299792458.0,
                     "gt_min": 1.0, "gt_max": 3.0, "sp_min_pct": 0.0, "sp_max_pct": 0.2,
                     "ssys_min_ps": 0.0, "ssys_max_ps": 0.4}
+ISO_BIN_DEFAULTS = {"rec_freq": "10e6", "n_bins": "2^17"}   # bin-width error inputs
 ISO_SETTING_INPUTS = [   # first key, second key (range) or None, label, width
     ("circumference_m", None, "Circumference (m)", "100px"),
     ("c_m_s", None, "c (m/s)", "170px"),
@@ -2174,6 +2179,25 @@ isochronicity_tab = html.Div([
                           labelStyle={"fontSize": "13px"},
                           style={"paddingBottom": "6px"}),
         ], style={"display": "flex", "alignItems": "flex-end", "flexWrap": "wrap",
+                  "rowGap": "6px", "marginBottom": "8px"}),
+        html.Div([
+            dcc.Checklist(id="iso-set-binerr", value=[],
+                          options=[{"label": " Bin-width error: ±½ bin on every FWHM",
+                                    "value": "on"}],
+                          inputStyle={"marginRight": "4px"}, labelStyle={"fontSize": "13px"},
+                          style={"marginRight": "14px"}),
+            html.Span("Recording frequency (Hz)", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
+            dcc.Input(id="iso-set-recfreq", type="text", debounce=True,
+                      value=ISO_BIN_DEFAULTS["rec_freq"], placeholder="10e6",
+                      className="form-control form-control-sm",
+                      style={"width": "100px", "marginRight": "12px", "fontSize": "13px"}),
+            html.Span("Frequency bins", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
+            dcc.Input(id="iso-set-nbins", type="text", debounce=True,
+                      value=ISO_BIN_DEFAULTS["n_bins"], placeholder="2^17",
+                      className="form-control form-control-sm",
+                      style={"width": "90px", "marginRight": "12px", "fontSize": "13px"}),
+            html.Span(id="iso-bin-info", style={"fontSize": "13px", "fontFamily": "monospace"}),
+        ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap",
                   "rowGap": "6px", "marginBottom": "8px"}),
         html.Div(id="iso-fit-result", style={"fontSize": "13px", "marginBottom": "6px"}),
         dcc.Graph(id="iso-graph", figure=empty_fig("No points yet"),
@@ -5962,7 +5986,39 @@ def load_iso_fit_settings():
     st = {k: float(saved.get(k, v)) if isinstance(saved.get(k, v), (int, float))
           else v for k, v in ISO_FIT_DEFAULTS.items()}
     st["auto_floor"] = bool(saved.get("auto_floor", False))
+    st["bin_err"] = bool(saved.get("bin_err", False))
+    st["rec_freq"] = str(saved.get("rec_freq", ISO_BIN_DEFAULTS["rec_freq"]))
+    st["n_bins"] = str(saved.get("n_bins", ISO_BIN_DEFAULTS["n_bins"]))
     return st
+
+
+def parse_number_expr(text):
+    """A number typed as 10e6, 131072, 2^17, 2**17 or 10*1e6 (+ − * / ^ only)."""
+    import ast
+    import operator as op
+    ops = {ast.Add: op.add, ast.Sub: op.sub, ast.Mult: op.mul, ast.Div: op.truediv,
+           ast.Pow: op.pow, ast.USub: op.neg, ast.UAdd: op.pos}
+
+    def ev(n):
+        if isinstance(n, ast.Constant) and isinstance(n.value, (int, float)):
+            return float(n.value)
+        if isinstance(n, ast.BinOp) and type(n.op) in ops:
+            return ops[type(n.op)](ev(n.left), ev(n.right))
+        if isinstance(n, ast.UnaryOp) and type(n.op) in ops:
+            return ops[type(n.op)](ev(n.operand))
+        raise ValueError
+    try:
+        v = ev(ast.parse(str(text).strip().replace("^", "**"), mode="eval").body)
+    except Exception:
+        raise ValueError(f"'{text}' is not a number (e.g. 10e6 or 2^17)")
+    if not np.isfinite(v) or v <= 0:
+        raise ValueError(f"'{text}' must be a positive number")
+    return v
+
+
+def iso_bin_width(st):
+    """Bin width (Hz) = recording frequency / number of bins."""
+    return parse_number_expr(st["rec_freq"]) / parse_number_expr(st["n_bins"])
 
 
 def save_iso_fit_settings(st):
@@ -6029,8 +6085,20 @@ def iso_fit_data(st):
     used = vals[vals["include"] & vals["fittable"]]
     if len(used) < 3:
         return vals, None, f"{len(used)} point(s) in the fit: at least 3 are needed"
-    t, sg, err = (used["T_ns"].to_numpy(), used["sigma_T_ps"].to_numpy(),
-                  used["d_sigma_T_ps"].to_numpy())
+    # bin-width error: ±½ bin on every FWHM, as a σ(T) error (same conversion
+    # as err σ(T)): (½ bin / centre) · T · 1000 / 2√(2 ln 2)
+    half_bin = None
+    vals["d_sigma_T_bin_ps"] = 0.0
+    if st.get("bin_err"):
+        try:
+            half_bin = 0.5 * iso_bin_width(st)
+        except ValueError as exc:
+            return vals, None, f"bin-width error: {exc}"
+        centre = vals["harmonic"] / (vals["T_ns"] * 1e-9)
+        vals["d_sigma_T_bin_ps"] = (half_bin / centre) * vals["T_ns"] * 1000.0 / FWHM_PER_SIGMA
+    used = vals[vals["include"] & vals["fittable"]]
+    t, sg = used["T_ns"].to_numpy(), used["sigma_T_ps"].to_numpy()
+    err = np.hypot(used["d_sigma_T_ps"].to_numpy(), used["d_sigma_T_bin_ps"].to_numpy())
     floor = 0.0
     try:
         res = fit_iso_curve(t, sg, err, st)
@@ -6044,8 +6112,10 @@ def iso_fit_data(st):
     res["n"] = len(used)
     res["floor"] = floor if st.get("auto_floor") else None
     res["chi2_ndf_stat"] = chi2_stat
-    # total error (statistical ⊕ floor) for every point
-    vals["d_sigma_T_total_ps"] = np.hypot(vals["d_sigma_T_ps"], floor)
+    res["half_bin_hz"] = half_bin
+    # total error (statistical ⊕ bin width ⊕ floor) for every point
+    vals["d_sigma_T_total_ps"] = np.hypot(np.hypot(vals["d_sigma_T_ps"],
+                                                   vals["d_sigma_T_bin_ps"]), floor)
     return vals, res, ""
 
 
@@ -6075,6 +6145,9 @@ def _iso_param_lines(res):
              f"σp/p = {sp * 100:.4f} ± {dsp * 100:.4f} %",
              f"σ_sys = {ss:.4f} ± {dss:.4f} ps",
              f"χ²/ndf = {chi}  (ndf = {res['ndf']}, {res['n']} points)"]
+    if res.get("half_bin_hz") is not None:
+        lines.append(f"bin-width error = ±{res['half_bin_hz']:.2f} Hz on FWHM "
+                     f"(½ of {2 * res['half_bin_hz']:.3f} Hz bins)")
     if res.get("floor") is not None:
         c0 = res.get("chi2_ndf_stat")
         c0 = "–" if c0 is None or not np.isfinite(c0) else f"{c0:.3f}"
@@ -6099,11 +6172,16 @@ def _iso_curve_x(vals):
     Output("iso-set-ssys_min_ps", "value"),
     Output("iso-set-ssys_max_ps", "value"),
     Output("iso-set-floor", "value"),
+    Output("iso-set-binerr", "value"),
+    Output("iso-set-recfreq", "value"),
+    Output("iso-set-nbins", "value"),
     Input("iso-settings-init", "data"),
 )
 def init_iso_settings(_):
     st = load_iso_fit_settings()
-    return tuple(st[k] for k in ISO_SETTING_KEYS) + (["auto"] if st["auto_floor"] else [],)
+    return tuple(st[k] for k in ISO_SETTING_KEYS) + (
+        ["auto"] if st["auto_floor"] else [], ["on"] if st["bin_err"] else [],
+        st["rec_freq"], st["n_bins"])
 
 
 @app.callback(
@@ -6115,11 +6193,14 @@ def init_iso_settings(_):
     Input("iso-points-ts", "data"),
     *[Input(f"iso-set-{k}", "value") for k in ISO_SETTING_KEYS],
     Input("iso-set-floor", "value"),
+    Input("iso-set-binerr", "value"),
+    Input("iso-set-recfreq", "value"),
+    Input("iso-set-nbins", "value"),
     prevent_initial_call=True,
 )
 def fit_and_plot_iso(_ts, *args):
     """Fit the curve to the included points and draw it (with residuals)."""
-    setting_vals, floor_val = args[:-1], args[-1]
+    setting_vals, (floor_val, bin_val, rec_freq, n_bins) = args[:-4], args[-4:]
     trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
     st = load_iso_fit_settings()
     err = ""
@@ -6134,9 +6215,15 @@ def fit_and_plot_iso(_ts, *args):
         err = "Settings not used: fill in every box"
     if floor_val is not None:
         st["auto_floor"] = "auto" in floor_val
+    if bin_val is not None:
+        st["bin_err"] = "on" in bin_val
+    st["rec_freq"] = rec_freq if rec_freq not in (None, "") else st.get(
+        "rec_freq", ISO_BIN_DEFAULTS["rec_freq"])
+    st["n_bins"] = n_bins if n_bins not in (None, "") else st.get(
+        "n_bins", ISO_BIN_DEFAULTS["n_bins"])
     if trig.startswith("iso-set-") and not err:
         save_iso_fit_settings(st)
-    floor_on = bool(st.get("auto_floor"))
+    floor_on = bool(st.get("auto_floor") or st.get("bin_err"))   # total-error column
     try:
         vals, res, why = iso_fit_data(st)
     except Exception as exc:
@@ -6145,7 +6232,7 @@ def fit_and_plot_iso(_ts, *args):
                 *_iso_curve_table(None, floor_on))
     if vals is None:
         return empty_fig("No points yet"), empty_fig(), "", *_iso_curve_table(None, floor_on)
-    show_tot = bool(res and res.get("floor"))
+    show_tot = bool(res and (res.get("floor") or res.get("half_bin_hz")))
     stat_col = "#555" if show_tot else "#999"
 
     fig = go.Figure()
@@ -6443,20 +6530,39 @@ def toggle_iso_point(active, click, version):
 
 
 @app.callback(
+    Output("iso-bin-info", "children"),
+    Input("iso-set-recfreq", "value"),
+    Input("iso-set-nbins", "value"),
+)
+def show_bin_width(rec_freq, n_bins):
+    try:
+        w = iso_bin_width({"rec_freq": rec_freq or "", "n_bins": n_bins or ""})
+    except ValueError as exc:
+        return html.Span(f"✗ {exc}", style={"color": "#c0392b", "fontFamily": "inherit"})
+    return f"bin = {w:.3f} Hz  →  ±{w / 2:.2f} Hz"
+
+
+@app.callback(
     Output("iso-save-status", "children"),
     Input("btn-iso-save-fig", "n_clicks"),
     *[State(f"iso-set-{k}", "value") for k in ISO_SETTING_KEYS],
     State("iso-set-floor", "value"),
+    State("iso-set-binerr", "value"),
+    State("iso-set-recfreq", "value"),
+    State("iso-set-nbins", "value"),
     prevent_initial_call=True,
 )
 def save_iso_figure(_n, *args):
-    setting_vals, floor_val = args[:-1], args[-1]
+    setting_vals, (floor_val, bin_val, rec_freq, n_bins) = args[:-4], args[-4:]
     try:
         st = {k: float(v) for k, v in zip(ISO_SETTING_KEYS, setting_vals)}
         check_iso_fit_settings(st)
     except (TypeError, ValueError):
         st = load_iso_fit_settings()
     st["auto_floor"] = "auto" in (floor_val or [])
+    st["bin_err"] = "on" in (bin_val or [])
+    st["rec_freq"] = rec_freq or ISO_BIN_DEFAULTS["rec_freq"]
+    st["n_bins"] = n_bins or ISO_BIN_DEFAULTS["n_bins"]
     try:
         vals, res, why = iso_fit_data(st)
         if vals is None:
@@ -6584,7 +6690,7 @@ def draw_iso_figure(vals, res, st):
     import matplotlib.pyplot as plt
     used = vals[vals["include"] & vals["fittable"]]
     out = vals[~(vals["include"] & vals["fittable"])]
-    show_tot = bool(res and res.get("floor"))
+    show_tot = bool(res and (res.get("floor") or res.get("half_bin_hz")))
     fig, (ax, axr) = plt.subplots(2, 1, figsize=(16, 13), sharex=True,
                                   gridspec_kw={"height_ratios": [3, 1], "hspace": 0.06})
     if show_tot:      # total error (statistical ⊕ floor) behind the statistical bars
