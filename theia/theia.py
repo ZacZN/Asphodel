@@ -2300,12 +2300,24 @@ def v_ion_matches_highlight(ion_name, highlight_list):
     return False
 
 
+# Viewer: non-highlighted simulated lines (same grey as "Simulated (no peak)")
+V_SIM_STYLE = dict(color="#bbbbbb", width=1, dash="dash")
+# Viewer: one colour per highlighted ion and harmonic (Plotly Dark24 without
+# its near-black and grey entries, so they stand out from the spectrum and
+# the grey lines)
+V_HIGHLIGHT_COLORS = ["#2E91E5", "#E15F99", "#1CA71C", "#FB0D0D", "#DA16FF", "#B68100",
+                      "#750D86", "#EB663B", "#511CFB", "#00A08B", "#FB00D1", "#FC0080",
+                      "#B2828D", "#6C7C32", "#862A16", "#A777F1", "#620042", "#1616A7",
+                      "#DA60CA", "#6C4516", "#0D2A63", "#AF0038"]
+
+
 def v_build_figure(file_path, spectrum_name, ref_name, ref_frequency, ref_harmonic,
                    z_lims, n_lims, el1, el2, mq_width, gamma_t, harmonics,
                    correction_enabled=False, corr_a=0.0, corr_b=0.0, corr_c=0.0,
-                   highlight_ions=None):
-    """Run the full computation and return (figure, error text)."""
-    import plotly.express as px
+                   highlight_ions=None, shown_harmonics=None):
+    """Run the full computation and return (figure, error text).
+
+    shown_harmonics: harmonics to draw (None = all); set by the toggle box."""
     highlight_ions = highlight_ions or []
     try:
         full_database = pd.concat([v_get_chargestate(e, z_lims, n_lims, el1, el2)
@@ -2335,16 +2347,15 @@ def v_build_figure(file_path, spectrum_name, ref_name, ref_frequency, ref_harmon
         y_range = np.linspace(ymin - pad, ymax + pad, n_points)
         freq_min, freq_max = np.nanmin(ff), np.nanmax(ff)
 
-        colors = px.colors.qualitative.Plotly
-        freq_cols = [f"frequency_direct_{h}" for h in harmonics]
-        HIGHLIGHT_COLOR, HIGHLIGHT_WIDTH = "#FF8C00", 3
+        HIGHLIGHT_WIDTH = 3
         multi_harmonic = len(harmonics) > 1
-        highlighted_annotations = []
+        shown = [h for h in harmonics if shown_harmonics is None or h in shown_harmonics]
+        highlighted = {}            # (ion, h) -> [xs, ys, hover, f]
+        first_sim = True
 
-        for h, col in zip(harmonics, freq_cols):
-            color = colors[freq_cols.index(col) % len(colors)]
+        for h in shown:
+            col = f"frequency_direct_{h}"
             xs_norm, ys_norm, hover_norm = [], [], []
-            xs_hi, ys_hi, hover_hi = [], [], []
             for ion_name, row in db.iterrows():
                 f = row[col]
                 if pd.isna(f) or f < freq_min or f > freq_max:
@@ -2359,40 +2370,52 @@ def v_build_figure(file_path, spectrum_name, ref_name, ref_frequency, ref_harmon
                 seg_y = list(y_range) + [None]
                 seg_h = [label] * n_points + [None]
                 if v_ion_matches_highlight(str(ion_name), highlight_ions):
-                    xs_hi += seg_x; ys_hi += seg_y; hover_hi += seg_h
-                    highlighted_annotations.append((str(ion_name), f, h))
+                    d = highlighted.setdefault((str(ion_name), h), [[], [], [], f])
+                    d[0] += seg_x; d[1] += seg_y; d[2] += seg_h
                 else:
                     xs_norm += seg_x; ys_norm += seg_y; hover_norm += seg_h
+            # all other simulated lines: grey, as "Simulated (no peak)" in the
+            # other tabs; one legend entry for all harmonics (legend group)
             if xs_norm:
                 fig.add_trace(go.Scattergl(x=xs_norm, y=ys_norm, mode="lines",
-                                           line=dict(dash="dash", color=color, width=1), name=col,
+                                           line=V_SIM_STYLE, name="Simulated",
+                                           legendgroup="sim", showlegend=first_sim,
                                            hoverinfo="text", hovertext=hover_norm,
                                            connectgaps=False))
-            if xs_hi:
-                fig.add_trace(go.Scattergl(x=xs_hi, y=ys_hi, mode="lines",
-                                           line=dict(dash="solid", color=HIGHLIGHT_COLOR,
-                                                     width=HIGHLIGHT_WIDTH),
-                                           name=f"{col} ★", hoverinfo="text", hovertext=hover_hi,
-                                           connectgaps=False))
+                first_sim = False
+
+        # highlighted ions: a colour and a legend entry for each ion and harmonic
+        highlighted_annotations = []
+        for i, ((ion_name, h), (xs, ys, hov, f)) in enumerate(sorted(highlighted.items())):
+            color = V_HIGHLIGHT_COLORS[i % len(V_HIGHLIGHT_COLORS)]
+            fig.add_trace(go.Scattergl(x=xs, y=ys, mode="lines",
+                                       line=dict(dash="solid", color=color, width=HIGHLIGHT_WIDTH),
+                                       name=f"{ion_name} (h={h})", hoverinfo="text", hovertext=hov,
+                                       connectgaps=False))
+            highlighted_annotations.append((ion_name, f, h, color))
 
         # labelled arrows for highlighted ions; three offsets so labels at
         # similar frequencies don't sit exactly on top of each other
         y_tip = ymax + pad
         AY_OFFSETS = [-38, -58, -78]
-        for idx, (ion_name, freq, h) in enumerate(highlighted_annotations):
+        for idx, (ion_name, freq, h, color) in enumerate(sorted(highlighted_annotations,
+                                                                key=lambda a: a[1])):
             text = ion_name if not multi_harmonic else \
                 f"{ion_name}<br><span style='font-size:10px'>h={h}</span>"
             fig.add_annotation(x=freq, y=y_tip, text=text, showarrow=True, arrowhead=2,
-                               arrowsize=1, arrowwidth=1.5, arrowcolor=HIGHLIGHT_COLOR, ax=0,
+                               arrowsize=1, arrowwidth=1.5, arrowcolor=color, ax=0,
                                ay=AY_OFFSETS[idx % len(AY_OFFSETS)],
-                               font=dict(size=11, color=HIGHLIGHT_COLOR),
-                               bgcolor="rgba(255,255,255,0.88)", bordercolor=HIGHLIGHT_COLOR,
+                               font=dict(size=11, color=color),
+                               bgcolor="rgba(255,255,255,0.88)", bordercolor=color,
                                borderwidth=1, borderpad=3, align="center")
 
         # (the title is the heading of the plot's box, see viewer_tab)
         fig.update_layout(xaxis_title="Frequency (Hz)", yaxis_title="Schottky Power (a.u.)",
                           hovermode="x", dragmode="pan", template="plotly_white",
-                          font=dict(size=18), margin=dict(l=60, r=20, t=20, b=50))
+                          font=dict(size=18), margin=dict(l=60, r=20, t=20, b=50),
+                          # keep the zoom when toggling harmonics or changing
+                          # settings; a new spectrum starts unzoomed
+                          uirevision=f"{file_path}|{spectrum_name}")
         return fig, ""
     except Exception as exc:
         fig = go.Figure()
@@ -2503,6 +2526,17 @@ viewer_sidebar = html.Div([
    style={"width": "300px", "minWidth": "300px", "padding": "14px 18px", "background": "#f9f9f9",
           "overflowY": "auto", "borderRight": "1px solid #dddddd", "height": "calc(100vh - 42px)"})
 
+def _v_harm_options(text):
+    """Toggle-box options for the harmonics text ('212, 213, 214')."""
+    try:
+        hs = [int(p.strip()) for p in str(text).split(",") if p.strip()]
+    except ValueError:
+        hs = []
+    return [{"label": f"h = {h}", "value": h} for h in hs], hs
+
+
+_V_HARM_OPTS, _V_HARM_ON = _v_harm_options(VCFG["harmonics"])
+
 viewer_tab = html.Div([
     viewer_sidebar,
     html.Div([
@@ -2514,9 +2548,19 @@ viewer_tab = html.Div([
                       responsive=True,
                       config={"scrollZoom": True, "displayModeBar": True, "displaylogo": False}),
         ], className="theia-box",
-           style={**BOX_STYLE, "height": "100%", "display": "flex", "flexDirection": "column"}),
+           style={**BOX_STYLE, "height": "100%", "display": "flex", "flexDirection": "column",
+                  "flex": "1 1 auto", "minWidth": "0"}),
+        # show/hide all lines (grey and highlighted) of each harmonic
+        html.Div([
+            html.H6("Harmonics", style={"fontWeight": "600", "marginBottom": "6px"}),
+            dcc.Checklist(id="v-harm-toggle", options=_V_HARM_OPTS, value=_V_HARM_ON,
+                          className="harm-toggle", inputStyle={"display": "none"}),
+            html.Small("Click to show or hide all simulated lines of a harmonic.",
+                       style=HELP_STYLE),
+        ], className="theia-box",
+           style={**BOX_STYLE, "width": "130px", "flex": "0 0 auto", "alignSelf": "flex-start"}),
     ], style={"flex": "1", "minWidth": "0", "height": "calc(100vh - 42px)",
-              "padding": "10px 14px"}),
+              "padding": "10px 14px", "display": "flex", "columnGap": "10px"}),
     html.Div(id="_viewer-saved", style={"display": "none"}),
 ], style={"display": "flex"})
 
@@ -2558,6 +2602,19 @@ _FIT_CSS = """
 #sum-graph.fit-grab .nsewdrag { cursor: ew-resize !important; }
 #sum-graph.fit-grab-move .nsewdrag { cursor: move !important; }
 #sum-graph.fit-grab-region .nsewdrag { cursor: col-resize !important; }
+"""
+
+_HARM_CSS = """
+/* Viewer harmonic toggles: checklist labels drawn as on/off buttons */
+.harm-toggle label { display: block; border: 1px solid #6c757d; border-radius: 4px;
+    padding: 3px 8px; margin-bottom: 5px; font-size: 13px; text-align: center;
+    cursor: pointer; user-select: none; color: #6c757d; background: #ffffff; }
+.harm-toggle label:hover { border-color: #f57d15; }
+.harm-toggle label:has(input:checked) { background: #f57d15; border-color: #f57d15;
+    color: #ffffff; font-weight: 600; }
+body.dark .harm-toggle label { background: #1c1c1c; color: #d6d6d6; border-color: #9a9a9a; }
+body.dark .harm-toggle label:has(input:checked) { background: #f57d15; border-color: #f57d15;
+    color: #ffffff; }
 """
 
 _DARK_CSS = """
@@ -2621,7 +2678,7 @@ body.dark .current-page-shadow { color: transparent !important; }
 body.dark .js-plotly-plot { filter: invert(1) hue-rotate(180deg) contrast(1.15); }
 """
 app.index_string = app.index_string.replace(
-    "{%css%}", "{%css%}\n<style>" + _TABLE_CSS + _FB_CSS + _CALIB_CSS + _FIT_CSS + _DARK_CSS + "</style>")
+    "{%css%}", "{%css%}\n<style>" + _TABLE_CSS + _FB_CSS + _CALIB_CSS + _FIT_CSS + _HARM_CSS + _DARK_CSS + "</style>")
 # close this tab when Theia stops (Quit / Stop on the home page, Quit here, crash)
 app.index_string = app.index_string.replace(
     "{%scripts%}", "{%scripts%}\n<script>" + tabwatch.watch_js("Theia") + "</script>")
@@ -2984,9 +3041,25 @@ def _v_ints(s):
     return [int(p.strip()) for p in str(s).split(",") if p.strip()]
 
 
-@app.callback(Output("viewer-graph", "figure"), Output("v-error-box", "children"), *_V_INPUTS)
+@app.callback(Output("v-harm-toggle", "options"), Output("v-harm-toggle", "value"),
+              Input("v-harmonics", "value"),
+              State("v-harm-toggle", "options"), State("v-harm-toggle", "value"),
+              prevent_initial_call=True)
+def v_harmonic_toggles(text, old_opts, old_on):
+    """New harmonics list: keep hidden the ones that were hidden, show new ones."""
+    opts, hs = _v_harm_options(text)
+    if not hs:
+        return dash.no_update, dash.no_update
+    before = {o["value"] for o in (old_opts or [])}
+    on = set(old_on or [])
+    return opts, [h for h in hs if h in on or h not in before]
+
+
+@app.callback(Output("viewer-graph", "figure"), Output("v-error-box", "children"), *_V_INPUTS,
+              Input("v-harm-toggle", "value"))
 def v_update_figure(*values):
-    v = dict(zip(VIEWER_KEYS, values))
+    shown = values[-1]
+    v = dict(zip(VIEWER_KEYS, values[:-1]))
     if not v["spectrum_name"]:
         return empty_fig("No spectrum selected (no .npz files in this folder?)"), ""
     try:
@@ -3001,7 +3074,8 @@ def v_update_figure(*values):
             correction_enabled=bool(v["correction_enabled"]),
             corr_a=float(v["corr_a"] or 0), corr_b=float(v["corr_b"] or 0),
             corr_c=float(v["corr_c"] or 0),
-            highlight_ions=v_parse_highlight_ions(v["highlight_ions"] or ""))
+            highlight_ions=v_parse_highlight_ions(v["highlight_ions"] or ""),
+            shown_harmonics=None if shown is None else [int(h) for h in shown])
         return fig, err
     except Exception as exc:
         return empty_fig(), f"Parse error: {exc}"
