@@ -1997,6 +1997,13 @@ ISO_TABLE_COLUMNS = [
     ("chi2_ndf", "χ²/ndf"), ("source", "data source"), ("sent", "sent"),
 ]
 
+# derived values for the curve (calculated from the points, not saved)
+ISO_CURVE_COLUMNS = [
+    ("ion", "ion"), ("harmonic", "h"), ("T_ns", "T (ns)"),
+    ("fwhm_T_ps", "FWHM(T) (ps)"), ("sigma_T_ps", "σ(T) (ps)"),
+    ("d_sigma_T_ps", "err σ(T) (ps)"),
+]
+
 isochronicity_tab = html.Div([
     html.Div([
         html.H5("Isochronicity Curve", style={"fontWeight": "700", "margin": "0 8px 0 0"}),
@@ -2020,6 +2027,24 @@ isochronicity_tab = html.Div([
             tooltip_duration=None,
             style_table={"overflowX": "auto"}),
     ], className="theia-box", style={**BOX_STYLE, "padding": "8px 10px"}),
+    # values for the isochronicity curve, calculated from the points above
+    html.Div([
+        html.Div("Isochronicity curve parameters", style={"fontWeight": "700", "fontSize": "14px",
+                                                          "marginBottom": "2px"}),
+        html.Small("T = 10⁹ · h / centre  ·  FWHM(T) = (FWHM / centre) · T · 1000  ·  "
+                   "σ(T) = FWHM(T) / 2√(2 ln 2)  ·  err σ(T) = (± FWHM / FWHM) · FWHM(T) / "
+                   "2√(2 ln 2)   (2√(2 ln 2) ≈ 2.3548)",
+                   style={**HELP_STYLE, "display": "block", "marginBottom": "6px"}),
+        dash_table.DataTable(
+            id="iso-curve-table", data=[], sort_action="native",
+            columns=[{"name": n, "id": c} for c, n in ISO_CURVE_COLUMNS],
+            style_header={**TABLE_HEADER, "whiteSpace": "normal", "height": "auto"},
+            style_cell={**TABLE_CELL, "fontSize": "12px"},
+            style_data_conditional=TABLE_ODD,
+            style_cell_conditional=[{"if": {"column_id": "ion"}, "textAlign": "left",
+                                     "fontFamily": "inherit", "fontWeight": "600"}],
+            style_table={"overflowX": "auto", "width": "fit-content", "maxWidth": "100%"}),
+    ], className="theia-box", style={**BOX_STYLE, "padding": "8px 10px", "marginTop": "10px"}),
     dcc.Store(id="iso-version", data=0),
 ], id="further-page-iso", style={"padding": "14px 18px", "overflowY": "auto",
                                  "height": "calc(100vh - 82px)", "display": "none"})
@@ -5436,6 +5461,33 @@ def _iso_cell(v, fmt):
     return "–" if not np.isfinite(f) else format(f, fmt)
 
 
+FWHM_PER_SIGMA = 2.0 * np.sqrt(2.0 * np.log(2.0))     # ≈ 2.3548
+
+
+def iso_curve_values(df):
+    """Revolution time and its spread for each point:
+        f_rev    = centre / h
+        T (ns)   = 1e9 / f_rev
+        FWHM(T)  = (FWHM / centre) * T * 1000        (ps; same relative width as f)
+        σ(T)     = FWHM(T) / 2√(2 ln 2)
+        err σ(T) = (dFWHM / FWHM) * FWHM(T) / 2√(2 ln 2)"""
+    centre = pd.to_numeric(df["centre_hz"], errors="coerce")
+    h = pd.to_numeric(df["harmonic"], errors="coerce")
+    fwhm = pd.to_numeric(df["fwhm_hz"], errors="coerce")
+    d_fwhm = pd.to_numeric(df["d_fwhm_hz"], errors="coerce")
+    t_ns = 1e9 / (centre / h)
+    fwhm_t_ps = (fwhm / centre) * t_ns * 1000.0
+    return pd.DataFrame({
+        "ion": df["ion"].astype(str), "harmonic": h, "T_ns": t_ns, "fwhm_T_ps": fwhm_t_ps,
+        "sigma_T_ps": fwhm_t_ps / FWHM_PER_SIGMA,
+        "d_sigma_T_ps": (d_fwhm / fwhm) * fwhm_t_ps / FWHM_PER_SIGMA,
+    })
+
+
+ISO_CURVE_FORMATS = {"harmonic": ".0f", "T_ns": ".6f", "fwhm_T_ps": ".4f",
+                     "sigma_T_ps": ".4f", "d_sigma_T_ps": ".4f"}
+
+
 ISO_FORMATS = {"centre_hz": ",.2f", "d_centre_hz": ".2f", "f_rev_hz": ",.4f",
                "d_f_rev_hz": ".4f", "fwhm_hz": ".2f", "d_fwhm_hz": ".2f", "amp": ".5g",
                "d_amp": ".3g", "area": ".5g", "d_area": ".3g", "eta": ".3f", "d_eta": ".3f",
@@ -5446,6 +5498,7 @@ ISO_FORMATS = {"centre_hz": ",.2f", "d_centre_hz": ".2f", "f_rev_hz": ",.4f",
     Output("iso-table", "data"),
     Output("iso-table", "tooltip_data"),
     Output("iso-info", "children"),
+    Output("iso-curve-table", "data"),
     Input("iso-version", "data"),
     Input("further-subtabs", "value"),
     Input("iso-table", "data_timestamp"),
@@ -5465,7 +5518,8 @@ def show_iso_points(_version, page, _ts, table):
             save_iso_points(df)
     except Exception as exc:
         traceback.print_exc()
-        return [], [], html.Span(f"Could not read/write {path}: {exc}", style={"color": "#c0392b"})
+        return [], [], html.Span(f"Could not read/write {path}: {exc}",
+                                 style={"color": "#c0392b"}), []
     if len(df):
         df = df.sort_values("f_rev_hz", kind="stable")
     rows = [{c: _iso_cell(r.get(c), ISO_FORMATS[c]) if c in ISO_FORMATS
@@ -5478,7 +5532,10 @@ def show_iso_points(_version, page, _ts, table):
     if not rows:
         info.append(html.Div("No points yet: fit peaks in Aligning and fitting and press "
                              "'Send to isocurve'.", style={"color": "#888", "marginTop": "4px"}))
-    return rows, tips, info
+    curve = ([{c: _iso_cell(r.get(c), ISO_CURVE_FORMATS[c]) if c in ISO_CURVE_FORMATS
+               else str(r.get(c)) for c, _ in ISO_CURVE_COLUMNS}
+              for r in iso_curve_values(df).to_dict("records")] if len(df) else [])
+    return rows, tips, info, curve
 
 
 # ---------------------------------------------------------------------------
