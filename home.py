@@ -651,7 +651,7 @@ def sidebar():
             html.H3("Reference data"),
             html.Div([html.B("NUBASE"), html.Code("core/nubase_4.mas20"),
                       html.Div(_mtime(nub))], className="src"),
-        ]),
+        ], className="side-top"),
         # suite icon and version, in the free space at the bottom of the sidebar
         # (version: core/version.py, goes up by one with every commit)
         html.Div([
@@ -759,7 +759,7 @@ def serve_layout():
         ], className="wrap"),
         new_experiment_modal(),
         sync_modal(),
-    ])
+    ], className="page")
 
 
 # ===========================================================================
@@ -775,14 +775,22 @@ header .logo{{font-weight:800;font-size:18px;letter-spacing:.5px}} header .logo 
 header .exp{{width:180px;font-size:13px}} header .path{{color:var(--muted);font-family:monospace;font-size:12px}}
 header .spacer{{flex:1}}
 .banner{{background:var(--pale);border-bottom:1px solid var(--line);padding:6px 18px;font-size:12px;color:#8a4a10;min-height:28px}}
-.wrap{{display:flex;min-height:calc(100vh - 82px)}}
+/* page = header + banner + (sidebar | main) filling the window; the main
+   section scrolls on its own, the sidebar stays put */
+body{{overflow:hidden}}
+.page{{height:100vh;display:flex;flex-direction:column}}
+.page>header,.page>.banner{{flex:none}}
+.wrap{{display:flex;flex:1 1 auto;min-height:0}}
 aside{{width:330px;min-width:330px;background:var(--side);border-right:1px solid var(--line);padding:14px 16px;
-  display:flex;flex-direction:column;justify-content:space-between}}
-.brand{{text-align:center;padding:24px 0 6px}}
-.brand img{{width:120px;height:120px;display:block;margin:0 auto 8px}}
+  display:flex;flex-direction:column;overflow:hidden}}
+/* top of the sidebar scrolls only if it gets too long (e.g. Shared physics open) */
+.side-top{{flex:0 1 auto;min-height:0;overflow-y:auto}}
+.brand{{text-align:center;padding:20px 0 0;flex:1 1 auto;min-height:220px;display:flex;flex-direction:column}}
+.brand img{{width:120px;height:120px;display:block;margin:0 auto 8px;flex:none}}
 .brand-name{{font-weight:700;font-size:14px;color:#555;letter-spacing:.3px}}
-.changelog{{text-align:left;margin-top:16px}}
-.cl-list{{max-height:300px;overflow-y:auto;background:#fff;border:1px solid var(--line);border-radius:5px;padding:2px 8px}}
+/* changelog fills the rest of the sidebar; its bottom is the window's bottom */
+.changelog{{text-align:left;margin-top:12px;flex:1 1 auto;min-height:0;display:flex;flex-direction:column}}
+.cl-list{{flex:1 1 auto;min-height:0;overflow-y:auto;background:#fff;border:1px solid var(--line);border-radius:5px;padding:2px 8px}}
 .cl-row{{padding:5px 0;border-bottom:1px solid var(--line);font-size:11px}}
 .cl-row:last-child{{border-bottom:none}}
 .cl-ver{{font-weight:700;color:var(--accent);margin-right:6px;font-family:monospace}}
@@ -807,7 +815,7 @@ details.main-fold>summary{{font-size:15px;text-transform:none;letter-spacing:0;c
 .btn:hover{{border-color:var(--accent)}}
 .btn.primary{{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}}
 .btn.small{{padding:3px 8px;font-size:11px}}
-main{{flex:1;padding:16px 20px;min-width:0}}
+main{{flex:1;padding:16px 20px;min-width:0;overflow-y:auto}}
 h2{{font-size:15px;margin:0 0 10px;padding-bottom:5px;border-bottom:1px solid var(--line)}}
 h3.sec{{font-size:12px;text-transform:uppercase;letter-spacing:.8px;color:var(--accent);margin:4px 0 6px}}
 .trow{{display:grid;gap:12px;margin-bottom:10px}}
