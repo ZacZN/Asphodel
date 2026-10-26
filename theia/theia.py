@@ -1202,8 +1202,13 @@ scan_main = html.Div([
     html.Div(id="run-error", style={"color": "#b00", "fontSize": "13px", "whiteSpace": "pre-wrap"}),
     html.Div(id="preview-info", style={"fontSize": "13px", "color": "#333", "whiteSpace": "pre-wrap"}),
     html.Div(id="settings-error", style={"color": "#b00", "fontSize": "13px", "whiteSpace": "pre-wrap"}),
-    dcc.Graph(id="preview-graph", figure=empty_fig("Choose a spectrum and press Preview"),
-              style={"height": "58vh"}, config={"scrollZoom": True}),
+    # plot in a box with its title (the spectrum's file name) as the heading,
+    # as in the Viewer tab
+    html.Div([
+        html.H6("Preview", id="preview-title", style={"fontWeight": "600", "marginBottom": "6px"}),
+        dcc.Graph(id="preview-graph", figure=empty_fig("Choose a spectrum and press Preview"),
+                  style={"height": "58vh"}, config={"scrollZoom": True}),
+    ], className="theia-box", style={**BOX_STYLE, "marginTop": "6px"}),
     html.H6("Identified in preview", style={"fontWeight": "600", "marginTop": "6px"}),
     _table("preview-table", ["ion", "harmonic", "peak_freq", "sim_freq", "delta_hz", "power", "snr",
                              "kind", "closest_for_ion", "closest_for_peak"], page_size=15),
@@ -3168,6 +3173,7 @@ def refresh_preview_files(directory, pattern, current):
     Output("preview-table", "data"),
     Output("preview-info", "children"),
     Output("settings-error", "children"),
+    Output("preview-title", "children"),
     Input("btn-preview", "n_clicks"),
     State("preview-file", "value"),
     *SETTING_STATES,
@@ -3179,9 +3185,9 @@ def do_preview(_, fname, *values):
     try:
         s = parse_settings(raw)
     except Exception as exc:
-        return dash.no_update, [], "", f"Settings error: {exc}"
+        return dash.no_update, [], "", f"Settings error: {exc}", dash.no_update
     if not fname:
-        return empty_fig("No spectrum selected"), [], "", ""
+        return empty_fig("No spectrum selected"), [], "", "", "Preview"
     try:
         t0 = time.time()
         ff, pp = load_spectrum(s["spectra_dir"], fname)
@@ -3190,7 +3196,7 @@ def do_preview(_, fname, *values):
         dt = time.time() - t0
     except Exception as exc:
         traceback.print_exc()
-        return empty_fig(str(exc)), [], "", f"Error: {exc}"
+        return empty_fig(str(exc)), [], "", f"Error: {exc}", "Preview"
 
     peaks, m = r["peaks"], r["matches"]
     n_max = int((peaks["kind"] == "max").sum()) if len(peaks) else 0
@@ -3205,9 +3211,12 @@ def do_preview(_, fname, *values):
             + (f"{int(r['excluded'].sum())} of {len(r['excluded'])} ions excluded "
                f"({hl_cut_text(s)})  |  " if hl_cut_text(s) else "")
             + f"median σ = {np.median(r['sig']):.3g}  |  noise cutoff = {cut_txt}  |  {dt:.2f} s")
+    # the file name is the heading of the plot's box, not a plot title
+    # (title=fname still keys the zoom memory, uirevision)
     fig = spectrum_figure(ff, pp, peaks, r["base"], r["sig"], s, r, title=fname)
+    fig.update_layout(title=None)
     rows = [] if m is None else _fmt_records(m.sort_values("peak_freq"))
-    return fig, rows, info, ""
+    return fig, rows, info, "", fname
 
 
 def _fmt_records(df):
