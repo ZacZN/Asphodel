@@ -1520,6 +1520,11 @@ INFO_TEXTS = {
         "The fit is redone whenever the points, the 'in fit' ticks or the settings change.",
         "Leave a point out: click its ☑ in the 'in fit' column, or click the point on the plot "
         "(click again to put it back).  Points with err σ(T) = 0 cannot be fitted ('–').",
+        "Systematic floor: auto (χ²/ndf = 1): a constant f is added in quadrature to every "
+        "err σ(T), √(err² + f²), with f chosen so that the fit has χ²/ndf = 1 (f = 0 if it is "
+        "already ≤ 1).  f covers what the peak-fit errors miss (alignment, background, line "
+        "shape, close neighbours) and is shown with the result; treat it as an upper limit.  "
+        "Light wide bars: total error; dark thin bars: statistical.",
         "Settings are saved per experiment (settings/isocurve.json).",
         "'Save figure' draws the plot and residuals with matplotlib and saves PNG + PDF in "
         "outputs/figures/.",
@@ -2162,6 +2167,12 @@ isochronicity_tab = html.Div([
                                  style={"width": w, "fontSize": "13px"})] if k2 else []),
                 ], style={"display": "flex", "alignItems": "center"}),
             ], style={"marginRight": "18px"}) for k, k2, lab, w in ISO_SETTING_INPUTS],
+            dcc.Checklist(id="iso-set-floor", value=[],
+                          options=[{"label": " Systematic floor: auto (χ²/ndf = 1)",
+                                    "value": "auto"}],
+                          inputStyle={"marginRight": "4px"},
+                          labelStyle={"fontSize": "13px"},
+                          style={"paddingBottom": "6px"}),
         ], style={"display": "flex", "alignItems": "flex-end", "flexWrap": "wrap",
                   "rowGap": "6px", "marginBottom": "8px"}),
         html.Div(id="iso-fit-result", style={"fontSize": "13px", "marginBottom": "6px"}),
@@ -5855,7 +5866,6 @@ ISO_FORMATS = {"centre_hz": ",.2f", "d_centre_hz": ".2f", "f_rev_hz": ",.4f",
     Output("iso-table", "data"),
     Output("iso-table", "tooltip_data"),
     Output("iso-info", "children"),
-    Output("iso-curve-table", "data"),
     Output("iso-points-ts", "data"),
     Input("iso-version", "data"),
     Input("further-subtabs", "value"),
@@ -5877,7 +5887,7 @@ def show_iso_points(_version, page, _ts, table):
     except Exception as exc:
         traceback.print_exc()
         return [], [], html.Span(f"Could not read/write {path}: {exc}",
-                                 style={"color": "#c0392b"}), [], time.time()
+                                 style={"color": "#c0392b"}), time.time()
     if len(df):
         df = df.sort_values("f_rev_hz", kind="stable")
     rows = [{c: _iso_cell(r.get(c), ISO_FORMATS[c]) if c in ISO_FORMATS
@@ -5890,16 +5900,27 @@ def show_iso_points(_version, page, _ts, table):
     if not rows:
         info.append(html.Div("No points yet: fit peaks in Aligning and fitting and press "
                              "'Send to isocurve'.", style={"color": "#888", "marginTop": "4px"}))
-    curve = []
-    if len(df):
-        vals = iso_curve_values(df)
-        for r, inc, ok in zip(vals.to_dict("records"), _iso_included(df), _iso_fittable(vals)):
-            row = {c: _iso_cell(r.get(c), ISO_CURVE_FORMATS[c]) if c in ISO_CURVE_FORMATS
-                   else str(r.get(c)) for c, _ in ISO_CURVE_COLUMNS}
-            row["include"] = (FIX_ON if inc else FIX_OFF) if ok else "–"
-            row["id"] = _iso_point_id(r["ion"], r["harmonic"])
-            curve.append(row)
-    return rows, tips, info, curve, time.time()
+    return rows, tips, info, time.time()
+
+
+def _iso_curve_table(vals, floor_on):
+    """Rows and columns of the curve-parameters table (built with the fit,
+    so the total error with the systematic floor is known)."""
+    cols = list(ISO_CURVE_COLUMNS)
+    if floor_on:
+        cols.append(("d_sigma_T_total_ps", "err σ(T) total (ps)"))
+    columns = [{"name": n, "id": c} for c, n in cols]
+    if vals is None or not len(vals):
+        return [], columns
+    rows = []
+    for r in vals.sort_values("T_ns", ascending=False, kind="stable").to_dict("records"):
+        row = {c: _iso_cell(r.get(c), ISO_CURVE_FORMATS.get(c, ".4f"))
+               if c in ISO_CURVE_FORMATS or c == "d_sigma_T_total_ps" else str(r.get(c))
+               for c, _ in cols if c != "include"}
+        row["include"] = (FIX_ON if r["include"] else FIX_OFF) if r["fittable"] else "–"
+        row["id"] = r["id"]
+        rows.append(row)
+    return rows, columns
 
 
 # ---- fit of the isochronicity curve ---------------------------------------
@@ -5938,8 +5959,10 @@ def iso_sigma_t(t_ns, gamma_t, sp, ssys_ps, circ_m, c_m_s):
 
 def load_iso_fit_settings():
     saved = _load_json(paths.settings_file("isocurve.json"))
-    return {k: float(saved.get(k, v)) if isinstance(saved.get(k, v), (int, float))
-            else v for k, v in ISO_FIT_DEFAULTS.items()}
+    st = {k: float(saved.get(k, v)) if isinstance(saved.get(k, v), (int, float))
+          else v for k, v in ISO_FIT_DEFAULTS.items()}
+    st["auto_floor"] = bool(saved.get("auto_floor", False))
+    return st
 
 
 def save_iso_fit_settings(st):
@@ -6006,23 +6029,57 @@ def iso_fit_data(st):
     used = vals[vals["include"] & vals["fittable"]]
     if len(used) < 3:
         return vals, None, f"{len(used)} point(s) in the fit: at least 3 are needed"
+    t, sg, err = (used["T_ns"].to_numpy(), used["sigma_T_ps"].to_numpy(),
+                  used["d_sigma_T_ps"].to_numpy())
+    floor = 0.0
     try:
-        res = fit_iso_curve(used["T_ns"].to_numpy(), used["sigma_T_ps"].to_numpy(),
-                            used["d_sigma_T_ps"].to_numpy(), st)
+        res = fit_iso_curve(t, sg, err, st)
+        chi2_stat = res["chi2_ndf"]
+        if st.get("auto_floor") and res["ndf"] > 0 and res["chi2_ndf"] > 1:
+            floor = iso_auto_floor(t, sg, err, st)
+            res = fit_iso_curve(t, sg, np.hypot(err, floor), st)
     except Exception as exc:
         traceback.print_exc()
         return vals, None, f"fit failed: {exc}"
     res["n"] = len(used)
+    res["floor"] = floor if st.get("auto_floor") else None
+    res["chi2_ndf_stat"] = chi2_stat
+    # total error (statistical ⊕ floor) for every point
+    vals["d_sigma_T_total_ps"] = np.hypot(vals["d_sigma_T_ps"], floor)
     return vals, res, ""
+
+
+def iso_auto_floor(t, sg, err, st):
+    """Systematic floor f (ps) for which the fit with errors √(err² + f²)
+    has χ²/ndf = 1 (bisection on f; χ²/ndf falls as f grows)."""
+    def excess(f):
+        return fit_iso_curve(t, sg, np.hypot(err, f), st)["chi2_ndf"] - 1.0
+    lo, hi = 0.0, max(float(np.nanmax(sg)), 1e-3)
+    while excess(hi) > 0 and hi < 1e3:          # make sure the root is bracketed
+        lo, hi = hi, hi * 4
+    for _ in range(40):
+        mid = 0.5 * (lo + hi)
+        if excess(mid) > 0:
+            lo = mid
+        else:
+            hi = mid
+        if hi - lo < 1e-6 * max(hi, 1e-9):
+            break
+    return 0.5 * (lo + hi)
 
 
 def _iso_param_lines(res):
     (gt, sp, ss), (dgt, dsp, dss) = res["popt"], res["perr"]
     chi = "–" if not np.isfinite(res["chi2_ndf"]) else f"{res['chi2_ndf']:.3f}"
-    return [f"γ_t = {gt:.4f} ± {dgt:.6f}",
-            f"σp/p = {sp * 100:.4f} ± {dsp * 100:.4f} %",
-            f"σ_sys = {ss:.4f} ± {dss:.4f} ps",
-            f"χ²/ndf = {chi}  (ndf = {res['ndf']}, {res['n']} points)"]
+    lines = [f"γ_t = {gt:.4f} ± {dgt:.6f}",
+             f"σp/p = {sp * 100:.4f} ± {dsp * 100:.4f} %",
+             f"σ_sys = {ss:.4f} ± {dss:.4f} ps",
+             f"χ²/ndf = {chi}  (ndf = {res['ndf']}, {res['n']} points)"]
+    if res.get("floor") is not None:
+        c0 = res.get("chi2_ndf_stat")
+        c0 = "–" if c0 is None or not np.isfinite(c0) else f"{c0:.3f}"
+        lines.append(f"systematic floor = {res['floor']:.4f} ps  (auto; χ²/ndf without it = {c0})")
+    return lines
 
 
 def _iso_curve_x(vals):
@@ -6041,23 +6098,28 @@ def _iso_curve_x(vals):
     Output("iso-set-sp_max_pct", "value"),
     Output("iso-set-ssys_min_ps", "value"),
     Output("iso-set-ssys_max_ps", "value"),
+    Output("iso-set-floor", "value"),
     Input("iso-settings-init", "data"),
 )
 def init_iso_settings(_):
     st = load_iso_fit_settings()
-    return tuple(st[k] for k in ISO_SETTING_KEYS)
+    return tuple(st[k] for k in ISO_SETTING_KEYS) + (["auto"] if st["auto_floor"] else [],)
 
 
 @app.callback(
     Output("iso-graph", "figure"),
     Output("iso-resid", "figure"),
     Output("iso-fit-result", "children"),
+    Output("iso-curve-table", "data"),
+    Output("iso-curve-table", "columns"),
     Input("iso-points-ts", "data"),
     *[Input(f"iso-set-{k}", "value") for k in ISO_SETTING_KEYS],
+    Input("iso-set-floor", "value"),
     prevent_initial_call=True,
 )
-def fit_and_plot_iso(_ts, *setting_vals):
+def fit_and_plot_iso(_ts, *args):
     """Fit the curve to the included points and draw it (with residuals)."""
+    setting_vals, floor_val = args[:-1], args[-1]
     trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
     st = load_iso_fit_settings()
     err = ""
@@ -6066,19 +6128,25 @@ def fit_and_plot_iso(_ts, *setting_vals):
         try:
             check_iso_fit_settings(new)
             st = new
-            if trig.startswith("iso-set-"):
-                save_iso_fit_settings(st)
         except ValueError as exc:
             err = f"Settings not used: {exc}"
     else:
         err = "Settings not used: fill in every box"
+    if floor_val is not None:
+        st["auto_floor"] = "auto" in floor_val
+    if trig.startswith("iso-set-") and not err:
+        save_iso_fit_settings(st)
+    floor_on = bool(st.get("auto_floor"))
     try:
         vals, res, why = iso_fit_data(st)
     except Exception as exc:
         traceback.print_exc()
-        return empty_fig(str(exc)), empty_fig(), html.Span(str(exc), style={"color": "#c0392b"})
+        return (empty_fig(str(exc)), empty_fig(), html.Span(str(exc), style={"color": "#c0392b"}),
+                *_iso_curve_table(None, floor_on))
     if vals is None:
-        return empty_fig("No points yet"), empty_fig(), ""
+        return empty_fig("No points yet"), empty_fig(), "", *_iso_curve_table(None, floor_on)
+    show_tot = bool(res and res.get("floor"))
+    stat_col = "#555" if show_tot else "#999"
 
     fig = go.Figure()
     used = vals[vals["include"] & vals["fittable"]]
@@ -6089,12 +6157,20 @@ def fit_and_plot_iso(_ts, *setting_vals):
                                                     st["c_m_s"]),
                                  mode="lines", name="Isochronicity curve", meta="iso-curve",
                                  line=dict(color=ACCENT, width=2), hoverinfo="skip"))
+    if show_tot:
+        # total error (statistical ⊕ floor): light, wide bars behind the points
+        fig.add_trace(go.Scatter(
+            x=used["T_ns"], y=used["sigma_T_ps"], mode="markers", meta="iso-tot",
+            name="err total", showlegend=False, hoverinfo="skip",
+            marker=dict(size=1, color="rgba(0,0,0,0)"),
+            error_y=dict(type="data", array=used["d_sigma_T_total_ps"], color="#d4d4d4",
+                         thickness=5, width=0)))
     # labels: drawn in the browser as annotations with arrows (ISO_LABEL_JS)
     fig.add_trace(go.Scatter(
         x=used["T_ns"], y=used["sigma_T_ps"], mode="markers", name="In fit", meta="iso-pts",
         text=used["ion"], customdata=used["id"],
         marker=dict(symbol="x", size=9, color="black"),
-        error_y=dict(type="data", array=used["d_sigma_T_ps"], color="#999", thickness=1,
+        error_y=dict(type="data", array=used["d_sigma_T_ps"], color=stat_col, thickness=1,
                      width=4),
         hovertemplate="%{text}<br>T = %{x:.4f} ns<br>σ(T) = %{y:.4f} ps"
                       "<br>click: leave out<extra></extra>"))
@@ -6124,10 +6200,16 @@ def fit_and_plot_iso(_ts, *setting_vals):
     if res:
         f_used = iso_sigma_t(used["T_ns"], *res["popt"], st["circumference_m"], st["c_m_s"])
         rfig.add_hline(y=0, line=dict(color="#999", width=1))
+        if show_tot:
+            rfig.add_trace(go.Scatter(
+                x=used["T_ns"], y=used["sigma_T_ps"] - f_used, mode="markers",
+                hoverinfo="skip", marker=dict(size=1, color="rgba(0,0,0,0)"),
+                error_y=dict(type="data", array=used["d_sigma_T_total_ps"], color="#d4d4d4",
+                             thickness=5, width=0)))
         rfig.add_trace(go.Scatter(
             x=used["T_ns"], y=used["sigma_T_ps"] - f_used, mode="markers", text=used["ion"],
             marker=dict(symbol="x", size=8, color="black"),
-            error_y=dict(type="data", array=used["d_sigma_T_ps"], color="#999", thickness=1,
+            error_y=dict(type="data", array=used["d_sigma_T_ps"], color=stat_col, thickness=1,
                          width=3),
             hovertemplate="%{text}<br>T = %{x:.4f} ns<br>σ(T) − fit = %{y:.4f} ps"
                           "<extra></extra>"))
@@ -6143,7 +6225,7 @@ def fit_and_plot_iso(_ts, *setting_vals):
         parts.append(html.Div(f"No fit: {why}", style={"color": "#888"}))
     if err:
         parts.append(html.Div(err, style={"color": "#c0392b"}))
-    return fig, rfig, parts
+    return fig, rfig, parts, *_iso_curve_table(vals, floor_on)
 
 
 # Point labels of the isochronicity plot: placed in the browser with the same
@@ -6217,6 +6299,17 @@ function(fig) {
                 for (var k = 0; k < full.x.length; k += step) {
                     var cx = xa.l2p(full.x[k]) + xa._offset, cy = ya.l2p(full.y[k]) + ya._offset;
                     obst.push([cx - 3, cy - 3, cx + 3, cy + 3]);
+                }
+                return;
+            }
+            if (tr.meta === 'iso-tot') {                // total error bars: obstacles only
+                var et = (full.error_y && full.error_y.array) || [];
+                for (var k = 0; k < full.x.length; k++) {
+                    var e = et[k], X = full.x[k], Y = full.y[k];
+                    if (!isFinite(e) || !(e > 0)) continue;
+                    var px = xa.l2p(X) + xa._offset;
+                    var y1 = ya.l2p(Y + e) + ya._offset, y2 = ya.l2p(Y - e) + ya._offset;
+                    obst.push([px - 4, Math.min(y1, y2), px + 4, Math.max(y1, y2)]);
                 }
                 return;
             }
@@ -6353,14 +6446,17 @@ def toggle_iso_point(active, click, version):
     Output("iso-save-status", "children"),
     Input("btn-iso-save-fig", "n_clicks"),
     *[State(f"iso-set-{k}", "value") for k in ISO_SETTING_KEYS],
+    State("iso-set-floor", "value"),
     prevent_initial_call=True,
 )
-def save_iso_figure(_n, *setting_vals):
+def save_iso_figure(_n, *args):
+    setting_vals, floor_val = args[:-1], args[-1]
     try:
         st = {k: float(v) for k, v in zip(ISO_SETTING_KEYS, setting_vals)}
         check_iso_fit_settings(st)
     except (TypeError, ValueError):
         st = load_iso_fit_settings()
+    st["auto_floor"] = "auto" in (floor_val or [])
     try:
         vals, res, why = iso_fit_data(st)
         if vals is None:
@@ -6443,7 +6539,8 @@ def _mpl_point_labels(fig, ax, used, out, boxes):
     """Ion labels with arrows, placed by place_labels (display pixels, y up)."""
     fig.canvas.draw()
     rend = fig.canvas.get_renderer()
-    rows = [(r.ion, r.T_ns, r.sigma_T_ps, r.d_sigma_T_ps, "black") for r in used.itertuples()] + \
+    ecol = "d_sigma_T_total_ps" if "d_sigma_T_total_ps" in used else "d_sigma_T_ps"
+    rows = [(r.ion, r.T_ns, r.sigma_T_ps, getattr(r, ecol), "black") for r in used.itertuples()] + \
            [(r.ion, r.T_ns, r.sigma_T_ps, r.d_sigma_T_ps, "#999999") for r in out.itertuples()]
     if not rows:
         return
@@ -6487,10 +6584,14 @@ def draw_iso_figure(vals, res, st):
     import matplotlib.pyplot as plt
     used = vals[vals["include"] & vals["fittable"]]
     out = vals[~(vals["include"] & vals["fittable"])]
+    show_tot = bool(res and res.get("floor"))
     fig, (ax, axr) = plt.subplots(2, 1, figsize=(16, 13), sharex=True,
                                   gridspec_kw={"height_ratios": [3, 1], "hspace": 0.06})
+    if show_tot:      # total error (statistical ⊕ floor) behind the statistical bars
+        ax.errorbar(used["T_ns"], used["sigma_T_ps"], yerr=used["d_sigma_T_total_ps"],
+                    fmt="none", color="#d4d4d4", elinewidth=5, capsize=0, zorder=1)
     ax.errorbar(used["T_ns"], used["sigma_T_ps"], yerr=used["d_sigma_T_ps"], fmt="none",
-                color="grey", capsize=4)
+                color="#555555" if show_tot else "grey", capsize=4, zorder=2)
     ax.scatter(used["T_ns"], used["sigma_T_ps"], color="red", marker="x", s=50,
                label="Identified ions", zorder=3)
     if len(out):
@@ -6506,8 +6607,11 @@ def draw_iso_figure(vals, res, st):
         resid = used["sigma_T_ps"] - iso_sigma_t(used["T_ns"], *res["popt"],
                                                   st["circumference_m"], st["c_m_s"])
         axr.axhline(0, color="grey", lw=1)
+        if show_tot:
+            axr.errorbar(used["T_ns"], resid, yerr=used["d_sigma_T_total_ps"], fmt="none",
+                         color="#d4d4d4", elinewidth=5, capsize=0, zorder=1)
         axr.errorbar(used["T_ns"], resid, yerr=used["d_sigma_T_ps"], fmt="x", color="red",
-                     ecolor="grey", capsize=3)
+                     ecolor="#555555" if show_tot else "grey", capsize=3, zorder=2)
     else:
         ptext = None
     ax.set_ylabel(r"$\sigma_{T}$ (ps)", size=22)
