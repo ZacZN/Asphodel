@@ -620,6 +620,21 @@ def physics_panel():
     ])
 
 
+def changelog_panel(n=20):
+    """The last n commits (git log), newest first, with their version."""
+    entries = version.changelog(n)
+    if not entries:
+        rows = [html.Div("git log not available", className="note")]
+    else:
+        rows = [html.Div([
+            html.Span(f"v{e['version']}" if e["version"] else "", className="cl-ver"),
+            html.Span(e["date"], className="cl-date"),
+            html.Div(e["subject"], className="cl-msg"),
+        ], className="cl-row") for e in entries]
+    return html.Div([html.H3("Changelog"), html.Div(rows, className="cl-list")],
+                    className="changelog")
+
+
 def sidebar():
     srcs = []
     for title, d in (("1-D spectra", paths.spectra_1d()), ("Spectrograms", paths.spectrograms()),
@@ -642,6 +657,7 @@ def sidebar():
         html.Div([
             html.Img(src=icon.ICON_URL, alt="Asphodel"),
             html.Div(f"Asphodel v{version.version()}", className="brand-name"),
+            changelog_panel(),
         ], className="brand"),
     ])
 
@@ -765,6 +781,13 @@ aside{{width:330px;min-width:330px;background:var(--side);border-right:1px solid
 .brand{{text-align:center;padding:24px 0 6px}}
 .brand img{{width:120px;height:120px;display:block;margin:0 auto 8px}}
 .brand-name{{font-weight:700;font-size:14px;color:#555;letter-spacing:.3px}}
+.changelog{{text-align:left;margin-top:16px}}
+.cl-list{{max-height:300px;overflow-y:auto;background:#fff;border:1px solid var(--line);border-radius:5px;padding:2px 8px}}
+.cl-row{{padding:5px 0;border-bottom:1px solid var(--line);font-size:11px}}
+.cl-row:last-child{{border-bottom:none}}
+.cl-ver{{font-weight:700;color:var(--accent);margin-right:6px;font-family:monospace}}
+.cl-date{{color:var(--muted)}}
+.cl-msg{{color:#333;margin-top:1px;word-break:break-word}}
 aside h3{{font-size:12px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin:18px 0 8px}}
 aside h3:first-child{{margin-top:0}}
 details.fold{{margin:18px 0 8px}}

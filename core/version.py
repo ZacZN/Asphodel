@@ -39,4 +39,32 @@ def version():
     return f"{MAJOR_MINOR}.{max(n - 1, 0)}"
 
 
+
+def _git(*args):
+    out = subprocess.run(["git", "-C", REPO, *args], capture_output=True, text=True, timeout=5)
+    if out.returncode != 0:
+        raise OSError(out.stderr.strip())
+    return out.stdout
+
+
+def changelog(n=20):
+    """The last n commits, newest first: [{"version": "0.1.3" or None,
+    "date": "26 Oct 2026", "subject": "..."}]. Commits from before the
+    numbering started have no version. [] if git is not available."""
+    try:
+        log = _git("log", f"-n{n}", "--date=format:%d %b %Y", "--format=%H%x1f%ad%x1f%s")
+        after_base = set(_git("rev-list", f"{BASE_COMMIT}..HEAD").split())
+        out = []
+        for line in log.splitlines():
+            h, date, subject = (line.split("\x1f") + ["", ""])[:3]
+            ver = None
+            if h in after_base:
+                k = int(_git("rev-list", "--count", f"{BASE_COMMIT}..{h}").strip())
+                ver = f"{MAJOR_MINOR}.{max(k - 1, 0)}"
+            out.append({"version": ver, "date": date, "subject": subject})
+        return out
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return []
+
+
 __version__ = version()
