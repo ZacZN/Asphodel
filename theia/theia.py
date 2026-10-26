@@ -6489,7 +6489,8 @@ function(fig) {
                 if (px < rect[0] || px > rect[2] || py < rect[1] || py > rect[3]) continue;
                 var t = String(full.text[k]);
                 pts.push([px, py]);
-                sizes.push([textW(t, font) + 2, Math.round(FONT_PX * 1.35)]);
+                // text + white box with a black border (borderpad 3 + border 1 each side)
+                sizes.push([textW(t, font) + 2 + 8, Math.round(FONT_PX * 1.35) + 8]);
                 lab.push({x: X, y: Y, text: t, out: tr.meta === 'iso-out'});
             }
         });
@@ -6510,7 +6511,8 @@ function(fig) {
                     showarrow: true, ax: offs[i][0], ay: offs[i][1], arrowhead: 2,
                     arrowsize: 0.8, arrowwidth: 1, arrowcolor: '#888888', standoff: 5,
                     font: {size: FONT_PX, color: l.out ? '#aaaaaa' : '#222222'},
-                    bgcolor: 'rgba(255,255,255,0.6)', captureevents: false};
+                    bgcolor: '#ffffff', bordercolor: '#000000', borderwidth: 1, borderpad: 3,
+                    captureevents: false};
         }));
         gd._isoLabelBusy = true;
         Plotly.relayout(gd, {annotations: anns}).then(function() { gd._isoLabelBusy = false; },
@@ -6662,6 +6664,7 @@ LABEL_ANGLES = [45, 135, -45, -135, 90, -90, 0, 180,
                 33.75, 56.25, 123.75, 146.25, -33.75, -56.25, -123.75, -146.25]
 LABEL_RADII = [26, 40, 58, 80, 105, 135, 170, 210]
 ISO_LABEL_PT = 16          # label text size: saved figure (pt) and page (px)
+ISO_LABEL_BOX_PAD = 0.2    # label box padding in the saved figure (× font size)
 ISO_ARROW_BAR_COST = 150   # per 2 px of arrow lying on an error bar (same in ISO_LABEL_JS)
 ISO_ARROW_CROSS_COST = 3000  # arrow crossing another label's arrow (same in ISO_LABEL_JS)
 ISO_ARROW_POINT_COST = 300  # arrow passing over another point (same in ISO_LABEL_JS)
@@ -6871,7 +6874,8 @@ def _mpl_point_labels(fig, ax, used, out, boxes):
         tt = ax.text(0, 0, ion, fontsize=ISO_LABEL_PT)
         ext = tt.get_window_extent(rend)
         tt.remove()
-        sizes.append((ext.width, ext.height))
+        pad = 2 * (ISO_LABEL_BOX_PAD * ISO_LABEL_PT * fig.dpi / 72.0 + 1)   # box around it
+        sizes.append((ext.width + pad, ext.height + pad))
         obst.append((x - 7, y - 7, x + 7, y + 7))
         if np.isfinite(e) and e > 0:
             _, ylo = ax.transData.transform((t, sg - e))
@@ -6891,6 +6895,8 @@ def _mpl_point_labels(fig, ax, used, out, boxes):
     for (ion, t, sg, _, col), (dx, dy) in zip(rows, offs):
         ax.annotate(ion, xy=(t, sg), xytext=(dx * k, dy * k), textcoords="offset points",
                     ha="center", va="center", fontsize=ISO_LABEL_PT, color=col,
+                    bbox=dict(boxstyle=f"square,pad={ISO_LABEL_BOX_PAD}", facecolor="white",
+                              edgecolor="black", linewidth=0.8),
                     arrowprops=dict(arrowstyle="-|>", color="#888888", lw=0.8,
                                     shrinkA=1, shrinkB=4, mutation_scale=8))
 
