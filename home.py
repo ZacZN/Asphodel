@@ -40,7 +40,7 @@ import time
 import webbrowser
 
 sys.path.insert(1, os.path.dirname(os.path.abspath(__file__)))
-from core import browser, icon, paths, physics, sync, tabwatch
+from core import browser, icon, paths, physics, sync, tabwatch, version
 
 import dash
 from dash import dcc, html, Input, Output, State, ALL, ctx
@@ -629,12 +629,20 @@ def sidebar():
                               html.Div(f"{n} .npz · {_size(total)}")], className="src"))
     nub = os.path.join(paths.REPO_ROOT, "core", "nubase_4.mas20")
     return html.Aside([
-        html.H3("Data sources"), *srcs,
-        html.Details([html.Summary("Shared physics"), physics_panel()],
-                     open=False, className="fold"),
-        html.H3("Reference data"),
-        html.Div([html.B("NUBASE"), html.Code("core/nubase_4.mas20"),
-                  html.Div(_mtime(nub))], className="src"),
+        html.Div([
+            html.H3("Data sources"), *srcs,
+            html.Details([html.Summary("Shared physics"), physics_panel()],
+                         open=False, className="fold"),
+            html.H3("Reference data"),
+            html.Div([html.B("NUBASE"), html.Code("core/nubase_4.mas20"),
+                      html.Div(_mtime(nub))], className="src"),
+        ]),
+        # suite icon and version, in the free space at the bottom of the sidebar
+        # (version: core/version.py, goes up by one with every commit)
+        html.Div([
+            html.Img(src=icon.ICON_URL, alt="Asphodel"),
+            html.Div(f"Asphodel v{version.version()}", className="brand-name"),
+        ], className="brand"),
     ])
 
 
@@ -752,7 +760,11 @@ header .exp{{width:180px;font-size:13px}} header .path{{color:var(--muted);font-
 header .spacer{{flex:1}}
 .banner{{background:var(--pale);border-bottom:1px solid var(--line);padding:6px 18px;font-size:12px;color:#8a4a10;min-height:28px}}
 .wrap{{display:flex;min-height:calc(100vh - 82px)}}
-aside{{width:330px;min-width:330px;background:var(--side);border-right:1px solid var(--line);padding:14px 16px}}
+aside{{width:330px;min-width:330px;background:var(--side);border-right:1px solid var(--line);padding:14px 16px;
+  display:flex;flex-direction:column;justify-content:space-between}}
+.brand{{text-align:center;padding:24px 0 6px}}
+.brand img{{width:120px;height:120px;display:block;margin:0 auto 8px}}
+.brand-name{{font-weight:700;font-size:14px;color:#555;letter-spacing:.3px}}
 aside h3{{font-size:12px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin:18px 0 8px}}
 aside h3:first-child{{margin-top:0}}
 details.fold{{margin:18px 0 8px}}
