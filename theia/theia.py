@@ -6311,19 +6311,12 @@ function(fig) {
     var ANG = [45, 135, -45, -135, 90, -90, 0, 180,
                67.5, 112.5, -67.5, -112.5, 22.5, 157.5, -22.5, -157.5,
                33.75, 56.25, 123.75, 146.25, -33.75, -56.25, -123.75, -146.25];
-    var RAD = [26, 40, 58, 80, 105, 135, 170, 210];
-    var FONT_PX = 16;
+    var RAD = [24, 34, 46, 60, 76, 94, 115, 140, 170, 210, 260, 320];
+    var FONT_PX = 12;
     function ov(a, b) {
         var w = Math.min(a[2], b[2]) - Math.max(a[0], b[0]);
         var h = Math.min(a[3], b[3]) - Math.max(a[1], b[1]);
         return (w > 0 && h > 0) ? w * h : 0;
-    }
-    function segHits(x0, y0, x1, y1, r) {
-        for (var k = 1; k < 10; k++) {
-            var t = k / 10, x = x0 + t * (x1 - x0), y = y0 + t * (y1 - y0);
-            if (x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3]) return true;
-        }
-        return false;
     }
     // 2-px steps of the arrow (from 8 px off the point to the label box) on an error bar
     function leaderInBars(px, py, cx, cy, box, bars) {
@@ -6355,6 +6348,20 @@ function(fig) {
         if (d <= 5) return null;
         return [px + 5 * (cx - px) / d, py + 5 * (cy - py) / d, cx, cy];
     }
+    function segRect(s, r) {          // segment through rectangle (Liang–Barsky)
+        if (!s) return false;
+        var dx = s[2] - s[0], dy = s[3] - s[1], t0 = 0, t1 = 1;
+        var P = [-dx, dx, -dy, dy], Q = [s[0] - r[0], r[2] - s[0], s[1] - r[1], r[3] - s[1]];
+        for (var k = 0; k < 4; k++) {
+            if (P[k] === 0) { if (Q[k] < 0) return false; }
+            else {
+                var t = Q[k] / P[k];
+                if (P[k] < 0) t0 = Math.max(t0, t); else t1 = Math.min(t1, t);
+                if (t0 > t1) return false;
+            }
+        }
+        return true;
+    }
     function segsCross(a, b) {
         if (!a || !b) return false;
         function o(ax, ay, bx, by, cx, cy) { return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax); }
@@ -6368,88 +6375,114 @@ function(fig) {
         var t = L2 === 0 ? 0 : Math.min(Math.max(((qx - s[0]) * vx + (qy - s[1]) * vy) / L2, 0), 1);
         return Math.hypot(qx - (s[0] + t * vx), qy - (s[1] + t * vy)) < 7;
     }
+    // same method as place_labels() in Python: candidate spots per label,
+    // own cost + pair costs, simulated annealing with a fixed seed, polish
     function place(pts, sizes, obst, rect, bars) {
-        var n = pts.length, cen = new Array(n);
-        function cost(i, cx, cy, others) {
-            var px = pts[i][0], py = pts[i][1], w = sizes[i][0], h = sizes[i][1];
-            var r = Math.hypot(cx - px, cy - py);
-            var box = [cx - w / 2 - 2, cy - h / 2 - 1, cx + w / 2 + 2, cy + h / 2 + 1];
-            var area = (box[2] - box[0]) * (box[3] - box[1]);
-            var c = 0.6 * r + 60 * (area - ov(box, rect));
-            var lead = leader(px, py, cx, cy, w, h);
-            for (var q = 0; q < others.length; q++) {
-                var j = others[q], ox = cen[j][0], oy = cen[j][1], ow = sizes[j][0], oh = sizes[j][1];
-                var ob = [ox - ow / 2 - 2, oy - oh / 2 - 1, ox + ow / 2 + 2, oy + oh / 2 + 1];
-                c += 20 * ov(box, ob);
-                if (segHits(px, py, cx, cy, ob)) c += 400;
-                if (segsCross(toCentre(px, py, cx, cy), toCentre(pts[j][0], pts[j][1], ox, oy))) c += 3000;
+        var n = pts.length;
+        if (!n) return [];
+        var cands = [];
+        for (var i = 0; i < n; i++) {
+            var px = pts[i][0], py = pts[i][1], w = sizes[i][0], h = sizes[i][1], lst = [];
+            RAD.forEach(function(r) {
+                ANG.forEach(function(a) {
+                    var cx = px + r * Math.cos(a * Math.PI / 180), cy = py - r * Math.sin(a * Math.PI / 180);
+                    var box = [cx - w / 2 - 2, cy - h / 2 - 1, cx + w / 2 + 2, cy + h / 2 + 1];
+                    var area = (box[2] - box[0]) * (box[3] - box[1]);
+                    var u = 0.6 * r + 60 * (area - ov(box, rect));
+                    for (var o = 0; o < obst.length; o++)
+                        u += (obst[o].length > 4 ? obst[o][4] : 4) * ov(box, obst[o]);
+                    u += 150 * leaderInBars(px, py, cx, cy, box, bars);
+                    var lead = leader(px, py, cx, cy, w, h);
+                    for (var k = 0; k < n; k++)   // (points under this point's own marker are unavoidable)
+                        if (k !== i && Math.hypot(pts[k][0] - px, pts[k][1] - py) > 8 &&
+                            nearSeg(pts[k][0], pts[k][1], lead)) u += 300;
+                    var env = [Math.min(box[0], px), Math.min(box[1], py), Math.max(box[2], px), Math.max(box[3], py)];
+                    lst.push([u, [cx, cy], box, lead, toCentre(px, py, cx, cy), env]);
+                });
+            });
+            lst.sort(function(p, q) { return p[0] - q[0]; });
+            cands.push(lst.slice(0, 120));
+        }
+        var cache = new Map();
+        function pair(i, a, j, b) {
+            var key = i < j ? ((i * 1000 + a) * 100000 + j * 1000 + b) : ((j * 1000 + b) * 100000 + i * 1000 + a);
+            var v = cache.get(key);
+            if (v !== undefined) return v;
+            var A = cands[i][a], B = cands[j][b], ea = A[5], eb = B[5];
+            v = 0;
+            if (!(ea[2] < eb[0] || eb[2] < ea[0] || ea[3] < eb[1] || eb[3] < ea[1])) {
+                v += 20 * ov(A[2], B[2]);
+                if (segRect(A[3], B[2]) || segRect(B[3], A[2])) v += 6000;
+                if (segsCross(A[4], B[4])) v += 6000;
             }
-            for (var o = 0; o < obst.length; o++)
-                c += (obst[o].length > 4 ? obst[o][4] : 4) * ov(box, obst[o]);
-            c += 150 * leaderInBars(px, py, cx, cy, box, bars);
-            for (var k = 0; k < n; k++)   // (points under this point's own marker are unavoidable)
-                if (k !== i && Math.hypot(pts[k][0] - px, pts[k][1] - py) > 8 &&
-                    nearSeg(pts[k][0], pts[k][1], lead)) c += 300;
+            cache.set(key, v);
+            return v;
+        }
+        var env = cands.map(function(L) {
+            var e = [Infinity, Infinity, -Infinity, -Infinity];
+            L.forEach(function(c) { e[0] = Math.min(e[0], c[5][0]); e[1] = Math.min(e[1], c[5][1]);
+                                    e[2] = Math.max(e[2], c[5][2]); e[3] = Math.max(e[3], c[5][3]); });
+            return e;
+        });
+        var nb = [];
+        for (var i = 0; i < n; i++) {
+            nb.push([]);
+            for (var j = 0; j < n; j++)
+                if (j !== i && !(env[i][2] < env[j][0] || env[j][2] < env[i][0] ||
+                                 env[i][3] < env[j][1] || env[j][3] < env[i][1])) nb[i].push(j);
+        }
+        var cur = new Array(n).fill(0);
+        function local(i, a) {
+            var c = cands[i][a][0];
+            for (var q = 0; q < nb[i].length; q++) c += pair(i, a, nb[i][q], cur[nb[i][q]]);
             return c;
         }
-        var crowd = [], order = [], done = [];
-        for (var i = 0; i < n; i++) {
-            var cnt = 0;
-            for (var j = 0; j < n; j++)
-                if (Math.abs(pts[j][0] - pts[i][0]) < 80 && Math.abs(pts[j][1] - pts[i][1]) < 40) cnt++;
-            crowd.push(cnt); order.push(i);
-        }
-        order.sort(function(a, b) { return crowd[b] - crowd[a]; });
-        order.forEach(function(i) {
-            var px = pts[i][0], py = pts[i][1], best = null;
-            RAD.forEach(function(r) {
-                ANG.forEach(function(a) {
-                    var cx = px + r * Math.cos(a * Math.PI / 180), cy = py - r * Math.sin(a * Math.PI / 180);
-                    var c = cost(i, cx, cy, done);
-                    if (!best || c < best[0]) best = [c, cx, cy];
-                });
-            });
-            cen[i] = [best[1], best[2]];
-            done.push(i);
-        });
-        function bestSpot(i, others) {
-            var px = pts[i][0], py = pts[i][1], best = null;
-            RAD.forEach(function(r) {
-                ANG.forEach(function(a) {
-                    var cx = px + r * Math.cos(a * Math.PI / 180), cy = py - r * Math.sin(a * Math.PI / 180);
-                    var c = cost(i, cx, cy, others);
-                    if (!best || c < best[0]) best = [c, [cx, cy]];
-                });
-            });
-            return best[1];
-        }
-        // untangle: when two arrows cross, try swapping the two labels, or
-        // moving either one to its best spot given all the others; keep the cheapest
-        for (var round = 0; round < 4; round++) {
-            var changed = false;
-            for (var i = 0; i < n; i++) for (var j = i + 1; j < n; j++) {
-                if (!segsCross(toCentre(pts[i][0], pts[i][1], cen[i][0], cen[i][1]),
-                               toCentre(pts[j][0], pts[j][1], cen[j][0], cen[j][1]))) continue;
-                var ri = [], rj = [];
-                for (var k = 0; k < n; k++) { if (k !== i) ri.push(k); if (k !== j) rj.push(k); }
-                var total = function() {
-                    return cost(i, cen[i][0], cen[i][1], ri) + cost(j, cen[j][0], cen[j][1], rj);
-                };
-                var old = [cen[i], cen[j]], best = [total(), old];
-                ['swap', 'move_i', 'move_j'].forEach(function(trial) {
-                    cen[i] = old[0]; cen[j] = old[1];
-                    if (trial === 'swap') { cen[i] = old[1]; cen[j] = old[0]; }
-                    else if (trial === 'move_i') cen[i] = bestSpot(i, ri);
-                    else cen[j] = bestSpot(j, rj);
-                    var t = total();
-                    if (t < best[0] - 1e-9) best = [t, [cen[i], cen[j]]];
-                });
-                cen[i] = best[1][0]; cen[j] = best[1][1];
-                if (best[1] !== old) changed = true;
+        function total() {
+            var t = 0;
+            for (var i = 0; i < n; i++) {
+                t += cands[i][cur[i]][0];
+                for (var q = 0; q < nb[i].length; q++) t += 0.5 * pair(i, cur[i], nb[i][q], cur[nb[i][q]]);
             }
-            if (!changed) break;
+            return t;
         }
-        return cen.map(function(c, i) { return [c[0] - pts[i][0], c[1] - pts[i][1]]; });
+        var seed;                             // fixed seeds: same view, same layout
+        function rnd() {                      // mulberry32
+            seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+            var t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+            t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+            return ((t ^ t >>> 14) >>> 0) / 4294967296;
+        }
+        // several annealing runs, keep the layout with the lowest cost
+        var iters = Math.min(25000, 700 * n), T0 = 3000, T1 = 5, bestLayout = null, bestCost = Infinity;
+        for (var run = 0; run < 4; run++) {
+            seed = 12345 + run;
+            cur = new Array(n).fill(0);
+            var tot = 0, bestTot = 0, best = cur.slice();
+            for (var it = 0; it < iters; it++) {
+                var T = T0 * Math.pow(T1 / T0, it / iters);
+                var i = Math.floor(rnd() * n), a = Math.floor(rnd() * cands[i].length);
+                if (a === cur[i]) continue;
+                var d = local(i, a) - local(i, cur[i]);
+                if (d < 0 || rnd() < Math.exp(-d / T)) {
+                    cur[i] = a; tot += d;
+                    if (tot < bestTot - 1e-9) { bestTot = tot; best = cur.slice(); }
+                }
+            }
+            cur = best;
+            for (var r5 = 0; r5 < 5; r5++) {  // polish: best spot for each label
+                var changed = false;
+                for (var i = 0; i < n; i++) {
+                    var bi = cur[i], bc = local(i, cur[i]);
+                    for (var a = 0; a < cands[i].length; a++) { var c = local(i, a); if (c < bc - 1e-9) { bc = c; bi = a; } }
+                    if (bi !== cur[i]) { cur[i] = bi; changed = true; }
+                }
+                if (!changed) break;
+            }
+            var tc = total();
+            if (tc < bestCost) { bestCost = tc; bestLayout = cur.slice(); }
+        }
+        cur = bestLayout;
+        return cur.map(function(a, i) { return [cands[i][a][1][0] - pts[i][0], cands[i][a][1][1] - pts[i][1]]; });
     }
     var ctx2d = document.createElement('canvas').getContext('2d');
     function textW(t, font) { ctx2d.font = font; return ctx2d.measureText(t).width; }
@@ -6662,11 +6695,16 @@ def save_iso_figure(_n, *args):
 LABEL_ANGLES = [45, 135, -45, -135, 90, -90, 0, 180,
                 67.5, 112.5, -67.5, -112.5, 22.5, 157.5, -22.5, -157.5,
                 33.75, 56.25, 123.75, 146.25, -33.75, -56.25, -123.75, -146.25]
-LABEL_RADII = [26, 40, 58, 80, 105, 135, 170, 210]
-ISO_LABEL_PT = 16          # label text size: saved figure (pt) and page (px)
+LABEL_RADII = [24, 34, 46, 60, 76, 94, 115, 140, 170, 210, 260, 320]
+LABEL_KEEP = 120             # cheapest candidate spots kept per label
+LABEL_ANNEAL_PER_LABEL = 700    # annealing steps per label …
+LABEL_ANNEAL_MAX = 25000        # … at most, per run
+LABEL_RESTARTS = 4              # annealing runs (different fixed seeds); the cheapest is kept
+ISO_LABEL_PT = 12          # label text size: saved figure (pt) and page (px)
 ISO_LABEL_BOX_PAD = 0.2    # label box padding in the saved figure (× font size)
 ISO_ARROW_BAR_COST = 150   # per 2 px of arrow lying on an error bar (same in ISO_LABEL_JS)
-ISO_ARROW_CROSS_COST = 3000  # arrow crossing another label's arrow (same in ISO_LABEL_JS)
+ISO_ARROW_BOX_COST = 6000   # an arrow through a label box, either way (same in ISO_LABEL_JS)
+ISO_ARROW_CROSS_COST = 6000  # arrow crossing another label's arrow (same in ISO_LABEL_JS)
 ISO_ARROW_POINT_COST = 300  # arrow passing over another point (same in ISO_LABEL_JS)
 
 
@@ -6674,16 +6712,6 @@ def _overlap(a, b):
     w = min(a[2], b[2]) - max(a[0], b[0])
     h = min(a[3], b[3]) - max(a[1], b[1])
     return w * h if w > 0 and h > 0 else 0.0
-
-
-def _seg_hits(x0, y0, x1, y1, r):
-    """Does the segment cross rectangle r (sampled)?"""
-    for k in range(1, 10):
-        t = k / 10.0
-        x, y = x0 + t * (x1 - x0), y0 + t * (y1 - y0)
-        if r[0] <= x <= r[2] and r[1] <= y <= r[3]:
-            return True
-    return False
 
 
 def _leader_in_bars(px, py, cx, cy, box, bars):
@@ -6729,6 +6757,28 @@ def _to_centre(px, py, cx, cy):
     return (px + 5 * (cx - px) / d, py + 5 * (cy - py) / d, cx, cy)
 
 
+def _seg_rect(seg, r):
+    """Does segment seg (x0, y0, x1, y1) pass through rectangle r (Liang–Barsky)?"""
+    if seg is None:
+        return False
+    x0, y0, x1, y1 = seg
+    dx, dy = x1 - x0, y1 - y0
+    t0, t1 = 0.0, 1.0
+    for p, q in ((-dx, x0 - r[0]), (dx, r[2] - x0), (-dy, y0 - r[1]), (dy, r[3] - y0)):
+        if p == 0:
+            if q < 0:
+                return False
+        else:
+            t = q / p
+            if p < 0:
+                t0 = max(t0, t)
+            else:
+                t1 = min(t1, t)
+            if t0 > t1:
+                return False
+    return True
+
+
 def _segs_cross(a, b):
     """Do segments a and b (x0, y0, x1, y1) cross?"""
     if a is None or b is None:
@@ -6754,106 +6804,118 @@ def _near_seg(qx, qy, seg, tol=7.0):
     return float(np.hypot(qx - (x0 + t * vx), qy - (y0 + t * vy))) < tol
 
 
-def place_labels(pts, sizes, obstacles, rect, y_down=True, bars=None):
+def place_labels(pts, sizes, obstacles, rect, y_down=True, bars=None, seed=0):
     """Pixel offsets (dx, dy) of each label centre from its point.
-    pts: [(x, y)], sizes: [(w, h)], obstacles: [(x0, y0, x1, y1)],
-    rect: plot area (x0, y0, x1, y1).  y_down: screen y grows downwards.
-    An obstacle may carry a 5th value, its cost weight (default 4; labels 20).
-    bars: error-bar rectangles the arrows must not cross or run along.
-    Arrows must not cross each other or pass over another point; a final
-    pass swaps the positions of two labels whose arrows still cross."""
+    pts: [(x, y)], sizes: [(w, h)] (label box incl. padding), obstacles:
+    [(x0, y0, x1, y1[, weight])] (default weight 4), rect: plot area,
+    y_down: screen y grows downwards, bars: error-bar rectangles.
+
+    Each label gets candidate spots (LABEL_ANGLES × LABEL_RADII around its
+    point).  A spot's own cost: distance, area outside the plot, obstacles,
+    its arrow on error bars, its arrow over other points.  Pair costs between
+    two labels: box overlap, an arrow through the other's box (either way),
+    crossing arrows.  The layout is found by simulated annealing (fixed seed,
+    so the same view always gives the same layout) and then polished.  The
+    same algorithm runs in the browser (ISO_LABEL_JS)."""
     n = len(pts)
+    if n == 0:
+        return []
     bars = bars or []
     up = -1.0 if y_down else 1.0
-    cen = [None] * n                       # label centres (None = not placed yet)
-
-    def cost(i, cx, cy, others):
+    cands = []
+    for i in range(n):
         px, py = pts[i]
         w, h = sizes[i]
-        r = float(np.hypot(cx - px, cy - py))
-        box = (cx - w / 2 - 2, cy - h / 2 - 1, cx + w / 2 + 2, cy + h / 2 + 1)
-        area = (box[2] - box[0]) * (box[3] - box[1])
-        c = 0.6 * r + 60.0 * (area - _overlap(box, rect))
-        lead = _leader(px, py, cx, cy, w, h)
-        for j in others:
-            ox, oy = cen[j]
-            ow, oh = sizes[j]
-            ob = (ox - ow / 2 - 2, oy - oh / 2 - 1, ox + ow / 2 + 2, oy + oh / 2 + 1)
-            c += 20.0 * _overlap(box, ob)
-            if _seg_hits(px, py, cx, cy, ob):
-                c += 400.0
-            if _segs_cross(_to_centre(px, py, cx, cy), _to_centre(pts[j][0], pts[j][1], ox, oy)):
-                c += ISO_ARROW_CROSS_COST
-        for o in obstacles:
-            c += (o[4] if len(o) > 4 else 4.0) * _overlap(box, o)
-        c += ISO_ARROW_BAR_COST * _leader_in_bars(px, py, cx, cy, box, bars)
-        for k, (qx, qy) in enumerate(pts):       # arrow over another point
-            # (points under this point's own marker cannot be avoided)
-            if k != i and np.hypot(qx - px, qy - py) > 8 and _near_seg(qx, qy, lead):
-                c += ISO_ARROW_POINT_COST
-        return c
-
-    crowd = [sum(1 for q in pts if abs(q[0] - p[0]) < 80 and abs(q[1] - p[1]) < 40)
-             for p in pts]
-    order = sorted(range(n), key=lambda i: -crowd[i])
-    done = []
-    for i in order:
-        px, py = pts[i]
-        best = None
+        lst = []
         for r in LABEL_RADII:
             for a in LABEL_ANGLES:
                 cx = px + r * np.cos(np.radians(a))
                 cy = py + up * r * np.sin(np.radians(a))
-                c = cost(i, cx, cy, done)
-                if best is None or c < best[0]:
-                    best = (c, cx, cy)
-        cen[i] = (best[1], best[2])
-        done.append(i)
+                box = (cx - w / 2 - 2, cy - h / 2 - 1, cx + w / 2 + 2, cy + h / 2 + 1)
+                area = (box[2] - box[0]) * (box[3] - box[1])
+                u = 0.6 * r + 60.0 * (area - _overlap(box, rect))
+                for o in obstacles:
+                    u += (o[4] if len(o) > 4 else 4.0) * _overlap(box, o)
+                u += ISO_ARROW_BAR_COST * _leader_in_bars(px, py, cx, cy, box, bars)
+                lead = _leader(px, py, cx, cy, w, h)
+                for k, (qx, qy) in enumerate(pts):
+                    # (points under this point's own marker cannot be avoided)
+                    if k != i and np.hypot(qx - px, qy - py) > 8 and _near_seg(qx, qy, lead):
+                        u += ISO_ARROW_POINT_COST
+                env = (min(box[0], px), min(box[1], py), max(box[2], px), max(box[3], py))
+                lst.append((u, (cx, cy), box, lead, _to_centre(px, py, cx, cy), env))
+        lst.sort(key=lambda c: c[0])
+        cands.append(lst[:LABEL_KEEP])
 
-    def best_spot(i, others):
-        px, py = pts[i]
-        best = None
-        for r in LABEL_RADII:
-            for a in LABEL_ANGLES:
-                cx = px + r * np.cos(np.radians(a))
-                cy = py + up * r * np.sin(np.radians(a))
-                c = cost(i, cx, cy, others)
-                if best is None or c < best[0]:
-                    best = (c, (cx, cy))
-        return best[1]
+    cache = {}
 
-    # untangle: when two arrows cross, try swapping the two labels, or moving
-    # either one to its best spot given all the others; keep the cheapest
-    for _ in range(4):
-        changed = False
-        for i in range(n):
-            for j in range(i + 1, n):
-                if not _segs_cross(_to_centre(*pts[i], *cen[i]), _to_centre(*pts[j], *cen[j])):
-                    continue
-                rest_i = [k for k in range(n) if k != i]
-                rest_j = [k for k in range(n) if k != j]
+    def pair(i, a, j, b):
+        key = (i, a, j, b) if i < j else (j, b, i, a)
+        v = cache.get(key)
+        if v is None:
+            A, B = cands[i][a], cands[j][b]
+            ea, eb = A[5], B[5]
+            v = 0.0
+            if not (ea[2] < eb[0] or eb[2] < ea[0] or ea[3] < eb[1] or eb[3] < ea[1]):
+                v += 20.0 * _overlap(A[2], B[2])
+                if _seg_rect(A[3], B[2]) or _seg_rect(B[3], A[2]):
+                    v += ISO_ARROW_BOX_COST
+                if _segs_cross(A[4], B[4]):
+                    v += ISO_ARROW_CROSS_COST
+            cache[key] = v
+        return v
 
-                def total():
-                    return cost(i, *cen[i], rest_i) + cost(j, *cen[j], rest_j)
-                old = (cen[i], cen[j])
-                best = (total(), old)
-                for trial in ("swap", "move_i", "move_j"):
-                    cen[i], cen[j] = old
-                    if trial == "swap":
-                        cen[i], cen[j] = old[1], old[0]
-                    elif trial == "move_i":
-                        cen[i] = best_spot(i, rest_i)
-                    else:
-                        cen[j] = best_spot(j, rest_j)
-                    t = total()
-                    if t < best[0] - 1e-9:
-                        best = (t, (cen[i], cen[j]))
-                cen[i], cen[j] = best[1]
-                if best[1] != old:
-                    changed = True
-        if not changed:
-            break
-    return [(cen[i][0] - pts[i][0], cen[i][1] - pts[i][1]) for i in range(n)]
+    # labels that can interact at all (their candidate areas touch)
+    env = [(min(c[5][0] for c in L), min(c[5][1] for c in L),
+            max(c[5][2] for c in L), max(c[5][3] for c in L)) for L in cands]
+    nb = [[j for j in range(n) if j != i and not (env[i][2] < env[j][0] or env[j][2] < env[i][0]
+                                                   or env[i][3] < env[j][1] or env[j][3] < env[i][1])]
+          for i in range(n)]
+    cur = [0] * n
+
+    def local(i, a):
+        return cands[i][a][0] + sum(pair(i, a, j, cur[j]) for j in nb[i])
+
+    def total():
+        return (sum(cands[i][cur[i]][0] for i in range(n))
+                + 0.5 * sum(pair(i, cur[i], j, cur[j]) for i in range(n) for j in nb[i]))
+
+    # several annealing runs (fixed seeds), keep the layout with the lowest cost
+    iters = min(LABEL_ANNEAL_MAX, LABEL_ANNEAL_PER_LABEL * n)
+    T0, T1 = 3000.0, 5.0
+    best_layout, best_cost = None, None
+    for run in range(LABEL_RESTARTS):
+        rng = np.random.default_rng(seed + run)
+        cur[:] = [0] * n                            # start: each label's cheapest own spot
+        tot = best_tot = 0.0
+        best = list(cur)
+        for it in range(iters):
+            T = T0 * (T1 / T0) ** (it / iters)
+            i = int(rng.integers(n))
+            a = int(rng.integers(len(cands[i])))
+            if a == cur[i]:
+                continue
+            d = local(i, a) - local(i, cur[i])
+            if d < 0 or rng.random() < np.exp(-d / T):
+                cur[i] = a
+                tot += d
+                if tot < best_tot - 1e-9:
+                    best_tot, best = tot, list(cur)
+        cur[:] = best
+        for _ in range(5):                          # polish: best spot for each label
+            changed = False
+            for i in range(n):
+                b = min(range(len(cands[i])), key=lambda a: local(i, a))
+                if local(i, b) < local(i, cur[i]) - 1e-9:
+                    cur[i], changed = b, True
+            if not changed:
+                break
+        c = total()
+        if best_cost is None or c < best_cost:
+            best_cost, best_layout = c, list(cur)
+    cur[:] = best_layout
+    return [(cands[i][cur[i]][1][0] - pts[i][0], cands[i][cur[i]][1][1] - pts[i][1])
+            for i in range(n)]
 
 
 def _mpl_point_labels(fig, ax, used, out, boxes):
