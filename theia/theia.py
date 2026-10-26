@@ -2174,6 +2174,7 @@ isochronicity_tab = html.Div([
     ], className="theia-box", style={**BOX_STYLE, "padding": "8px 10px", "marginTop": "10px"}),
     dcc.Store(id="iso-version", data=0),
     dcc.Store(id="iso-points-ts", data=None),
+    html.Div(id="_iso-label-hook", style={"display": "none"}),
     dcc.Store(id="iso-settings-init", data=0),
 ], id="further-page-iso", style={"padding": "14px 18px", "overflowY": "auto",
                                  "height": "calc(100vh - 82px)", "display": "none"})
@@ -6086,12 +6087,12 @@ def fit_and_plot_iso(_ts, *setting_vals):
         x = _iso_curve_x(vals)
         fig.add_trace(go.Scatter(x=x, y=iso_sigma_t(x, *res["popt"], st["circumference_m"],
                                                     st["c_m_s"]),
-                                 mode="lines", name="Isochronicity curve",
+                                 mode="lines", name="Isochronicity curve", meta="iso-curve",
                                  line=dict(color=ACCENT, width=2), hoverinfo="skip"))
+    # labels: drawn in the browser as annotations with arrows (ISO_LABEL_JS)
     fig.add_trace(go.Scatter(
-        x=used["T_ns"], y=used["sigma_T_ps"], mode="markers+text", name="In fit",
-        text=used["ion"], textposition="top right", textfont=dict(size=11),
-        customdata=used["id"],
+        x=used["T_ns"], y=used["sigma_T_ps"], mode="markers", name="In fit", meta="iso-pts",
+        text=used["ion"], customdata=used["id"],
         marker=dict(symbol="x", size=9, color="black"),
         error_y=dict(type="data", array=used["d_sigma_T_ps"], color="#999", thickness=1,
                      width=4),
@@ -6099,9 +6100,8 @@ def fit_and_plot_iso(_ts, *setting_vals):
                       "<br>click: leave out<extra></extra>"))
     if len(out):
         fig.add_trace(go.Scatter(
-            x=out["T_ns"], y=out["sigma_T_ps"], mode="markers+text", name="Left out",
-            text=out["ion"], textposition="top right", textfont=dict(size=11, color="#aaa"),
-            customdata=out["id"],
+            x=out["T_ns"], y=out["sigma_T_ps"], mode="markers", name="Left out", meta="iso-out",
+            text=out["ion"], customdata=out["id"],
             marker=dict(symbol="circle-open", size=9, color="#aaa"),
             error_y=dict(type="data", array=out["d_sigma_T_ps"].fillna(0), color="#ddd",
                          thickness=1, width=4),
@@ -6112,11 +6112,12 @@ def fit_and_plot_iso(_ts, *setting_vals):
                            yanchor="top", align="left", showarrow=False,
                            text="<br>".join(_iso_param_lines(res)),
                            bgcolor=ACCENT_PALE, bordercolor=ACCENT, borderwidth=1,
-                           font=dict(size=13))
+                           font=dict(size=13), name="isoparam")
     fig.update_layout(template="plotly_white", margin=dict(l=70, r=20, t=30, b=50),
                       xaxis_title="Revolution time T (ns)", yaxis_title="σ_T (ps)",
-                      legend=dict(orientation="h", y=1.02, yanchor="bottom", x=1,
-                                  xanchor="right"),
+                      legend=dict(x=0.99, y=0.02, xanchor="right", yanchor="bottom",
+                                  bgcolor="rgba(255,255,255,0.85)", bordercolor="#dddddd",
+                                  borderwidth=1),
                       font=dict(size=13), uirevision="iso", clickmode="event")
 
     rfig = go.Figure()
@@ -6143,6 +6144,154 @@ def fit_and_plot_iso(_ts, *setting_vals):
     if err:
         parts.append(html.Div(err, style={"color": "#c0392b"}))
     return fig, rfig, parts
+
+
+# Point labels of the isochronicity plot: placed in the browser with the same
+# method as place_labels(), and placed again after every zoom / pan / resize /
+# legend click, so they never overlap.  Drawn as annotations with arrows.
+ISO_LABEL_JS = """
+function(fig) {
+    var ANG = [45, 135, -45, -135, 90, -90, 0, 180,
+               67.5, 112.5, -67.5, -112.5, 22.5, 157.5, -22.5, -157.5];
+    var RAD = [26, 40, 58, 80, 105, 135];
+    function ov(a, b) {
+        var w = Math.min(a[2], b[2]) - Math.max(a[0], b[0]);
+        var h = Math.min(a[3], b[3]) - Math.max(a[1], b[1]);
+        return (w > 0 && h > 0) ? w * h : 0;
+    }
+    function segHits(x0, y0, x1, y1, r) {
+        for (var k = 1; k < 10; k++) {
+            var t = k / 10, x = x0 + t * (x1 - x0), y = y0 + t * (y1 - y0);
+            if (x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3]) return true;
+        }
+        return false;
+    }
+    function place(pts, sizes, obst, rect) {
+        var n = pts.length, crowd = [], order = [], placed = [], offs = new Array(n);
+        for (var i = 0; i < n; i++) {
+            var c = 0;
+            for (var j = 0; j < n; j++)
+                if (Math.abs(pts[j][0] - pts[i][0]) < 80 && Math.abs(pts[j][1] - pts[i][1]) < 40) c++;
+            crowd.push(c); order.push(i);
+        }
+        order.sort(function(a, b) { return crowd[b] - crowd[a]; });
+        order.forEach(function(i) {
+            var px = pts[i][0], py = pts[i][1], w = sizes[i][0], h = sizes[i][1], best = null;
+            RAD.forEach(function(r) {
+                ANG.forEach(function(a) {
+                    var dx = r * Math.cos(a * Math.PI / 180), dy = -r * Math.sin(a * Math.PI / 180);
+                    var cx = px + dx, cy = py + dy;
+                    var box = [cx - w / 2 - 2, cy - h / 2 - 1, cx + w / 2 + 2, cy + h / 2 + 1];
+                    var area = (box[2] - box[0]) * (box[3] - box[1]);
+                    var cost = 0.6 * r + 60 * (area - ov(box, rect));
+                    for (var q = 0; q < placed.length; q++) {
+                        cost += 20 * ov(box, placed[q]);
+                        if (segHits(px, py, cx, cy, placed[q])) cost += 400;
+                    }
+                    for (var o = 0; o < obst.length; o++)
+                        cost += (obst[o].length > 4 ? obst[o][4] : 4) * ov(box, obst[o]);
+                    if (!best || cost < best[0]) best = [cost, dx, dy, box];
+                });
+            });
+            placed.push(best[3]);
+            offs[i] = [best[1], best[2]];
+        });
+        return offs;
+    }
+    var ctx2d = document.createElement('canvas').getContext('2d');
+    function textW(t, font) { ctx2d.font = font; return ctx2d.measureText(t).width; }
+
+    function layoutLabels(gd) {
+        var L = gd._fullLayout;
+        if (!L || !L.xaxis || !L.yaxis || !gd.data) return;
+        var xa = L.xaxis, ya = L.yaxis;
+        var rect = [xa._offset, ya._offset, xa._offset + xa._length, ya._offset + ya._length];
+        var gr = gd.getBoundingClientRect();
+        var font = '11px "Open Sans", verdana, arial, sans-serif';
+        var pts = [], sizes = [], obst = [], lab = [];
+        gd.data.forEach(function(tr, ti) {
+            var full = gd._fullData[ti];
+            if (!full || full.visible !== true) return;
+            if (tr.meta === 'iso-curve') {
+                var step = Math.max(1, Math.floor(full.x.length / 150));
+                for (var k = 0; k < full.x.length; k += step) {
+                    var cx = xa.l2p(full.x[k]) + xa._offset, cy = ya.l2p(full.y[k]) + ya._offset;
+                    obst.push([cx - 3, cy - 3, cx + 3, cy + 3]);
+                }
+                return;
+            }
+            if (tr.meta !== 'iso-pts' && tr.meta !== 'iso-out') return;
+            var err = (full.error_y && full.error_y.array) || [];
+            for (var k = 0; k < full.x.length; k++) {
+                var X = full.x[k], Y = full.y[k];
+                var px = xa.l2p(X) + xa._offset, py = ya.l2p(Y) + ya._offset;
+                if (!isFinite(px) || !isFinite(py)) continue;
+                obst.push([px - 7, py - 7, px + 7, py + 7]);
+                var e = err[k];
+                if (isFinite(e) && e > 0) {
+                    var y1 = ya.l2p(Y + e) + ya._offset, y2 = ya.l2p(Y - e) + ya._offset;
+                    obst.push([px - 4, Math.min(y1, y2), px + 4, Math.max(y1, y2)]);
+                }
+                if (px < rect[0] || px > rect[2] || py < rect[1] || py > rect[3]) continue;
+                var t = String(full.text[k]);
+                pts.push([px, py]);
+                sizes.push([textW(t, font) + 2, 15]);
+                lab.push({x: X, y: Y, text: t, out: tr.meta === 'iso-out'});
+            }
+        });
+        // never under the parameter box or the legend
+        gd.querySelectorAll('.annotation, .legend').forEach(function(el) {
+            if (el.classList.contains('annotation') && el.getAttribute('data-index') !== null) {
+                var a = (gd.layout.annotations || [])[+el.getAttribute('data-index')];
+                if (a && a.name === 'isolab') return;
+            }
+            var r = el.getBoundingClientRect();
+            if (r.width && r.height)
+                obst.push([r.left - gr.left, r.top - gr.top, r.right - gr.left, r.bottom - gr.top, 20]);
+        });
+        var offs = place(pts, sizes, obst, rect);
+        var keep = (gd.layout.annotations || []).filter(function(a) { return a.name !== 'isolab'; });
+        var anns = keep.concat(lab.map(function(l, i) {
+            return {x: l.x, y: l.y, xref: 'x', yref: 'y', text: l.text, name: 'isolab',
+                    showarrow: true, ax: offs[i][0], ay: offs[i][1], arrowhead: 2,
+                    arrowsize: 0.8, arrowwidth: 1, arrowcolor: '#888888', standoff: 5,
+                    font: {size: 11, color: l.out ? '#aaaaaa' : '#222222'},
+                    bgcolor: 'rgba(255,255,255,0.6)', captureevents: false};
+        }));
+        gd._isoLabelBusy = true;
+        Plotly.relayout(gd, {annotations: anns}).then(function() { gd._isoLabelBusy = false; },
+                                                      function() { gd._isoLabelBusy = false; });
+    }
+
+    setTimeout(function() {
+        var gd = document.querySelector('#iso-graph .js-plotly-plot');
+        if (!gd) return;
+        if (!gd._isoLabelHook) {
+            gd._isoLabelHook = true;
+            var timer = null;
+            var soon = function() { clearTimeout(timer); timer = setTimeout(function() { layoutLabels(gd); }, 120); };
+            gd.on('plotly_relayout', function(ev) {
+                if (gd._isoLabelBusy) return;
+                var keys = Object.keys(ev || {});
+                if (keys.length && keys.every(function(k) { return k.indexOf('annotations') === 0; })) return;
+                soon();
+            });
+            gd.on('plotly_restyle', soon);            // legend clicks (hide / show)
+            window.addEventListener('resize', soon);
+            gd._isoSoon = soon;
+        }
+        gd._isoSoon();
+    }, 150);
+    return window.dash_clientside.no_update;
+}
+"""
+
+app.clientside_callback(
+    ISO_LABEL_JS,
+    Output("_iso-label-hook", "children"),
+    Input("iso-graph", "figure"),
+    prevent_initial_call=True,
+)
 
 
 @app.callback(
@@ -6207,6 +6356,111 @@ def save_iso_figure(_n, *setting_vals):
                       f"  (in {os.path.dirname(files[0])})"])
 
 
+# ---- point labels without overlaps (isochronicity plot) ---------------------
+# Greedy placement in pixel space: each label tries 16 directions × 6
+# distances around its point and takes the lowest-cost spot.  Cost: overlap
+# with labels already placed (heavy), with obstacles (points, error bars, the
+# curve, parameter box, legend), area outside the plot, the leader line
+# crossing a placed label, and the distance.  Crowded points go first.
+# The same algorithm runs in the browser (ISO_LABEL_JS) after every zoom/pan.
+LABEL_ANGLES = [45, 135, -45, -135, 90, -90, 0, 180,
+                67.5, 112.5, -67.5, -112.5, 22.5, 157.5, -22.5, -157.5]
+LABEL_RADII = [26, 40, 58, 80, 105, 135]
+
+
+def _overlap(a, b):
+    w = min(a[2], b[2]) - max(a[0], b[0])
+    h = min(a[3], b[3]) - max(a[1], b[1])
+    return w * h if w > 0 and h > 0 else 0.0
+
+
+def _seg_hits(x0, y0, x1, y1, r):
+    """Does the segment cross rectangle r (sampled)?"""
+    for k in range(1, 10):
+        t = k / 10.0
+        x, y = x0 + t * (x1 - x0), y0 + t * (y1 - y0)
+        if r[0] <= x <= r[2] and r[1] <= y <= r[3]:
+            return True
+    return False
+
+
+def place_labels(pts, sizes, obstacles, rect, y_down=True):
+    """Pixel offsets (dx, dy) of each label centre from its point.
+    pts: [(x, y)], sizes: [(w, h)], obstacles: [(x0, y0, x1, y1)],
+    rect: plot area (x0, y0, x1, y1).  y_down: screen y grows downwards.
+    An obstacle may carry a 5th value, its cost weight (default 4; labels 20)."""
+    n = len(pts)
+    crowd = [sum(1 for q in pts if abs(q[0] - p[0]) < 80 and abs(q[1] - p[1]) < 40)
+             for p in pts]
+    order = sorted(range(n), key=lambda i: -crowd[i])
+    placed, offs = [], [(0.0, 0.0)] * n
+    up = -1.0 if y_down else 1.0
+    for i in order:
+        px, py = pts[i]
+        w, h = sizes[i]
+        best = None
+        for r in LABEL_RADII:
+            for a in LABEL_ANGLES:
+                dx = r * np.cos(np.radians(a))
+                dy = up * r * np.sin(np.radians(a))
+                cx, cy = px + dx, py + dy
+                box = (cx - w / 2 - 2, cy - h / 2 - 1, cx + w / 2 + 2, cy + h / 2 + 1)
+                area = (box[2] - box[0]) * (box[3] - box[1])
+                inside = _overlap(box, rect)
+                cost = 0.6 * r + 60.0 * (area - inside)
+                for b in placed:
+                    cost += 20.0 * _overlap(box, b)
+                    if _seg_hits(px, py, cx, cy, b):
+                        cost += 400.0
+                for o in obstacles:
+                    cost += (o[4] if len(o) > 4 else 4.0) * _overlap(box, o)
+                if best is None or cost < best[0]:
+                    best = (cost, dx, dy, box)
+        placed.append(best[3])
+        offs[i] = (best[1], best[2])
+    return offs
+
+
+def _mpl_point_labels(fig, ax, used, out, boxes):
+    """Ion labels with arrows, placed by place_labels (display pixels, y up)."""
+    fig.canvas.draw()
+    rend = fig.canvas.get_renderer()
+    rows = [(r.ion, r.T_ns, r.sigma_T_ps, r.d_sigma_T_ps, "black") for r in used.itertuples()] + \
+           [(r.ion, r.T_ns, r.sigma_T_ps, r.d_sigma_T_ps, "#999999") for r in out.itertuples()]
+    if not rows:
+        return
+    bb = ax.get_window_extent(rend)
+    rect = (bb.x0, bb.y0, bb.x1, bb.y1)
+    pts, sizes, obst = [], [], []
+    for ion, t, sg, e, _ in rows:
+        x, y = ax.transData.transform((t, sg))
+        pts.append((x, y))
+        tt = ax.text(0, 0, ion, fontsize=11)
+        ext = tt.get_window_extent(rend)
+        tt.remove()
+        sizes.append((ext.width, ext.height))
+        obst.append((x - 7, y - 7, x + 7, y + 7))
+        if np.isfinite(e) and e > 0:
+            _, ylo = ax.transData.transform((t, sg - e))
+            _, yhi = ax.transData.transform((t, sg + e))
+            obst.append((x - 4, ylo, x + 4, yhi))
+    for line in ax.get_lines():                      # the curve
+        xy = ax.transData.transform(np.column_stack(line.get_data()))
+        for k in range(0, len(xy), max(1, len(xy) // 150)):
+            obst.append((xy[k, 0] - 3, xy[k, 1] - 3, xy[k, 0] + 3, xy[k, 1] + 3))
+    for b in boxes:
+        if b is not None:
+            e = b.get_window_extent(rend)
+            obst.append((e.x0, e.y0, e.x1, e.y1, 20.0))      # never under these
+    offs = place_labels(pts, sizes, obst, rect, y_down=False)
+    k = 72.0 / fig.dpi                                 # pixels -> points
+    for (ion, t, sg, _, col), (dx, dy) in zip(rows, offs):
+        ax.annotate(ion, xy=(t, sg), xytext=(dx * k, dy * k), textcoords="offset points",
+                    ha="center", va="center", fontsize=11, color=col,
+                    arrowprops=dict(arrowstyle="-|>", color="#888888", lw=0.8,
+                                    shrinkA=1, shrinkB=4, mutation_scale=8))
+
+
 def draw_iso_figure(vals, res, st):
     """Matplotlib figure (curve + residuals), saved as PNG and PDF in
     outputs/figures/.  Returns the file paths."""
@@ -6221,31 +6475,30 @@ def draw_iso_figure(vals, res, st):
                 color="grey", capsize=4)
     ax.scatter(used["T_ns"], used["sigma_T_ps"], color="red", marker="x", s=50,
                label="Identified ions", zorder=3)
-    for r in used.itertuples():
-        ax.annotate(r.ion, xy=(r.T_ns, r.sigma_T_ps), fontsize=11)
     if len(out):
         ax.scatter(out["T_ns"], out["sigma_T_ps"], facecolors="none", edgecolors="#aaaaaa",
                    s=50, label="Left out of the fit", zorder=2)
-        for r in out.itertuples():
-            ax.annotate(r.ion, xy=(r.T_ns, r.sigma_T_ps), fontsize=11, color="#aaaaaa")
     if res:
         x = _iso_curve_x(vals)
         ax.plot(x, iso_sigma_t(x, *res["popt"], st["circumference_m"], st["c_m_s"]),
                 color="black", label="Isochronicity curve")
         props = dict(boxstyle="round", facecolor="wheat", alpha=0.5)
-        ax.text(0.02, 0.97, "\n".join(_iso_param_lines(res)), transform=ax.transAxes,
-                fontsize=16, verticalalignment="top", bbox=props)
+        ptext = ax.text(0.02, 0.97, "\n".join(_iso_param_lines(res)), transform=ax.transAxes,
+                        fontsize=16, verticalalignment="top", bbox=props)
         resid = used["sigma_T_ps"] - iso_sigma_t(used["T_ns"], *res["popt"],
                                                   st["circumference_m"], st["c_m_s"])
         axr.axhline(0, color="grey", lw=1)
         axr.errorbar(used["T_ns"], resid, yerr=used["d_sigma_T_ps"], fmt="x", color="red",
                      ecolor="grey", capsize=3)
+    else:
+        ptext = None
     ax.set_ylabel(r"$\sigma_{T}$ (ps)", size=22)
     axr.set_ylabel("σ(T) − fit (ps)", size=16)
     axr.set_xlabel("Revolution Time (ns)", size=22)
     ax.tick_params(labelsize=16)
     axr.tick_params(labelsize=16)
-    ax.legend(fontsize=16, loc="upper right")
+    leg = ax.legend(fontsize=16, loc="lower right")
+    _mpl_point_labels(fig, ax, used, out, [ptext, leg])
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     base = os.path.join(paths.outputs("figures"), f"isocurve_{stamp}")
     files = [base + ".png", base + ".pdf"]
