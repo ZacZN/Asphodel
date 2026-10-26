@@ -90,8 +90,8 @@ CONFIRMED_DIR = paths.outputs("confirmed")
 VIEWER_CONFIG_PATH = paths.settings_file("viewer_config.json")
 ACCENT      = "#f57d15"
 ACCENT_PALE = "#fff4ec"
-# solid black frame round a plot (axis lines on all four sides)
-PLOT_BOX = dict(showline=True, mirror=True, linecolor="black", linewidth=1)
+# outline of the boxes (plots, panels, pop-ups); dark mode greys it via .theia-box
+BOX_BORDER = "1px solid black"
 
 
 # ===========================================================================
@@ -1064,7 +1064,7 @@ folder_browser = html.Div([
                         style={"backgroundColor": ACCENT, "color": "white", "fontWeight": "600"}),
         ], style={"display": "flex", "justifyContent": "flex-end", "marginTop": "10px"}),
     ], className="theia-box",
-       style={"border": "1px solid #dddddd", "borderRadius": "6px", "background": "white", "width": "640px", "maxWidth": "92vw",
+       style={"border": BOX_BORDER, "borderRadius": "6px", "background": "white", "width": "640px", "maxWidth": "92vw",
               "padding": "14px 16px", "boxShadow": "0 8px 30px rgba(0,0,0,0.3)"}),
     dcc.Store(id="fb-path", data=None),
     dcc.Store(id="fb-target", data=None),
@@ -1165,8 +1165,11 @@ REJECT_BTN = {**ACCEPT_BTN, "backgroundColor": "#c62828", "marginRight": "8px"}
 UNSURE_BTN = {**ACCEPT_BTN, "backgroundColor": ACCENT, "marginRight": "8px"}
 CONFIRM_BAR = {"display": "flex", "alignItems": "center", "flexWrap": "wrap", "margin": "8px 0 2px 0"}
 # Outline used around the plots in the Results tab
-BOX_STYLE = {"border": "1px solid #dddddd", "borderRadius": "6px", "padding": "10px",
+BOX_STYLE = {"border": BOX_BORDER, "borderRadius": "6px", "padding": "10px",
              "background": "#ffffff"}
+# box round the residuals plot on the Further output page
+RESID_BOX_SHOWN = {**BOX_STYLE, "padding": "8px 10px", "marginTop": "10px", "display": "block"}
+RESID_BOX_HIDDEN = {**RESID_BOX_SHOWN, "display": "none"}
 TABLE_PAGE_SIZE = 15    # rows per page of the hits table
 TABLE_ROW_PX = 30       # DataTable row height
 FILTER_HEAD_PX = 120    # height of the filter block above the hits table
@@ -1448,7 +1451,7 @@ CALIB_TH = {"fontSize": "11px", "fontWeight": "700", "color": "#666", "textTrans
 CALIB_TD = {"fontSize": "13px", "padding": "5px 10px", "verticalAlign": "middle",
             "border": CALIB_BORDER}
 SUGG_BOX_STYLE = {"marginLeft": "0", "marginTop": "4px", "width": "620px", "maxWidth": "90%",
-                  "border": "1px solid #dddddd", "borderRadius": "6px", "background": "white",
+                  "border": BOX_BORDER, "borderRadius": "6px", "background": "white",
                   "padding": "4px 0", "boxShadow": "0 4px 12px rgba(0,0,0,0.12)"}
 
 
@@ -1568,7 +1571,7 @@ info_modal = html.Div([
                   "marginBottom": "8px"}),
         html.Div(id="info-body", style={"fontSize": "13px"}),
     ], className="theia-box",
-       style={"border": "1px solid #dddddd", "borderRadius": "6px", "background": "white",
+       style={"border": BOX_BORDER, "borderRadius": "6px", "background": "white",
               "width": "620px", "maxWidth": "92vw", "padding": "14px 16px",
               "boxShadow": "0 8px 30px rgba(0,0,0,0.3)"}),
 ], id="info-modal", n_clicks=0,
@@ -1652,7 +1655,7 @@ pid_modal = html.Div([
                                "minWidth": "80px"}),
         ], style={"display": "flex", "alignItems": "center", "marginTop": "6px"}),
     ], className="theia-box",
-       style={"border": "1px solid #dddddd", "borderRadius": "6px", "background": "white",
+       style={"border": BOX_BORDER, "borderRadius": "6px", "background": "white",
               "width": "640px", "maxWidth": "94vw", "maxHeight": "92vh", "overflowY": "auto",
               "padding": "14px 16px", "boxShadow": "0 8px 30px rgba(0,0,0,0.3)"}),
 ], id="pid-modal",
@@ -1678,7 +1681,7 @@ iso_modal = html.Div([
                                "minWidth": "80px"}),
         ], style={"display": "flex", "justifyContent": "flex-end", "marginTop": "10px"}),
     ], className="theia-box",
-       style={"border": "1px solid #dddddd", "borderRadius": "6px", "background": "white",
+       style={"border": BOX_BORDER, "borderRadius": "6px", "background": "white",
               "width": "720px", "maxWidth": "94vw", "maxHeight": "92vh", "overflowY": "auto",
               "padding": "14px 16px", "boxShadow": "0 8px 30px rgba(0,0,0,0.3)"}),
 ], id="iso-modal",
@@ -1725,7 +1728,7 @@ srch_modal = html.Div([
         html.Div(id="srch-list", style={"maxHeight": "55vh", "overflowY": "auto",
                                         "border": "1px solid #dddddd", "borderRadius": "4px"}),
     ], className="theia-box",
-       style={"border": "1px solid #dddddd", "borderRadius": "6px", "background": "white",
+       style={"border": BOX_BORDER, "borderRadius": "6px", "background": "white",
               "width": "640px", "maxWidth": "94vw", "padding": "14px 16px",
               "boxShadow": "0 8px 30px rgba(0,0,0,0.3)"}),
 ], id="srch-modal", style=SRCH_MODAL_HIDDEN)
@@ -2061,15 +2064,21 @@ align_fit_tab = html.Div([
         html.Div(id="_fit-mode-hook", style={"display": "none"}),
         html.Div(id="_sum-sims-hook", style={"display": "none"}),
 
-        dcc.Graph(id="sum-graph", figure=empty_fig("Load files and click “Sum spectra”"),
-                  # doubleClick off: a touchpad double-tap (to drag/pan)
-                  # otherwise triggers Plotly's reset/autoscale, which
-                  # redraws all ~131k points and stalls the page.
-                  config={"scrollZoom": True, "displaylogo": False, "doubleClick": False},
-                  style={"height": "560px"}),
-        dcc.Graph(id="fit-resid", figure=empty_fig(),
-                  config={"scrollZoom": True, "displaylogo": False, "doubleClick": False},
-                  style={"height": "200px", "display": "none"}),
+        # each plot in its own box, as in the Scan Results tab
+        html.Div(
+            dcc.Graph(id="sum-graph", figure=empty_fig("Load files and click “Sum spectra”"),
+                      # doubleClick off: a touchpad double-tap (to drag/pan)
+                      # otherwise triggers Plotly's reset/autoscale, which
+                      # redraws all ~131k points and stalls the page.
+                      config={"scrollZoom": True, "displaylogo": False, "doubleClick": False},
+                      style={"height": "560px"}),
+            className="theia-box", style={**BOX_STYLE, "padding": "8px 10px"}),
+        # residuals box: shown by show_residuals() once there is a fit
+        html.Div(
+            dcc.Graph(id="fit-resid", figure=empty_fig(),
+                      config={"scrollZoom": True, "displaylogo": False, "doubleClick": False},
+                      style={"height": "200px"}),
+            id="fit-resid-box", className="theia-box", style=RESID_BOX_HIDDEN),
     ], id="further-content", className="theia-box", style={**BOX_STYLE, "padding": "8px 10px"}),
 ], id="further-page-align", style={"padding": "14px 18px", "overflowY": "auto",
                                    "height": "calc(100vh - 82px)"})
@@ -4278,8 +4287,6 @@ def show_sum(_, _load, _req, restore, files, align, ion_key, unsure, show_sims, 
                       margin=dict(l=60, r=20, t=50, b=40), showlegend=False,
                       # keeps the user's zoom while the fit traces are patched
                       uirevision=key)
-    fig.update_xaxes(**PLOT_BOX)
-    fig.update_yaxes(**PLOT_BOX)
     # annotations of the plot itself; the energy labels are added after these
     _SUM_ANNOTATIONS[key] = [a.to_plotly_json() for a in fig.layout.annotations]
     _SUM_SHAPES[key] = [sh.to_plotly_json() for sh in fig.layout.shapes]
@@ -5291,12 +5298,12 @@ def update_fit(click, dragged, run, _ts, active, shape, bg, b0, b1, bg_fix, regi
 
 @app.callback(
     Output("fit-resid", "figure"),
-    Output("fit-resid", "style"),
+    Output("fit-resid-box", "style"),
     Input("fit-state", "data"),
     State("sum-key", "data"),
 )
 def show_residuals(state, key):
-    hidden = {"height": "200px", "display": "none"}
+    hidden = RESID_BOX_HIDDEN
     with _SUM_CACHE_LOCK:
         cached = _SUM_CACHE.get(key)
     if cached is None or not state or not state.get("peaks") or not state.get("region"):
@@ -5318,9 +5325,7 @@ def show_residuals(state, key):
                                  font=dict(size=13)),
                       xaxis_title="Frequency (Hz)", yaxis_title="data − fit", dragmode="pan",
                       showlegend=False, font=dict(size=12), uirevision=str(state.get("region")))
-    fig.update_xaxes(**PLOT_BOX)
-    fig.update_yaxes(**PLOT_BOX)
-    return fig, {"height": "200px", "display": "block"}
+    return fig, RESID_BOX_SHOWN
 
 
 # Snippet: show/hide the half-life-excluded lines in the browser, so the
