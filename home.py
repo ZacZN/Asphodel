@@ -422,7 +422,7 @@ def tool_card(key):
     buttons = {
         "theia": [act("start", "theia", "Open", "btn primary small"),
                   act("stop", "theia", "Stop")],
-        "spectrogram": [act("start", "spectrogram", "Open…", "btn primary small",
+        "spectrogram": [act("start", "spectrogram", "Open", "btn primary small",
                             title="Reopens the last session, or the file chooser"),
                         act("stop", "spectrogram", "Stop all")],
         "levelschemer": [act("start", "levelschemer", "Open", "btn primary small",
