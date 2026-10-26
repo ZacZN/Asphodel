@@ -2412,7 +2412,9 @@ def v_build_figure(file_path, spectrum_name, ref_name, ref_frequency, ref_harmon
         # (the title is the heading of the plot's box, see viewer_tab)
         fig.update_layout(xaxis_title="Frequency (Hz)", yaxis_title="Schottky Power (a.u.)",
                           hovermode="x", dragmode="pan", template="plotly_white",
-                          font=dict(size=18), margin=dict(l=60, r=20, t=20, b=50),
+                          # top margin: room for the plot controls (mode bar)
+                          # above the legend box, so they don't overlap
+                          font=dict(size=18), margin=dict(l=60, r=20, t=50, b=50),
                           # keep the zoom when toggling harmonics or changing
                           # settings; a new spectrum starts unzoomed
                           uirevision=f"{file_path}|{spectrum_name}")
