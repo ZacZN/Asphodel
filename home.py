@@ -406,6 +406,12 @@ def section(title, *children, extra=None):
     return html.Section([html.H2([title, extra] if extra else title), *children])
 
 
+def fold_section(title, *children):
+    """A section whose heading opens/closes it; closed when the page loads."""
+    return html.Section(html.Details([html.Summary(title), *children],
+                                     open=False, className="fold main-fold"))
+
+
 def _status_children(on, text):
     return [html.Span(className="dot on" if on else "dot"), html.Span(text)]
 
@@ -512,7 +518,7 @@ def data_section():
             btns = [act("viewer_file", r["path"], "Viewer")]
         rows.append([html.Span(r["name"], className="mono"), r["kind"], _size(r["size"]),
                      r["mtime"], html.Span(btns)])
-    return section("Data files",
+    return fold_section("Data files",
                    html.Div(paths.experiment_dir(), className="note mono"),
                    table(["File", "Type", "Size", "Modified", "Open with"], rows))
 
@@ -558,7 +564,7 @@ def outputs_section():
                     [[html.Span(os.path.basename(f), className="mono"), _mtime(f),
                       act("open_file", f, "Open")] for f in figs]) if figs else \
         html.P("No figures yet.", className="note")
-    return section("Outputs", dcc.Tabs([
+    return fold_section("Outputs", dcc.Tabs([
         dcc.Tab(label=f"Scan runs ({len(runs)})", children=[scans,
                 html.Div(act("start", "theia", "Open Theia (Scan Results)"), className="below")]),
         dcc.Tab(label=f"Confirmed IDs ({len(conf)})", children=[confirmed]),
@@ -755,6 +761,8 @@ details.fold>summary::-webkit-details-marker{{display:none}}
 details.fold>summary::before{{content:"\\25B8";display:inline-block;width:12px;color:var(--accent);transition:transform .15s}}
 details.fold[open]>summary::before{{transform:rotate(90deg)}}
 details.fold>summary:hover{{color:var(--accent)}}
+details.main-fold{{margin:0}}
+details.main-fold>summary{{font-size:15px;text-transform:none;letter-spacing:0;color:#222;margin:0 0 10px;padding-bottom:5px;border-bottom:1px solid var(--line)}}
 .src{{background:#fff;border:1px solid var(--line);border-radius:5px;padding:7px 9px;margin-bottom:6px;font-size:12px}}
 .src b{{display:block;font-size:13px}} .src code{{color:var(--muted);font-size:11px;word-break:break-all;display:block}}
 .kv{{display:grid;grid-template-columns:auto 1fr;gap:4px 8px;font-size:12px;align-items:center}}
