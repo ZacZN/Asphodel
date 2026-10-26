@@ -2389,10 +2389,10 @@ def v_build_figure(file_path, spectrum_name, ref_name, ref_frequency, ref_harmon
                                bgcolor="rgba(255,255,255,0.88)", bordercolor=HIGHLIGHT_COLOR,
                                borderwidth=1, borderpad=3, align="center")
 
-        fig.update_layout(title="Calculated Frequencies overlayed with data",
-                          xaxis_title="Frequency (Hz)", yaxis_title="Schottky Power (a.u.)",
+        # (the title is the heading of the plot's box, see viewer_tab)
+        fig.update_layout(xaxis_title="Frequency (Hz)", yaxis_title="Schottky Power (a.u.)",
                           hovermode="x", dragmode="pan", template="plotly_white",
-                          font=dict(size=18), margin=dict(l=60, r=20, t=50, b=50))
+                          font=dict(size=18), margin=dict(l=60, r=20, t=20, b=50))
         return fig, ""
     except Exception as exc:
         fig = go.Figure()
@@ -2506,9 +2506,17 @@ viewer_sidebar = html.Div([
 viewer_tab = html.Div([
     viewer_sidebar,
     html.Div([
-        dcc.Graph(id="viewer-graph", style={"height": "calc(100vh - 42px)"},
-                  config={"scrollZoom": True, "displayModeBar": True, "displaylogo": False}),
-    ], style={"flex": "1", "minWidth": "0"}),
+        # plot in a box with its title as the heading, as in the Scan Results tab
+        html.Div([
+            html.H6("Calculated Frequencies overlayed with data",
+                    style={"fontWeight": "600", "marginBottom": "6px"}),
+            dcc.Graph(id="viewer-graph", style={"flex": "1 1 auto", "minHeight": "0"},
+                      responsive=True,
+                      config={"scrollZoom": True, "displayModeBar": True, "displaylogo": False}),
+        ], className="theia-box",
+           style={**BOX_STYLE, "height": "100%", "display": "flex", "flexDirection": "column"}),
+    ], style={"flex": "1", "minWidth": "0", "height": "calc(100vh - 42px)",
+              "padding": "10px 14px"}),
     html.Div(id="_viewer-saved", style={"display": "none"}),
 ], style={"display": "flex"})
 
