@@ -2621,6 +2621,15 @@ _FIT_CSS = """
 #sum-graph.fit-grab-region .nsewdrag { cursor: col-resize !important; }
 """
 
+_INPUT_CSS = """
+/* dcc.Input is a box (.dash-input-container, which gets our className/style)
+   holding the real <input>. Make the <input> fill the box; otherwise some
+   browsers keep it at its default ~20 characters and long text such as a
+   folder path is cut off in the middle of the box. */
+.dash-input-container { display: flex; align-items: center; }
+.dash-input-container > input.dash-input-element { flex: 1 1 auto; width: 100%; min-width: 0; }
+"""
+
 _HARM_CSS = """
 /* Viewer harmonic toggles: checklist labels drawn as on/off buttons */
 .harm-toggle label { display: block; width: 90px; border: 1px solid #6c757d; border-radius: 4px;
@@ -2696,7 +2705,7 @@ body.dark .current-page-shadow { color: transparent !important; }
 body.dark .js-plotly-plot { filter: invert(1) hue-rotate(180deg) contrast(1.15); }
 """
 app.index_string = app.index_string.replace(
-    "{%css%}", "{%css%}\n<style>" + _TABLE_CSS + _FB_CSS + _CALIB_CSS + _FIT_CSS + _HARM_CSS + _DARK_CSS + "</style>")
+    "{%css%}", "{%css%}\n<style>" + _TABLE_CSS + _FB_CSS + _CALIB_CSS + _FIT_CSS + _INPUT_CSS + _HARM_CSS + _DARK_CSS + "</style>")
 # close this tab when Theia stops (Quit / Stop on the home page, Quit here, crash)
 app.index_string = app.index_string.replace(
     "{%scripts%}", "{%scripts%}\n<script>" + tabwatch.watch_js("Theia") + "</script>")
