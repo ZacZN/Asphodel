@@ -6309,8 +6309,10 @@ def fit_and_plot_iso(_ts, *args):
 ISO_LABEL_JS = """
 function(fig) {
     var ANG = [45, 135, -45, -135, 90, -90, 0, 180,
-               67.5, 112.5, -67.5, -112.5, 22.5, 157.5, -22.5, -157.5];
-    var RAD = [26, 40, 58, 80, 105, 135];
+               67.5, 112.5, -67.5, -112.5, 22.5, 157.5, -22.5, -157.5,
+               33.75, 56.25, 123.75, 146.25, -33.75, -56.25, -123.75, -146.25];
+    var RAD = [26, 40, 58, 80, 105, 135, 170, 210];
+    var FONT_PX = 16;
     function ov(a, b) {
         var w = Math.min(a[2], b[2]) - Math.max(a[0], b[0]);
         var h = Math.min(a[3], b[3]) - Math.max(a[1], b[1]);
@@ -6323,7 +6325,22 @@ function(fig) {
         }
         return false;
     }
-    function place(pts, sizes, obst, rect) {
+    // 2-px steps of the arrow (from 8 px off the point to the label box) on an error bar
+    function leaderInBars(px, py, cx, cy, box, bars) {
+        var d = Math.hypot(cx - px, cy - py);
+        if (d <= 8 || !bars.length) return 0;
+        var ux = (cx - px) / d, uy = (cy - py) / d, hits = 0;
+        for (var s = 8; s < d; s += 2) {
+            var x = px + s * ux, y = py + s * uy;
+            if (x >= box[0] && x <= box[2] && y >= box[1] && y <= box[3]) break;
+            for (var q = 0; q < bars.length; q++) {
+                var b = bars[q];
+                if (x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3]) { hits++; break; }
+            }
+        }
+        return hits;
+    }
+    function place(pts, sizes, obst, rect, bars) {
         var n = pts.length, crowd = [], order = [], placed = [], offs = new Array(n);
         for (var i = 0; i < n; i++) {
             var c = 0;
@@ -6347,6 +6364,7 @@ function(fig) {
                     }
                     for (var o = 0; o < obst.length; o++)
                         cost += (obst[o].length > 4 ? obst[o][4] : 4) * ov(box, obst[o]);
+                    cost += 150 * leaderInBars(px, py, cx, cy, box, bars);
                     if (!best || cost < best[0]) best = [cost, dx, dy, box];
                 });
             });
@@ -6364,8 +6382,8 @@ function(fig) {
         var xa = L.xaxis, ya = L.yaxis;
         var rect = [xa._offset, ya._offset, xa._offset + xa._length, ya._offset + ya._length];
         var gr = gd.getBoundingClientRect();
-        var font = '11px "Open Sans", verdana, arial, sans-serif';
-        var pts = [], sizes = [], obst = [], lab = [];
+        var font = FONT_PX + 'px "Open Sans", verdana, arial, sans-serif';
+        var pts = [], sizes = [], obst = [], lab = [], bars = [];
         gd.data.forEach(function(tr, ti) {
             var full = gd._fullData[ti];
             if (!full || full.visible !== true) return;
@@ -6388,11 +6406,12 @@ function(fig) {
                 if (isFinite(e) && e > 0) {
                     var y1 = ya.l2p(Y + e) + ya._offset, y2 = ya.l2p(Y - e) + ya._offset;
                     obst.push([px - 4, Math.min(y1, y2), px + 4, Math.max(y1, y2)]);
+                    bars.push([px - 3, Math.min(y1, y2), px + 3, Math.max(y1, y2)]);
                 }
                 if (px < rect[0] || px > rect[2] || py < rect[1] || py > rect[3]) continue;
                 var t = String(full.text[k]);
                 pts.push([px, py]);
-                sizes.push([textW(t, font) + 2, 15]);
+                sizes.push([textW(t, font) + 2, Math.round(FONT_PX * 1.35)]);
                 lab.push({x: X, y: Y, text: t, out: tr.meta === 'iso-out'});
             }
         });
@@ -6406,13 +6425,13 @@ function(fig) {
             if (r.width && r.height)
                 obst.push([r.left - gr.left, r.top - gr.top, r.right - gr.left, r.bottom - gr.top, 20]);
         });
-        var offs = place(pts, sizes, obst, rect);
+        var offs = place(pts, sizes, obst, rect, bars);
         var keep = (gd.layout.annotations || []).filter(function(a) { return a.name !== 'isolab'; });
         var anns = keep.concat(lab.map(function(l, i) {
             return {x: l.x, y: l.y, xref: 'x', yref: 'y', text: l.text, name: 'isolab',
                     showarrow: true, ax: offs[i][0], ay: offs[i][1], arrowhead: 2,
                     arrowsize: 0.8, arrowwidth: 1, arrowcolor: '#888888', standoff: 5,
-                    font: {size: 11, color: l.out ? '#aaaaaa' : '#222222'},
+                    font: {size: FONT_PX, color: l.out ? '#aaaaaa' : '#222222'},
                     bgcolor: 'rgba(255,255,255,0.6)', captureevents: false};
         }));
         gd._isoLabelBusy = true;
@@ -6561,8 +6580,11 @@ def save_iso_figure(_n, *args):
 # crossing a placed label, and the distance.  Crowded points go first.
 # The same algorithm runs in the browser (ISO_LABEL_JS) after every zoom/pan.
 LABEL_ANGLES = [45, 135, -45, -135, 90, -90, 0, 180,
-                67.5, 112.5, -67.5, -112.5, 22.5, 157.5, -22.5, -157.5]
-LABEL_RADII = [26, 40, 58, 80, 105, 135]
+                67.5, 112.5, -67.5, -112.5, 22.5, 157.5, -22.5, -157.5,
+                33.75, 56.25, 123.75, 146.25, -33.75, -56.25, -123.75, -146.25]
+LABEL_RADII = [26, 40, 58, 80, 105, 135, 170, 210]
+ISO_LABEL_PT = 16          # label text size: saved figure (pt) and page (px)
+ISO_ARROW_BAR_COST = 150   # per 2 px of arrow lying on an error bar (same in ISO_LABEL_JS)
 
 
 def _overlap(a, b):
@@ -6581,11 +6603,32 @@ def _seg_hits(x0, y0, x1, y1, r):
     return False
 
 
-def place_labels(pts, sizes, obstacles, rect, y_down=True):
+def _leader_in_bars(px, py, cx, cy, box, bars):
+    """Number of 2-px steps of the arrow (point → label, from 8 px off the
+    point to where it enters the label box) that lie on an error bar."""
+    d = float(np.hypot(cx - px, cy - py))
+    if d <= 8 or not bars:
+        return 0
+    ux, uy = (cx - px) / d, (cy - py) / d
+    hits, s = 0, 8.0
+    while s < d:
+        x, y = px + s * ux, py + s * uy
+        if box[0] <= x <= box[2] and box[1] <= y <= box[3]:
+            break                                  # arrow ends at the label box
+        for b in bars:
+            if b[0] <= x <= b[2] and b[1] <= y <= b[3]:
+                hits += 1
+                break
+        s += 2.0
+    return hits
+
+
+def place_labels(pts, sizes, obstacles, rect, y_down=True, bars=None):
     """Pixel offsets (dx, dy) of each label centre from its point.
     pts: [(x, y)], sizes: [(w, h)], obstacles: [(x0, y0, x1, y1)],
     rect: plot area (x0, y0, x1, y1).  y_down: screen y grows downwards.
-    An obstacle may carry a 5th value, its cost weight (default 4; labels 20)."""
+    An obstacle may carry a 5th value, its cost weight (default 4; labels 20).
+    bars: error-bar rectangles the arrows must not cross or run along."""
     n = len(pts)
     crowd = [sum(1 for q in pts if abs(q[0] - p[0]) < 80 and abs(q[1] - p[1]) < 40)
              for p in pts]
@@ -6611,6 +6654,7 @@ def place_labels(pts, sizes, obstacles, rect, y_down=True):
                         cost += 400.0
                 for o in obstacles:
                     cost += (o[4] if len(o) > 4 else 4.0) * _overlap(box, o)
+                cost += ISO_ARROW_BAR_COST * _leader_in_bars(px, py, cx, cy, box, bars)
                 if best is None or cost < best[0]:
                     best = (cost, dx, dy, box)
         placed.append(best[3])
@@ -6629,11 +6673,11 @@ def _mpl_point_labels(fig, ax, used, out, boxes):
         return
     bb = ax.get_window_extent(rend)
     rect = (bb.x0, bb.y0, bb.x1, bb.y1)
-    pts, sizes, obst = [], [], []
+    pts, sizes, obst, bars = [], [], [], []
     for ion, t, sg, e, _ in rows:
         x, y = ax.transData.transform((t, sg))
         pts.append((x, y))
-        tt = ax.text(0, 0, ion, fontsize=11)
+        tt = ax.text(0, 0, ion, fontsize=ISO_LABEL_PT)
         ext = tt.get_window_extent(rend)
         tt.remove()
         sizes.append((ext.width, ext.height))
@@ -6642,6 +6686,7 @@ def _mpl_point_labels(fig, ax, used, out, boxes):
             _, ylo = ax.transData.transform((t, sg - e))
             _, yhi = ax.transData.transform((t, sg + e))
             obst.append((x - 4, ylo, x + 4, yhi))
+            bars.append((x - 3, min(ylo, yhi), x + 3, max(ylo, yhi)))
     for line in ax.get_lines():                      # the curve
         xy = ax.transData.transform(np.column_stack(line.get_data()))
         for k in range(0, len(xy), max(1, len(xy) // 150)):
@@ -6650,11 +6695,11 @@ def _mpl_point_labels(fig, ax, used, out, boxes):
         if b is not None:
             e = b.get_window_extent(rend)
             obst.append((e.x0, e.y0, e.x1, e.y1, 20.0))      # never under these
-    offs = place_labels(pts, sizes, obst, rect, y_down=False)
+    offs = place_labels(pts, sizes, obst, rect, y_down=False, bars=bars)
     k = 72.0 / fig.dpi                                 # pixels -> points
     for (ion, t, sg, _, col), (dx, dy) in zip(rows, offs):
         ax.annotate(ion, xy=(t, sg), xytext=(dx * k, dy * k), textcoords="offset points",
-                    ha="center", va="center", fontsize=11, color=col,
+                    ha="center", va="center", fontsize=ISO_LABEL_PT, color=col,
                     arrowprops=dict(arrowstyle="-|>", color="#888888", lw=0.8,
                                     shrinkA=1, shrinkB=4, mutation_scale=8))
 
