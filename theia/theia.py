@@ -6268,8 +6268,26 @@ function(fig) {
         if (!gd) return;
         if (!gd._isoLabelHook) {
             gd._isoLabelHook = true;
-            var timer = null;
-            var soon = function() { clearTimeout(timer); timer = setTimeout(function() { layoutLabels(gd); }, 120); };
+            // Wait until the view is still: a scroll-wheel zoom is a preview
+            // that Plotly commits later, and redrawing the labels in between
+            // throws the preview away (the plot pulses in and out).  So
+            // re-place only 0.4 s after the last wheel step / view change,
+            // and never while a mouse button is held (drag-zoom / pan).
+            var timer = null, lastWheel = 0, mouseDown = false, QUIET = 400;
+            var soon = function() {
+                clearTimeout(timer);
+                timer = setTimeout(function run() {
+                    if (mouseDown || Date.now() - lastWheel < QUIET) {
+                        timer = setTimeout(run, QUIET);
+                        return;
+                    }
+                    layoutLabels(gd);
+                }, QUIET);
+            };
+            gd.addEventListener('wheel', function() { lastWheel = Date.now(); soon(); },
+                                {capture: true, passive: true});
+            gd.addEventListener('mousedown', function() { mouseDown = true; }, true);
+            window.addEventListener('mouseup', function() { if (mouseDown) { mouseDown = false; soon(); } });
             gd.on('plotly_relayout', function(ev) {
                 if (gd._isoLabelBusy) return;
                 var keys = Object.keys(ev || {});
