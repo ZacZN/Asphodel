@@ -2208,11 +2208,12 @@ isochronicity_tab = html.Div([
                   style={"height": "750px"}),
         dcc.Graph(id="iso-resid", figure=empty_fig(),
                   config={"scrollZoom": True, "displaylogo": False},
-                  style={"height": "220px"}),
+                  style={"height": "340px"}),
     ], className="theia-box", style={**BOX_STYLE, "padding": "8px 10px", "marginTop": "10px"}),
     dcc.Store(id="iso-version", data=0),
     dcc.Store(id="iso-points-ts", data=None),
     html.Div(id="_iso-label-hook", style={"display": "none"}),
+    html.Div(id="_iso-resid-label-hook", style={"display": "none"}),
     dcc.Store(id="iso-settings-init", data=0),
 ], id="further-page-iso", style={"padding": "14px 18px", "overflowY": "auto",
                                  "height": "calc(100vh - 82px)", "display": "none"})
@@ -6161,11 +6162,18 @@ def _iso_param_lines(res, extras=True):
     return lines
 
 
+def _iso_pull_values(df, res, st, ecol):
+    """(σ(T) − fit) / error for the rows of df (NaN where there is no error)."""
+    fit = iso_sigma_t(df["T_ns"].to_numpy(), *res["popt"], st["circumference_m"], st["c_m_s"])
+    err = df[ecol].to_numpy(dtype=float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(err > 0, (df["sigma_T_ps"].to_numpy() - fit) / err, np.nan)
+
+
 def _iso_pulls(used, res, st, ecol):
     """(σ(T) − fit) / error for the fitted points, and the 'within ±1σ' text
     (as in the decay-fit residual panel)."""
-    fit = iso_sigma_t(used["T_ns"].to_numpy(), *res["popt"], st["circumference_m"], st["c_m_s"])
-    pull = (used["sigma_T_ps"].to_numpy() - fit) / used[ecol].to_numpy()
+    pull = _iso_pull_values(used, res, st, ecol)
     n = len(pull)
     n_in = int(np.sum(np.abs(pull) <= 1.0))
     pct = 100.0 * n_in / n if n else float("nan")
@@ -6293,24 +6301,40 @@ def fit_and_plot_iso(_ts, *args):
 
     # residuals in units of each point's error, as in the decay-fit panel:
     # grey ±1σ band, red zero line, black dots, 'within ±1σ' count
+    # styled like the main plot: × markers, zero line in the curve's colour,
+    # left-out points as grey circles, boxed ion labels (ISO_LABEL_JS)
     rfig = go.Figure()
     if res:
         pull, pull_txt = _iso_pulls(used, res, st, ecol)
         rfig.add_hrect(y0=-1, y1=1, fillcolor="#d9d9d9", opacity=1, line_width=0, layer="below")
-        rfig.add_hline(y=0, line=dict(color="#dd4444", width=1.5))
+        xr = _iso_curve_x(vals)
+        rfig.add_trace(go.Scatter(x=[xr[0], xr[-1]], y=[0, 0], mode="lines", meta="iso-curve",
+                                  line=dict(color=ACCENT, width=2), hoverinfo="skip"))
         rfig.add_trace(go.Scatter(
-            x=used["T_ns"], y=pull, mode="markers", text=used["ion"],
-            marker=dict(symbol="circle", size=6, color="black"),
+            x=used["T_ns"], y=pull, mode="markers", text=used["ion"], customdata=used["id"],
+            meta="iso-pts", marker=dict(symbol="x", size=9, color="black"),
             hovertemplate="%{text}<br>T = %{x:.4f} ns<br>(σ(T) − fit)/err = %{y:.2f}"
-                          "<extra></extra>"))
+                          "<br>click: leave out<extra></extra>"))
+        if len(out):
+            opull = _iso_pull_values(out, res, st, ecol)
+            ok = np.isfinite(opull)
+            if ok.any():
+                o2 = out[ok]
+                rfig.add_trace(go.Scatter(
+                    x=o2["T_ns"], y=opull[ok], mode="markers", text=o2["ion"],
+                    customdata=o2["id"], meta="iso-out",
+                    marker=dict(symbol="circle-open", size=9, color="#aaa"),
+                    hovertemplate="%{text} (left out)<br>T = %{x:.4f} ns<br>"
+                                  "(σ(T) − fit)/err = %{y:.2f}<br>click: put back<extra></extra>"))
         rfig.add_annotation(xref="paper", yref="paper", x=0.995, y=0.97, xanchor="right",
                             yanchor="top", showarrow=False, text=pull_txt,
                             bgcolor="rgba(255,255,255,0.85)", bordercolor="#b3b3b3",
                             borderwidth=1, borderpad=4, font=dict(size=13))
-    rfig.update_layout(template="plotly_white", margin=dict(l=70, r=20, t=30, b=45),
+    rfig.update_layout(template="plotly_white", margin=dict(l=70, r=20, t=30, b=50),
                        title=dict(text="Residuals", font=dict(size=13)),
                        xaxis_title="Revolution time T (ns)", yaxis_title="(σ(T) − fit)/σ",
-                       showlegend=False, font=dict(size=12), uirevision="iso")
+                       showlegend=False, font=dict(size=13), uirevision="iso",
+                       clickmode="event")
 
     parts = []
     if res:
@@ -6572,7 +6596,7 @@ function(fig) {
     }
 
     setTimeout(function() {
-        var gd = document.querySelector('#iso-graph .js-plotly-plot');
+        var gd = document.querySelector('#__GRAPH__ .js-plotly-plot');
         if (!gd) return;
         if (!gd._isoLabelHook) {
             gd._isoLabelHook = true;
@@ -6613,9 +6637,16 @@ function(fig) {
 """
 
 app.clientside_callback(
-    ISO_LABEL_JS,
+    ISO_LABEL_JS.replace("__GRAPH__", "iso-graph"),
     Output("_iso-label-hook", "children"),
     Input("iso-graph", "figure"),
+    prevent_initial_call=True,
+)
+# the same labels on the residual plot
+app.clientside_callback(
+    ISO_LABEL_JS.replace("__GRAPH__", "iso-resid"),
+    Output("_iso-resid-label-hook", "children"),
+    Input("iso-resid", "figure"),
     prevent_initial_call=True,
 )
 
@@ -6626,10 +6657,11 @@ app.clientside_callback(
     Output("iso-curve-table", "selected_cells"),
     Input("iso-curve-table", "active_cell"),
     Input("iso-graph", "clickData"),
+    Input("iso-resid", "clickData"),
     State("iso-version", "data"),
     prevent_initial_call=True,
 )
-def toggle_iso_point(active, click, version):
+def toggle_iso_point(active, click, rclick, version):
     """'in fit' cell or a click on a point: leave the point out / put it back."""
     trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
     pid = None
@@ -6639,6 +6671,8 @@ def toggle_iso_point(active, click, version):
         pid = active.get("row_id")
     elif trig.startswith("iso-graph") and click and click.get("points"):
         pid = click["points"][0].get("customdata")
+    elif trig.startswith("iso-resid") and rclick and rclick.get("points"):
+        pid = rclick["points"][0].get("customdata")
     if not pid:
         raise PreventUpdate
     ion, h = pid.rsplit("|", 1)
@@ -6937,13 +6971,16 @@ def place_labels(pts, sizes, obstacles, rect, y_down=True, bars=None, seed=0):
             for i in range(n)]
 
 
-def _mpl_point_labels(fig, ax, used, out, boxes):
-    """Ion labels with arrows, placed by place_labels (display pixels, y up)."""
+def _mpl_point_labels(fig, ax, used, out, boxes, ycol="sigma_T_ps", errors=True):
+    """Ion labels with arrows, placed by place_labels (display pixels, y up).
+    ycol: column with the plotted y values; errors: avoid the error bars."""
     fig.canvas.draw()
     rend = fig.canvas.get_renderer()
     ecol = "d_sigma_T_total_ps" if "d_sigma_T_total_ps" in used else "d_sigma_T_ps"
-    rows = [(r.ion, r.T_ns, r.sigma_T_ps, getattr(r, ecol), "black") for r in used.itertuples()] + \
-           [(r.ion, r.T_ns, r.sigma_T_ps, r.d_sigma_T_ps, "#999999") for r in out.itertuples()]
+    rows = [(r["ion"], r["T_ns"], r[ycol], r[ecol] if errors else np.nan, "black")
+            for r in used.to_dict("records")] + \
+           [(r["ion"], r["T_ns"], r[ycol], r["d_sigma_T_ps"] if errors else np.nan, "#999999")
+            for r in out.to_dict("records")]
     if not rows:
         return
     bb = ax.get_window_extent(rend)
@@ -6991,8 +7028,8 @@ def draw_iso_figure(vals, res, st):
     used = vals[vals["include"] & vals["fittable"]]
     out = vals[~(vals["include"] & vals["fittable"])]
     ecol = "d_sigma_T_total_ps" if "d_sigma_T_total_ps" in vals else "d_sigma_T_ps"
-    fig, (ax, axr) = plt.subplots(2, 1, figsize=(16, 17), sharex=True,
-                                  gridspec_kw={"height_ratios": [13, 4], "hspace": 0.06})
+    fig, (ax, axr) = plt.subplots(2, 1, figsize=(16, 19), sharex=True,
+                                  gridspec_kw={"height_ratios": [13, 6], "hspace": 0.06})
     ax.errorbar(used["T_ns"], used["sigma_T_ps"], yerr=used[ecol], fmt="none",
                 color="grey", capsize=4, zorder=2)
     ax.scatter(used["T_ns"], used["sigma_T_ps"], color="red", marker="x", s=50,
@@ -7008,14 +7045,24 @@ def draw_iso_figure(vals, res, st):
         ptext = ax.text(0.02, 0.97, "\n".join(_iso_param_lines(res, extras=False)),
                         transform=ax.transAxes,
                         fontsize=16, verticalalignment="top", bbox=props)
-        # residuals in units of each point's error (as in the decay-fit panel)
+        # residuals in units of each point's error (decay-fit panel), styled
+        # like the main plot: red ×, black zero line, grey left-out circles, labels
         pull, pull_txt = _iso_pulls(used, res, st, ecol)
         axr.axhspan(-1.0, 1.0, color="0.85", zorder=0)
-        axr.axhline(0, color="#dd4444", lw=1.5)
-        axr.plot(used["T_ns"], pull, "o", ms=4, color="black")
-        axr.text(0.995, 0.95, pull_txt, transform=axr.transAxes, ha="right", va="top",
-                 fontsize=13, bbox=dict(boxstyle="round,pad=0.25", facecolor="white",
-                                        edgecolor="0.7", alpha=0.85))
+        xr = _iso_curve_x(vals)
+        axr.plot([xr[0], xr[-1]], [0, 0], color="black")
+        axr.scatter(used["T_ns"], pull, color="red", marker="x", s=50, zorder=3)
+        r_used = used.assign(pull=pull)
+        r_out = out.iloc[0:0].assign(pull=[])
+        if len(out):
+            opull = _iso_pull_values(out, res, st, ecol)
+            ok = np.isfinite(opull)
+            r_out = out[ok].assign(pull=opull[ok])
+            axr.scatter(r_out["T_ns"], r_out["pull"], facecolors="none", edgecolors="#aaaaaa",
+                        s=50, zorder=2)
+        rtext = axr.text(0.995, 0.95, pull_txt, transform=axr.transAxes, ha="right", va="top",
+                         fontsize=13, bbox=dict(boxstyle="round,pad=0.25", facecolor="white",
+                                                edgecolor="0.7", alpha=0.85))
     else:
         ptext = None
     ax.set_ylabel(r"$\sigma_{T}$ (ps)", size=22)
@@ -7025,6 +7072,8 @@ def draw_iso_figure(vals, res, st):
     axr.tick_params(labelsize=16)
     leg = ax.legend(fontsize=16, loc="lower right")
     _mpl_point_labels(fig, ax, used, out, [ptext, leg])
+    if res:
+        _mpl_point_labels(fig, axr, r_used, r_out, [rtext], ycol="pull", errors=False)
     stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     base = os.path.join(paths.outputs("figures"), f"isocurve_{stamp}")
     files = [base + ".png", base + ".pdf"]
