@@ -1466,6 +1466,9 @@ INFO_TEXTS = {
         "summed_1d, or the file open in the Viewer via 'Use Viewer spectrum') is shown as it is, "
         "for fitting and the energy calculation.  Its simulated lines use the Viewer settings "
         "(no half-life cut), with the strongest peak as the reference.",
+        "Search ions…: type part of an ion name to list its simulated lines on the plotted "
+        "spectrum; click one to zoom to f_sim ± the width (kHz, default ±10).  h−1 / h+1 then "
+        "zoom to the same ion at the neighbouring harmonic.",
     ]),
     "fit": ("Peak fitting", [
         "Switch it on and click a peak to add it (the start values snap to the nearest maximum).",
@@ -1673,6 +1676,47 @@ ISO_MODAL_SHOWN = {"display": "flex", "position": "fixed", "inset": "0", "zIndex
 ISO_MODAL_HIDDEN = {**ISO_MODAL_SHOWN, "display": "none"}
 
 
+SRCH_MODAL_SHOWN = {**ISO_MODAL_SHOWN, "alignItems": "flex-start", "paddingTop": "8vh"}
+SRCH_MODAL_HIDDEN = {**SRCH_MODAL_SHOWN, "display": "none"}
+SRCH_GRID = {"display": "grid", "gridTemplateColumns": "1.4fr 0.8fr 1.4fr 1fr"}
+SRCH_DEFAULT_KHZ = 10.0
+
+# Search ions (as in the spectrogram): an ion's simulated lines on the plotted
+# spectrum; a click zooms the plot to f_sim ± width
+srch_modal = html.Div([
+    html.Div([
+        html.Div([
+            html.Span("Search ions", style={"fontWeight": "700", "fontSize": "15px"}),
+            html.Button("✕", id="srch-close", className="btn btn-outline-secondary btn-sm"),
+        ], style={"display": "flex", "justifyContent": "space-between", "alignItems": "center",
+                  "marginBottom": "8px"}),
+        html.Div([
+            html.Span("Ion", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
+            dcc.Input(id="srch-ion", type="text", debounce=False, value="",
+                      placeholder="e.g. 186Hf or m186Hf72+",
+                      className="form-control form-control-sm",
+                      style={"width": "220px", "marginRight": "12px"}),
+            html.Span("±", style={"marginRight": "4px"},
+                      title="Half-width of the window shown around the chosen line"),
+            dcc.Input(id="srch-width", type="number", min=0, step="any", debounce=True,
+                      value=SRCH_DEFAULT_KHZ, placeholder="10",
+                      className="form-control form-control-sm",
+                      style={"width": "80px", "marginRight": "4px"}),
+            html.Span("kHz", style={"marginRight": "12px", "fontSize": "13px"}),
+            html.Span(id="srch-status", style={"fontSize": "13px"}),
+        ], style={"display": "flex", "alignItems": "center", "marginBottom": "6px"}),
+        html.Small("Simulated lines across the whole plotted spectrum (current PID settings). "
+                   "Click one to zoom to ± the width above around it (default ±10 kHz).  Grey: "
+                   "below the half-life cut.", style={**HELP_STYLE, "marginBottom": "6px"}),
+        html.Div(id="srch-list", style={"maxHeight": "55vh", "overflowY": "auto",
+                                        "border": "1px solid #dddddd", "borderRadius": "4px"}),
+    ], className="theia-box",
+       style={"border": "1px solid #dddddd", "borderRadius": "6px", "background": "white",
+              "width": "640px", "maxWidth": "94vw", "padding": "14px 16px",
+              "boxShadow": "0 8px 30px rgba(0,0,0,0.3)"}),
+], id="srch-modal", style=SRCH_MODAL_HIDDEN)
+
+
 align_fit_tab = html.Div([
     html.H5("Aligning and fitting", style={"fontWeight": "700"}),
     # Data source: the sum of the spectra in the confirmation files, or one
@@ -1748,7 +1792,20 @@ align_fit_tab = html.Div([
                         style={"backgroundColor": ACCENT, "color": "white", "marginRight": "14px",
                                "display": "none"}),
             html.Button("PID Settings", id="btn-pid", className="btn btn-outline-secondary btn-sm",
-                        title="Settings used for the simulated ion lines"),
+                        title="Settings used for the simulated ion lines",
+                        style={"marginRight": "8px"}),
+            html.Button("Search ions…", id="btn-srch", className="btn btn-outline-secondary btn-sm",
+                        title="Find an ion's simulated lines and zoom to a window around one",
+                        style={"marginRight": "8px"}),
+            # h−1 / h+1 for the ion chosen in Search ions
+            html.Span([
+                html.Button("h−1", id="btn-harm-dn", className="btn btn-outline-secondary btn-sm",
+                            disabled=True),
+                html.Span(id="harm-cur", style={"fontSize": "13px", "fontWeight": "600",
+                                                "margin": "0 6px"}),
+                html.Button("h+1", id="btn-harm-up", className="btn btn-outline-secondary btn-sm",
+                            disabled=True),
+            ], id="harm-grp", style={"display": "none", "alignItems": "center"}),
         ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap", "rowGap": "6px",
                   "marginBottom": "6px"}),
         # spinner on the status line only, so fit updates of the plot do not
@@ -1983,6 +2040,10 @@ align_fit_tab = html.Div([
         dcc.Store(id="fit-region-set", data=None),
         dcc.Store(id="fit-state", data=None),
         dcc.Store(id="iso-names-apply", data=None),
+        dcc.Store(id="srch-hits", data=[]),
+        dcc.Store(id="srch-current", data=None),
+        dcc.Store(id="srch-zoom", data=None),
+        html.Div(id="_srch-zoom-hook", style={"display": "none"}),
         html.Div(id="_fit-mode-hook", style={"display": "none"}),
         html.Div(id="_sum-sims-hook", style={"display": "none"}),
 
@@ -2558,6 +2619,7 @@ _BASE_LAYOUT = html.Div([
     info_modal,
     pid_modal,
     iso_modal,
+    srch_modal,
     dcc.Store(id="further-restore", data=None),
     dcc.Store(id="sum-view", data=None),
     html.Div(id="_sum-view-hook", style={"display": "none"}),
@@ -2620,6 +2682,7 @@ def serve_layout():
         ("further-source", "value", st.get("source") or "sum"),
         ("fsrc-dir", "value", st.get("file_dir") or os.path.join(paths.summed_1d(), "")),
         ("fsrc-name", "value", st.get("file_name")),
+        ("srch-width", "value", load_config().get("search_width_khz") or SRCH_DEFAULT_KHZ),
     ]:
         comp = _find_component(_BASE_LAYOUT, cid)
         if comp is not None:
@@ -3909,6 +3972,13 @@ def _pid_display(raw, key):
     return str(v)
 
 
+def _hl_text(t, u):
+    """Half-life as written in NUBASE ('3.2 m'); '' if unknown."""
+    t = "" if t is None or (isinstance(t, float) and np.isnan(t)) else str(t).strip()
+    u = "" if u is None or (isinstance(u, float) and np.isnan(u)) else str(u).strip()
+    return (t + (" " + u if u else "")).strip()
+
+
 def sum_sim_traces(ff, pp, files, include_unsure, overrides, key=None, source="sum"):
     """(x, y, hovertext) for the three simulated-line traces of the summed plot
     (no peak / identified / half-life excluded) and a one-line description.
@@ -3924,9 +3994,19 @@ def sum_sim_traces(ff, pp, files, include_unsure, overrides, key=None, source="s
                                 s["corr_a"], s["corr_b"], s["corr_c"])
     sims = sims[(sims["f_sim"] >= ff.min()) & (sims["f_sim"] <= ff.max())].reset_index(drop=True)
     if key is not None:
-        _SUM_SIMS[key] = pd.DataFrame({"ion": ion_db["ion"].to_numpy()[sims["ion_row"].to_numpy()],
+        rows = sims["ion_row"].to_numpy()
+        names = ion_db["ion"].to_numpy()[rows]
+        _SUM_SIMS[key] = pd.DataFrame({"ion": names,
                                        "harmonic": sims["harmonic"].to_numpy(),
-                                       "f_sim": sims["f_sim"].to_numpy()})
+                                       "f_sim": sims["f_sim"].to_numpy(),
+                                       # for Search ions
+                                       "t_half": [_hl_text(t, u) for t, u in zip(
+                                           ion_db["T"].to_numpy()[rows],
+                                           ion_db["T_unit"].to_numpy()[rows])],
+                                       "excluded": ~hl_allowed(ion_db, s)[rows],
+                                       "is_ref": [(str(n) == s["ref_name"]
+                                                   and int(h) == int(s["ref_harmonic"]))
+                                                  for n, h in zip(names, sims["harmonic"])]})
         for k_old in list(_SUM_SIMS)[:-4]:
             _SUM_SIMS.pop(k_old, None)
     t = (pd.concat([read_confirmed(f)[1] for f in files], ignore_index=True)
@@ -5225,6 +5305,212 @@ def show_further_page(page):
     base = {"padding": "14px 18px", "overflowY": "auto", "height": "calc(100vh - 82px)"}
     return ({**base, "display": "block" if page == "align" else "none"},
             {**base, "display": "block" if page == "iso" else "none"})
+
+
+# ---------------------------------------------------------------------------
+# Search ions (as in the spectrogram) and the h−1 / h+1 buttons
+# ---------------------------------------------------------------------------
+
+def _srch_half_width_hz(width_khz):
+    try:
+        v = float(width_khz)
+    except (TypeError, ValueError):
+        return SRCH_DEFAULT_KHZ * 1000.0
+    return v * 1000.0 if np.isfinite(v) and v > 0 else SRCH_DEFAULT_KHZ * 1000.0
+
+
+def _srch_lines(key):
+    sims = _SUM_SIMS.get(key)
+    if sims is None or not len(sims):
+        return None
+    if "t_half" not in sims:                 # (older cache entry)
+        sims = sims.assign(t_half="", excluded=False, is_ref=False)
+    return sims
+
+
+@app.callback(
+    Output("srch-modal", "style"),
+    Input("btn-srch", "n_clicks"),
+    Input("srch-close", "n_clicks"),
+    Input("srch-zoom", "data"),
+    prevent_initial_call=True,
+)
+def toggle_search_modal(_open, _close, zoom):
+    trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
+    if trig.startswith("btn-srch"):
+        return SRCH_MODAL_SHOWN
+    if trig.startswith("srch-zoom") and not (zoom or {}).get("from_list"):
+        raise PreventUpdate                       # h±1 buttons: modal stays as it is
+    return SRCH_MODAL_HIDDEN
+
+
+@app.callback(
+    Output("srch-list", "children"),
+    Output("srch-status", "children"),
+    Output("srch-hits", "data"),
+    Output("srch-width", "style"),
+    Input("srch-ion", "value"),
+    Input("srch-width", "value"),
+    Input("sum-key", "data"),
+)
+def search_ions(q, width, key):
+    """Simulated lines whose ion name contains the query (case-insensitive),
+    sorted by frequency (first 300 shown)."""
+    w_style = {"width": "80px", "marginRight": "4px"}
+    try:
+        wv = float(width) if width not in (None, "") else None
+    except (TypeError, ValueError):
+        wv = -1
+    if wv is not None and not (np.isfinite(wv) and wv > 0):
+        w_style["borderColor"] = "#c0392b"
+    trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
+    if trig.startswith("srch-width") and wv is not None and wv > 0:
+        save_config({"search_width_khz": wv})
+    q = (q or "").strip().lower()
+    if not q:
+        return [], "", [], w_style
+    sims = _srch_lines(key)
+    if sims is None:
+        return [], html.Span("✗ no simulated lines: sum the spectra / load a spectrum first",
+                             style={"color": "#c0392b"}), [], w_style
+    hit = sims[sims["ion"].astype(str).str.lower().str.contains(q, regex=False)]
+    hit = hit.sort_values("f_sim")
+    n = len(hit)
+    if not n:
+        return [], html.Span(f"No simulated lines for \"{q}\" in this spectrum",
+                             style={"color": "#c0392b"}), [], w_style
+    hits = [{"ion": str(r.ion), "h": int(r.harmonic), "f": float(r.f_sim),
+             "t_half": r.t_half or "", "excluded": bool(r.excluded), "is_ref": bool(r.is_ref)}
+            for r in hit.head(300).itertuples()]
+    hw = _srch_half_width_hz(width)
+    cell = {"padding": "3px 12px", "fontSize": "13px"}
+    head = {**cell, "fontSize": "11px", "fontWeight": "700", "color": "#888",
+            "textTransform": "uppercase", "letterSpacing": "0.04em"}
+    out = [html.Div([html.Span(t, style=head) for t in ("Ion", "Harmonic", "f_sim (Hz)", "T½")],
+                    style={**SRCH_GRID, "borderBottom": "1px solid #dddddd", "position": "sticky",
+                           "top": "0", "background": "white"}, className="theia-box")]
+    for i, l in enumerate(hits):
+        col = {"color": "#aaa"} if l["excluded"] else {}
+        out.append(html.Div([
+            html.Span(l["ion"] + ("  (ref)" if l["is_ref"] else ""),
+                      style={**cell, **col, "fontWeight": "600"}),
+            html.Span(f"h{l['h']}", style={**cell, **col}),
+            html.Span(f"{l['f']:,.1f}", style={**cell, **col, "fontFamily": "monospace"}),
+            html.Span(l["t_half"] or "?", style={**cell, **col}),
+        ], id={"type": "srch-line", "i": i}, n_clicks=0, className="theia-fb-row",
+           title=f"Zoom to {l['f'] - hw:,.0f} – {l['f'] + hw:,.0f} Hz"
+                 + ("  (below the half-life cut)" if l["excluded"] else ""),
+           style={**SRCH_GRID, "cursor": "pointer"}))
+    status = html.Span(f"{n} line{'' if n == 1 else 's'}"
+                       + (f" (first {len(hits)} shown)" if n > len(hits) else ""),
+                       style={"color": "#2e7d32"})
+    return out, status, hits, w_style
+
+
+def _srch_neighbour(key, cur, step):
+    """Simulated line of the current ion at harmonic h + step, or None."""
+    sims = _srch_lines(key)
+    if sims is None or not cur:
+        return None
+    m = sims[(sims["ion"].astype(str) == cur["ion"]) & (sims["harmonic"] == cur["h"] + step)]
+    if not len(m):
+        return None
+    r = m.iloc[0]
+    return {"ion": cur["ion"], "h": int(r["harmonic"]), "f": float(r["f_sim"])}
+
+
+@app.callback(
+    Output("srch-zoom", "data"),
+    Output("srch-current", "data"),
+    Output("harm-cur", "children"),
+    Input({"type": "srch-line", "i": ALL}, "n_clicks"),
+    Input("btn-harm-dn", "n_clicks"),
+    Input("btn-harm-up", "n_clicks"),
+    State("srch-hits", "data"),
+    State("srch-current", "data"),
+    State("srch-width", "value"),
+    State("sum-key", "data"),
+    prevent_initial_call=True,
+)
+def search_pick(_rows, _dn, _up, hits, cur, width, key):
+    """A line from the list, or h−1 / h+1: zoom to f ± width."""
+    trig = dash.callback_context.triggered[0] if dash.callback_context.triggered else None
+    if not trig or not trig["value"]:
+        raise PreventUpdate
+    pid = trig["prop_id"]
+    from_list = '"srch-line"' in pid
+    if from_list:
+        i = json.loads(pid.rsplit(".", 1)[0])["i"]
+        if not hits or i >= len(hits):
+            raise PreventUpdate
+        line = hits[i]
+    else:
+        line = _srch_neighbour(key, cur, -1 if pid.startswith("btn-harm-dn") else 1)
+        if line is None:
+            raise PreventUpdate
+    hw = _srch_half_width_hz(width)
+    zoom = {"x": [line["f"] - hw, line["f"] + hw], "from_list": from_list, "t": time.time()}
+    # the label is set here, in the same reply as the zoom, so it never lags
+    return zoom, {"ion": line["ion"], "h": int(line["h"])}, f"{line['ion']} h{int(line['h'])}"
+
+
+@app.callback(
+    Output("harm-grp", "style"),
+    Output("harm-cur", "title"),
+    Output("btn-harm-dn", "disabled"),
+    Output("btn-harm-dn", "title"),
+    Output("btn-harm-up", "disabled"),
+    Output("btn-harm-up", "title"),
+    Input("srch-current", "data"),
+    Input("sum-key", "data"),
+    Input("srch-width", "value"),
+)
+def show_harmonic_step(cur, key, width):
+    if not cur:
+        return {"display": "none"}, "", True, "", True, ""
+    hw = _srch_half_width_hz(width)
+    out = []
+    for step in (-1, 1):
+        l = _srch_neighbour(key, cur, step)
+        if l is None:
+            out += [True, f"h{cur['h'] + step} of {cur['ion']} is not among the simulated "
+                          f"lines of this spectrum"]
+        else:
+            out += [False, f"Zoom to {cur['ion']}, h{l['h']}: {l['f'] - hw:,.0f} – "
+                           f"{l['f'] + hw:,.0f} Hz"]
+    return ({"display": "inline-flex", "alignItems": "center", "marginRight": "8px"},
+            "Ion and harmonic chosen in Search ions", *out)
+
+
+# Zoom the summed plot to the chosen window; y fitted to the data inside it
+app.clientside_callback(
+    """
+    function(z) {
+        var gd = document.querySelector('#sum-graph .js-plotly-plot');
+        if (!z || !gd || !gd._fullData || !gd._fullData.length)
+            return window.dash_clientside.no_update;
+        var lo = z.x[0], hi = z.x[1], X = gd._fullData[0].x, Y = gd._fullData[0].y;
+        var ymin = Infinity, ymax = -Infinity;
+        for (var i = 0; i < X.length; i++) {
+            if (X[i] < lo || X[i] > hi) continue;
+            var y = Y[i];
+            if (isFinite(y)) { if (y < ymin) ymin = y; if (y > ymax) ymax = y; }
+        }
+        var upd = {'xaxis.range': [lo, hi]};
+        if (isFinite(ymin) && isFinite(ymax)) {
+            var pad = 0.05 * ((ymax - ymin) || Math.abs(ymax) || 1);
+            upd['yaxis.range'] = [ymin - pad, ymax + pad];
+        } else {
+            upd['yaxis.autorange'] = true;
+        }
+        Plotly.relayout(gd, upd);
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("_srch-zoom-hook", "children"),
+    Input("srch-zoom", "data"),
+    prevent_initial_call=True,
+)
 
 
 # ---------------------------------------------------------------------------
