@@ -2205,7 +2205,7 @@ isochronicity_tab = html.Div([
         html.Div(id="iso-fit-result", style={"fontSize": "13px", "marginBottom": "6px"}),
         dcc.Graph(id="iso-graph", figure=empty_fig("No points yet"),
                   config={"scrollZoom": True, "displaylogo": False},
-                  style={"height": "520px"}),
+                  style={"height": "750px"}),
         dcc.Graph(id="iso-resid", figure=empty_fig(),
                   config={"scrollZoom": True, "displaylogo": False},
                   style={"height": "220px"}),
@@ -6142,21 +6142,34 @@ def iso_auto_floor(t, sg, err, st):
     return 0.5 * (lo + hi)
 
 
-def _iso_param_lines(res):
+def _iso_param_lines(res, extras=True):
+    """Fit result lines; extras=False leaves out the bin-width / floor lines
+    (the parameter box on the plots shows only the fit)."""
     (gt, sp, ss), (dgt, dsp, dss) = res["popt"], res["perr"]
     chi = "–" if not np.isfinite(res["chi2_ndf"]) else f"{res['chi2_ndf']:.3f}"
     lines = [f"γ_t = {gt:.4f} ± {dgt:.6f}",
              f"σp/p = {sp * 100:.4f} ± {dsp * 100:.4f} %",
              f"σ_sys = {ss:.4f} ± {dss:.4f} ps",
              f"χ²/ndf = {chi}  (ndf = {res['ndf']}, {res['n']} points)"]
-    if res.get("bin_sigma_hz") is not None:
+    if extras and res.get("bin_sigma_hz") is not None:
         lines.append(f"bin-width error = {res['bin_sigma_hz']:.2f} Hz (1σ) on FWHM "
                      f"(bin/√12, {res['bin_sigma_hz'] * np.sqrt(12.0):.3f} Hz bins)")
-    if res.get("floor") is not None:
+    if extras and res.get("floor") is not None:
         c0 = res.get("chi2_ndf_stat")
         c0 = "–" if c0 is None or not np.isfinite(c0) else f"{c0:.3f}"
         lines.append(f"systematic floor = {res['floor']:.4f} ps  (auto; χ²/ndf without it = {c0})")
     return lines
+
+
+def _iso_pulls(used, res, st, ecol):
+    """(σ(T) − fit) / error for the fitted points, and the 'within ±1σ' text
+    (as in the decay-fit residual panel)."""
+    fit = iso_sigma_t(used["T_ns"].to_numpy(), *res["popt"], st["circumference_m"], st["c_m_s"])
+    pull = (used["sigma_T_ps"].to_numpy() - fit) / used[ecol].to_numpy()
+    n = len(pull)
+    n_in = int(np.sum(np.abs(pull) <= 1.0))
+    pct = 100.0 * n_in / n if n else float("nan")
+    return pull, f"within ±1σ: {pct:.1f}%  ({n_in}/{n})   Gaussian ≈ 68.3%"
 
 
 def _iso_curve_x(vals):
@@ -6268,7 +6281,7 @@ def fit_and_plot_iso(_ts, *args):
     if res:
         fig.add_annotation(xref="paper", yref="paper", x=0.01, y=0.99, xanchor="left",
                            yanchor="top", align="left", showarrow=False,
-                           text="<br>".join(_iso_param_lines(res)),
+                           text="<br>".join(_iso_param_lines(res, extras=False)),
                            bgcolor=ACCENT_PALE, bordercolor=ACCENT, borderwidth=1,
                            font=dict(size=13), name="isoparam")
     fig.update_layout(template="plotly_white", margin=dict(l=70, r=20, t=30, b=50),
@@ -6278,19 +6291,25 @@ def fit_and_plot_iso(_ts, *args):
                                   borderwidth=1),
                       font=dict(size=13), uirevision="iso", clickmode="event")
 
+    # residuals in units of each point's error, as in the decay-fit panel:
+    # grey ±1σ band, red zero line, black dots, 'within ±1σ' count
     rfig = go.Figure()
     if res:
-        f_used = iso_sigma_t(used["T_ns"], *res["popt"], st["circumference_m"], st["c_m_s"])
-        rfig.add_hline(y=0, line=dict(color="#999", width=1))
+        pull, pull_txt = _iso_pulls(used, res, st, ecol)
+        rfig.add_hrect(y0=-1, y1=1, fillcolor="#d9d9d9", opacity=1, line_width=0, layer="below")
+        rfig.add_hline(y=0, line=dict(color="#dd4444", width=1.5))
         rfig.add_trace(go.Scatter(
-            x=used["T_ns"], y=used["sigma_T_ps"] - f_used, mode="markers", text=used["ion"],
-            marker=dict(symbol="x", size=8, color="black"),
-            error_y=dict(type="data", array=used[ecol], color="#999", thickness=1, width=3),
-            hovertemplate="%{text}<br>T = %{x:.4f} ns<br>σ(T) − fit = %{y:.4f} ps"
+            x=used["T_ns"], y=pull, mode="markers", text=used["ion"],
+            marker=dict(symbol="circle", size=6, color="black"),
+            hovertemplate="%{text}<br>T = %{x:.4f} ns<br>(σ(T) − fit)/err = %{y:.2f}"
                           "<extra></extra>"))
+        rfig.add_annotation(xref="paper", yref="paper", x=0.995, y=0.97, xanchor="right",
+                            yanchor="top", showarrow=False, text=pull_txt,
+                            bgcolor="rgba(255,255,255,0.85)", bordercolor="#b3b3b3",
+                            borderwidth=1, borderpad=4, font=dict(size=13))
     rfig.update_layout(template="plotly_white", margin=dict(l=70, r=20, t=30, b=45),
-                       title=dict(text="Residuals (σ(T) − fit)", font=dict(size=13)),
-                       xaxis_title="Revolution time T (ns)", yaxis_title="σ(T) − fit (ps)",
+                       title=dict(text="Residuals", font=dict(size=13)),
+                       xaxis_title="Revolution time T (ns)", yaxis_title="(σ(T) − fit)/σ",
                        showlegend=False, font=dict(size=12), uirevision="iso")
 
     parts = []
@@ -6972,8 +6991,8 @@ def draw_iso_figure(vals, res, st):
     used = vals[vals["include"] & vals["fittable"]]
     out = vals[~(vals["include"] & vals["fittable"])]
     ecol = "d_sigma_T_total_ps" if "d_sigma_T_total_ps" in vals else "d_sigma_T_ps"
-    fig, (ax, axr) = plt.subplots(2, 1, figsize=(16, 13), sharex=True,
-                                  gridspec_kw={"height_ratios": [3, 1], "hspace": 0.06})
+    fig, (ax, axr) = plt.subplots(2, 1, figsize=(16, 17), sharex=True,
+                                  gridspec_kw={"height_ratios": [13, 4], "hspace": 0.06})
     ax.errorbar(used["T_ns"], used["sigma_T_ps"], yerr=used[ecol], fmt="none",
                 color="grey", capsize=4, zorder=2)
     ax.scatter(used["T_ns"], used["sigma_T_ps"], color="red", marker="x", s=50,
@@ -6986,17 +7005,21 @@ def draw_iso_figure(vals, res, st):
         ax.plot(x, iso_sigma_t(x, *res["popt"], st["circumference_m"], st["c_m_s"]),
                 color="black", label="Isochronicity curve")
         props = dict(boxstyle="round", facecolor="wheat", alpha=0.5)
-        ptext = ax.text(0.02, 0.97, "\n".join(_iso_param_lines(res)), transform=ax.transAxes,
+        ptext = ax.text(0.02, 0.97, "\n".join(_iso_param_lines(res, extras=False)),
+                        transform=ax.transAxes,
                         fontsize=16, verticalalignment="top", bbox=props)
-        resid = used["sigma_T_ps"] - iso_sigma_t(used["T_ns"], *res["popt"],
-                                                  st["circumference_m"], st["c_m_s"])
-        axr.axhline(0, color="grey", lw=1)
-        axr.errorbar(used["T_ns"], resid, yerr=used[ecol], fmt="x", color="red",
-                     ecolor="grey", capsize=3, zorder=2)
+        # residuals in units of each point's error (as in the decay-fit panel)
+        pull, pull_txt = _iso_pulls(used, res, st, ecol)
+        axr.axhspan(-1.0, 1.0, color="0.85", zorder=0)
+        axr.axhline(0, color="#dd4444", lw=1.5)
+        axr.plot(used["T_ns"], pull, "o", ms=4, color="black")
+        axr.text(0.995, 0.95, pull_txt, transform=axr.transAxes, ha="right", va="top",
+                 fontsize=13, bbox=dict(boxstyle="round,pad=0.25", facecolor="white",
+                                        edgecolor="0.7", alpha=0.85))
     else:
         ptext = None
     ax.set_ylabel(r"$\sigma_{T}$ (ps)", size=22)
-    axr.set_ylabel("σ(T) − fit (ps)", size=16)
+    axr.set_ylabel(r"(σ(T) − fit)/$\sigma$", size=16)
     axr.set_xlabel("Revolution Time (ns)", size=22)
     ax.tick_params(labelsize=16)
     axr.tick_params(labelsize=16)
