@@ -1526,8 +1526,10 @@ INFO_TEXTS = {
         "shape, close neighbours) and is shown with the result; treat it as an upper limit.  "
         "Light wide bars: total error; dark thin bars: statistical.",
         "Bin-width error: bin = recording frequency / number of frequency bins (type e.g. "
-        "10e6 and 2^17 → 76.294 Hz).  ±½ bin is taken as an extra FWHM error and converted "
-        "like err σ(T): (½ bin / centre) · T · 1000 / 2√(2 ln 2), added in quadrature.  With "
+        "10e6 and 2^17 → 76.294 Hz).  The true position is spread evenly across a bin, so the "
+        "1σ error is bin/√12 (22.02 Hz for 76.294 Hz bins; ±½ bin is the maximum, not 1σ).  It "
+        "is taken as an extra FWHM error and converted like err σ(T): (bin/√12 / centre) · T · "
+        "1000 / 2√(2 ln 2), added in quadrature.  With "
         "the auto floor also ticked, the floor is fitted on top of it (what is left over).",
         "Settings are saved per experiment (settings/isocurve.json).",
         "'Save figure' draws the plot and residuals with matplotlib and saves PNG + PDF in "
@@ -2182,7 +2184,7 @@ isochronicity_tab = html.Div([
                   "rowGap": "6px", "marginBottom": "8px"}),
         html.Div([
             dcc.Checklist(id="iso-set-binerr", value=[],
-                          options=[{"label": " Bin-width error: ±½ bin on every FWHM",
+                          options=[{"label": " Bin-width error: bin/√12 (1σ) on every FWHM",
                                     "value": "on"}],
                           inputStyle={"marginRight": "4px"}, labelStyle={"fontSize": "13px"},
                           style={"marginRight": "14px"}),
@@ -6085,17 +6087,18 @@ def iso_fit_data(st):
     used = vals[vals["include"] & vals["fittable"]]
     if len(used) < 3:
         return vals, None, f"{len(used)} point(s) in the fit: at least 3 are needed"
-    # bin-width error: ±½ bin on every FWHM, as a σ(T) error (same conversion
-    # as err σ(T)): (½ bin / centre) · T · 1000 / 2√(2 ln 2)
-    half_bin = None
+    # bin-width error: 1σ of a value spread evenly across one bin, bin/√12
+    # (±½ bin is the maximum, not 1σ), on every FWHM, as a σ(T) error (same
+    # conversion as err σ(T)): (bin/√12 / centre) · T · 1000 / 2√(2 ln 2)
+    bin_sigma = None
     vals["d_sigma_T_bin_ps"] = 0.0
     if st.get("bin_err"):
         try:
-            half_bin = 0.5 * iso_bin_width(st)
+            bin_sigma = iso_bin_width(st) / np.sqrt(12.0)
         except ValueError as exc:
             return vals, None, f"bin-width error: {exc}"
         centre = vals["harmonic"] / (vals["T_ns"] * 1e-9)
-        vals["d_sigma_T_bin_ps"] = (half_bin / centre) * vals["T_ns"] * 1000.0 / FWHM_PER_SIGMA
+        vals["d_sigma_T_bin_ps"] = (bin_sigma / centre) * vals["T_ns"] * 1000.0 / FWHM_PER_SIGMA
     used = vals[vals["include"] & vals["fittable"]]
     t, sg = used["T_ns"].to_numpy(), used["sigma_T_ps"].to_numpy()
     err = np.hypot(used["d_sigma_T_ps"].to_numpy(), used["d_sigma_T_bin_ps"].to_numpy())
@@ -6112,7 +6115,7 @@ def iso_fit_data(st):
     res["n"] = len(used)
     res["floor"] = floor if st.get("auto_floor") else None
     res["chi2_ndf_stat"] = chi2_stat
-    res["half_bin_hz"] = half_bin
+    res["bin_sigma_hz"] = bin_sigma
     # total error (statistical ⊕ bin width ⊕ floor) for every point
     vals["d_sigma_T_total_ps"] = np.hypot(np.hypot(vals["d_sigma_T_ps"],
                                                    vals["d_sigma_T_bin_ps"]), floor)
@@ -6145,9 +6148,9 @@ def _iso_param_lines(res):
              f"σp/p = {sp * 100:.4f} ± {dsp * 100:.4f} %",
              f"σ_sys = {ss:.4f} ± {dss:.4f} ps",
              f"χ²/ndf = {chi}  (ndf = {res['ndf']}, {res['n']} points)"]
-    if res.get("half_bin_hz") is not None:
-        lines.append(f"bin-width error = ±{res['half_bin_hz']:.2f} Hz on FWHM "
-                     f"(½ of {2 * res['half_bin_hz']:.3f} Hz bins)")
+    if res.get("bin_sigma_hz") is not None:
+        lines.append(f"bin-width error = {res['bin_sigma_hz']:.2f} Hz (1σ) on FWHM "
+                     f"(bin/√12, {res['bin_sigma_hz'] * np.sqrt(12.0):.3f} Hz bins)")
     if res.get("floor") is not None:
         c0 = res.get("chi2_ndf_stat")
         c0 = "–" if c0 is None or not np.isfinite(c0) else f"{c0:.3f}"
@@ -6232,7 +6235,7 @@ def fit_and_plot_iso(_ts, *args):
                 *_iso_curve_table(None, floor_on))
     if vals is None:
         return empty_fig("No points yet"), empty_fig(), "", *_iso_curve_table(None, floor_on)
-    show_tot = bool(res and (res.get("floor") or res.get("half_bin_hz")))
+    show_tot = bool(res and (res.get("floor") or res.get("bin_sigma_hz")))
     stat_col = "#555" if show_tot else "#999"
 
     fig = go.Figure()
@@ -6539,7 +6542,7 @@ def show_bin_width(rec_freq, n_bins):
         w = iso_bin_width({"rec_freq": rec_freq or "", "n_bins": n_bins or ""})
     except ValueError as exc:
         return html.Span(f"✗ {exc}", style={"color": "#c0392b", "fontFamily": "inherit"})
-    return f"bin = {w:.3f} Hz  →  ±{w / 2:.2f} Hz"
+    return f"bin = {w:.3f} Hz  →  1σ = bin/√12 = {w / np.sqrt(12.0):.2f} Hz"
 
 
 @app.callback(
@@ -6690,7 +6693,7 @@ def draw_iso_figure(vals, res, st):
     import matplotlib.pyplot as plt
     used = vals[vals["include"] & vals["fittable"]]
     out = vals[~(vals["include"] & vals["fittable"])]
-    show_tot = bool(res and (res.get("floor") or res.get("half_bin_hz")))
+    show_tot = bool(res and (res.get("floor") or res.get("bin_sigma_hz")))
     fig, (ax, axr) = plt.subplots(2, 1, figsize=(16, 13), sharex=True,
                                   gridspec_kw={"height_ratios": [3, 1], "hspace": 0.06})
     if show_tot:      # total error (statistical ⊕ floor) behind the statistical bars
