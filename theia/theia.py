@@ -1523,8 +1523,9 @@ INFO_TEXTS = {
         "Systematic floor: auto (χ²/ndf = 1): a constant f is added in quadrature to every "
         "err σ(T), √(err² + f²), with f chosen so that the fit has χ²/ndf = 1 (f = 0 if it is "
         "already ≤ 1).  f covers what the peak-fit errors miss (alignment, background, line "
-        "shape, close neighbours) and is shown with the result; treat it as an upper limit.  "
-        "Light wide bars: total error; dark thin bars: statistical.",
+        "shape, close neighbours) and is shown with the result; treat it as an upper limit.",
+        "Error bars show the combined error used in the fit: statistical ⊕ bin width ⊕ floor "
+        "(whichever are ticked); the table lists the statistical and total errors.",
         "Bin-width error: bin = recording frequency / number of frequency bins (type e.g. "
         "10e6 and 2^17 → 76.294 Hz).  The true position is spread evenly across a bin, so the "
         "1σ error is bin/√12 (22.02 Hz for 76.294 Hz bins; ±½ bin is the maximum, not 1σ).  It "
@@ -6235,8 +6236,8 @@ def fit_and_plot_iso(_ts, *args):
                 *_iso_curve_table(None, floor_on))
     if vals is None:
         return empty_fig("No points yet"), empty_fig(), "", *_iso_curve_table(None, floor_on)
-    show_tot = bool(res and (res.get("floor") or res.get("bin_sigma_hz")))
-    stat_col = "#555" if show_tot else "#999"
+    # error bars: the combined error (statistical ⊕ bin width ⊕ floor) used in the fit
+    ecol = "d_sigma_T_total_ps" if "d_sigma_T_total_ps" in vals else "d_sigma_T_ps"
 
     fig = go.Figure()
     used = vals[vals["include"] & vals["fittable"]]
@@ -6247,21 +6248,12 @@ def fit_and_plot_iso(_ts, *args):
                                                     st["c_m_s"]),
                                  mode="lines", name="Isochronicity curve", meta="iso-curve",
                                  line=dict(color=ACCENT, width=2), hoverinfo="skip"))
-    if show_tot:
-        # total error (statistical ⊕ floor): light, wide bars behind the points
-        fig.add_trace(go.Scatter(
-            x=used["T_ns"], y=used["sigma_T_ps"], mode="markers", meta="iso-tot",
-            name="err total", showlegend=False, hoverinfo="skip",
-            marker=dict(size=1, color="rgba(0,0,0,0)"),
-            error_y=dict(type="data", array=used["d_sigma_T_total_ps"], color="#d4d4d4",
-                         thickness=5, width=0)))
     # labels: drawn in the browser as annotations with arrows (ISO_LABEL_JS)
     fig.add_trace(go.Scatter(
         x=used["T_ns"], y=used["sigma_T_ps"], mode="markers", name="In fit", meta="iso-pts",
         text=used["ion"], customdata=used["id"],
         marker=dict(symbol="x", size=9, color="black"),
-        error_y=dict(type="data", array=used["d_sigma_T_ps"], color=stat_col, thickness=1,
-                     width=4),
+        error_y=dict(type="data", array=used[ecol], color="#999", thickness=1, width=4),
         hovertemplate="%{text}<br>T = %{x:.4f} ns<br>σ(T) = %{y:.4f} ps"
                       "<br>click: leave out<extra></extra>"))
     if len(out):
@@ -6290,17 +6282,10 @@ def fit_and_plot_iso(_ts, *args):
     if res:
         f_used = iso_sigma_t(used["T_ns"], *res["popt"], st["circumference_m"], st["c_m_s"])
         rfig.add_hline(y=0, line=dict(color="#999", width=1))
-        if show_tot:
-            rfig.add_trace(go.Scatter(
-                x=used["T_ns"], y=used["sigma_T_ps"] - f_used, mode="markers",
-                hoverinfo="skip", marker=dict(size=1, color="rgba(0,0,0,0)"),
-                error_y=dict(type="data", array=used["d_sigma_T_total_ps"], color="#d4d4d4",
-                             thickness=5, width=0)))
         rfig.add_trace(go.Scatter(
             x=used["T_ns"], y=used["sigma_T_ps"] - f_used, mode="markers", text=used["ion"],
             marker=dict(symbol="x", size=8, color="black"),
-            error_y=dict(type="data", array=used["d_sigma_T_ps"], color=stat_col, thickness=1,
-                         width=3),
+            error_y=dict(type="data", array=used[ecol], color="#999", thickness=1, width=3),
             hovertemplate="%{text}<br>T = %{x:.4f} ns<br>σ(T) − fit = %{y:.4f} ps"
                           "<extra></extra>"))
     rfig.update_layout(template="plotly_white", margin=dict(l=70, r=20, t=30, b=45),
@@ -6389,17 +6374,6 @@ function(fig) {
                 for (var k = 0; k < full.x.length; k += step) {
                     var cx = xa.l2p(full.x[k]) + xa._offset, cy = ya.l2p(full.y[k]) + ya._offset;
                     obst.push([cx - 3, cy - 3, cx + 3, cy + 3]);
-                }
-                return;
-            }
-            if (tr.meta === 'iso-tot') {                // total error bars: obstacles only
-                var et = (full.error_y && full.error_y.array) || [];
-                for (var k = 0; k < full.x.length; k++) {
-                    var e = et[k], X = full.x[k], Y = full.y[k];
-                    if (!isFinite(e) || !(e > 0)) continue;
-                    var px = xa.l2p(X) + xa._offset;
-                    var y1 = ya.l2p(Y + e) + ya._offset, y2 = ya.l2p(Y - e) + ya._offset;
-                    obst.push([px - 4, Math.min(y1, y2), px + 4, Math.max(y1, y2)]);
                 }
                 return;
             }
@@ -6693,14 +6667,11 @@ def draw_iso_figure(vals, res, st):
     import matplotlib.pyplot as plt
     used = vals[vals["include"] & vals["fittable"]]
     out = vals[~(vals["include"] & vals["fittable"])]
-    show_tot = bool(res and (res.get("floor") or res.get("bin_sigma_hz")))
+    ecol = "d_sigma_T_total_ps" if "d_sigma_T_total_ps" in vals else "d_sigma_T_ps"
     fig, (ax, axr) = plt.subplots(2, 1, figsize=(16, 13), sharex=True,
                                   gridspec_kw={"height_ratios": [3, 1], "hspace": 0.06})
-    if show_tot:      # total error (statistical ⊕ floor) behind the statistical bars
-        ax.errorbar(used["T_ns"], used["sigma_T_ps"], yerr=used["d_sigma_T_total_ps"],
-                    fmt="none", color="#d4d4d4", elinewidth=5, capsize=0, zorder=1)
-    ax.errorbar(used["T_ns"], used["sigma_T_ps"], yerr=used["d_sigma_T_ps"], fmt="none",
-                color="#555555" if show_tot else "grey", capsize=4, zorder=2)
+    ax.errorbar(used["T_ns"], used["sigma_T_ps"], yerr=used[ecol], fmt="none",
+                color="grey", capsize=4, zorder=2)
     ax.scatter(used["T_ns"], used["sigma_T_ps"], color="red", marker="x", s=50,
                label="Identified ions", zorder=3)
     if len(out):
@@ -6716,11 +6687,8 @@ def draw_iso_figure(vals, res, st):
         resid = used["sigma_T_ps"] - iso_sigma_t(used["T_ns"], *res["popt"],
                                                   st["circumference_m"], st["c_m_s"])
         axr.axhline(0, color="grey", lw=1)
-        if show_tot:
-            axr.errorbar(used["T_ns"], resid, yerr=used["d_sigma_T_total_ps"], fmt="none",
-                         color="#d4d4d4", elinewidth=5, capsize=0, zorder=1)
-        axr.errorbar(used["T_ns"], resid, yerr=used["d_sigma_T_ps"], fmt="x", color="red",
-                     ecolor="#555555" if show_tot else "grey", capsize=3, zorder=2)
+        axr.errorbar(used["T_ns"], resid, yerr=used[ecol], fmt="x", color="red",
+                     ecolor="grey", capsize=3, zorder=2)
     else:
         ptext = None
     ax.set_ylabel(r"$\sigma_{T}$ (ps)", size=22)
