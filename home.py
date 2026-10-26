@@ -783,9 +783,11 @@ body{{overflow:hidden}}
 .wrap{{display:flex;flex:1 1 auto;min-height:0}}
 aside{{width:330px;min-width:330px;background:var(--side);border-right:1px solid var(--line);padding:14px 16px;
   display:flex;flex-direction:column;overflow:hidden}}
-/* top of the sidebar scrolls only if it gets too long (e.g. Shared physics open) */
-.side-top{{flex:0 1 auto;min-height:0;overflow-y:auto}}
-.brand{{text-align:center;padding:20px 0 0;flex:1 1 auto;min-height:220px;display:flex;flex-direction:column}}
+/* sidebar split in two equal halves: top = data sources, physics, reference
+   data (scrolls if too long); bottom = icon, version and changelog (fixed) */
+.side-top{{flex:1 1 0;min-height:0;overflow-y:auto}}
+.brand{{text-align:center;flex:1 1 0;min-height:0;display:flex;flex-direction:column;
+  border-top:1px solid var(--line);margin-top:10px;padding-top:14px}}
 .brand img{{width:120px;height:120px;display:block;margin:0 auto 8px;flex:none}}
 .brand-name{{font-weight:700;font-size:14px;color:#555;letter-spacing:.3px}}
 /* changelog fills the rest of the sidebar; its bottom is the window's bottom */
