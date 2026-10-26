@@ -2217,10 +2217,13 @@ isochronicity_tab = html.Div([
         dcc.Graph(id="iso-graph", figure=empty_fig("No points yet"),
                   config={"scrollZoom": True, "displaylogo": False},
                   style={"height": "750px"}),
+    ], className="theia-box", style={**BOX_STYLE, "padding": "8px 10px", "marginTop": "10px"}),
+    # residuals of the curve fit, in a box of their own
+    html.Div(
         dcc.Graph(id="iso-resid", figure=empty_fig(),
                   config={"scrollZoom": True, "displaylogo": False},
                   style={"height": "340px"}),
-    ], className="theia-box", style={**BOX_STYLE, "padding": "8px 10px", "marginTop": "10px"}),
+        className="theia-box", style={**BOX_STYLE, "padding": "8px 10px", "marginTop": "10px"}),
     dcc.Store(id="iso-version", data=0),
     dcc.Store(id="iso-points-ts", data=None),
     html.Div(id="_iso-label-hook", style={"display": "none"}),
