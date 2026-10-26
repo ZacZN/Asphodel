@@ -2559,6 +2559,12 @@ viewer_tab = html.Div([
                 ], id="v-harm-overlay", title="Click to show or hide all simulated lines of a harmonic",
                    style={"position": "absolute", "top": "0", "left": "0", "zIndex": "10",
                           "visibility": "hidden"}),
+                # one box round the legend and the toggles, same outline as the
+                # plot's box (border only; clicks pass through to the legend)
+                html.Div(id="v-legend-frame",
+                         style={"position": "absolute", "top": "0", "left": "0", "zIndex": "9",
+                                "border": BOX_BORDER, "borderRadius": "6px",
+                                "pointerEvents": "none", "visibility": "hidden"}),
             ], style={"position": "relative", "flex": "1 1 auto", "minHeight": "0"}),
             html.Div(id="_v-harm-hook", style={"display": "none"}),
         ], className="theia-box",
@@ -2610,12 +2616,13 @@ _FIT_CSS = """
 
 _HARM_CSS = """
 /* Viewer harmonic toggles: checklist labels drawn as on/off buttons */
-.harm-toggle label { display: inline-block; border: 1px solid #6c757d; border-radius: 4px;
-    padding: 2px 8px; margin: 0 5px 5px 0; font-size: 13px; text-align: center;
+.harm-toggle label { display: block; width: 90px; border: 1px solid #6c757d; border-radius: 4px;
+    padding: 2px 8px; margin: 0 0 5px 0; font-size: 13px; text-align: center;
     cursor: pointer; user-select: none; color: #6c757d; background: #ffffff; }
 .harm-toggle label:hover { border-color: #f57d15; }
 .harm-toggle label:has(input:checked) { background: #f57d15; border-color: #f57d15;
     color: #ffffff; font-weight: 600; }
+body.dark #v-legend-frame { border-color: #4a4a4a !important; }
 body.dark .harm-toggle label { background: #1c1c1c; color: #d6d6d6; border-color: #9a9a9a; }
 body.dark .harm-toggle label:has(input:checked) { background: #f57d15; border-color: #f57d15;
     color: #ffffff; }
@@ -3072,15 +3079,28 @@ app.clientside_callback(
                 if (tries++ < 50) { setTimeout(setup, 100); }
                 return;
             }
+            var fr = document.getElementById('v-legend-frame');
             function place() {
                 var lg = gd.querySelector('.legend');
-                if (!lg) { ov.style.visibility = 'hidden'; return; }
+                if (!lg) {
+                    ov.style.visibility = 'hidden';
+                    if (fr) { fr.style.visibility = 'hidden'; }
+                    return;
+                }
                 var r = lg.getBoundingClientRect();
                 var w = ov.parentElement.getBoundingClientRect();
                 ov.style.left = (r.left - w.left + 10) + 'px';
                 ov.style.top = (r.bottom - w.top + 6) + 'px';
-                ov.style.maxWidth = Math.max(r.width - 10, 120) + 'px';
                 ov.style.visibility = 'visible';
+                if (fr) {                        // box round legend + toggles
+                    var o = ov.getBoundingClientRect();
+                    var pad = 6;
+                    fr.style.left = (r.left - w.left - pad) + 'px';
+                    fr.style.top = (r.top - w.top - pad) + 'px';
+                    fr.style.width = (Math.max(r.right, o.right) - r.left + 2 * pad) + 'px';
+                    fr.style.height = (o.bottom - r.top + pad) + 'px';
+                    fr.style.visibility = 'visible';
+                }
             }
             if (!gd._harmHook) {
                 gd._harmHook = true;
