@@ -51,7 +51,7 @@ Peak detection (no smoothing is ever applied to the data)
 import os
 import sys
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import paths, physics, tabwatch
+from core import icon, paths, physics, tabwatch
 from core.nubase_reader import (df_nubase, rect_restrict, diag_restrict, index_by_name, unpack_npz,
                                 get_base_dataframe)
 from core.physics import (delta_f, apply_correction, ion_base_name, build_hover_label, HL_UNITS,
@@ -2709,6 +2709,7 @@ app.index_string = app.index_string.replace(
 # close this tab when Theia stops (Quit / Stop on the home page, Quit here, crash)
 app.index_string = app.index_string.replace(
     "{%scripts%}", "{%scripts%}\n<script>" + tabwatch.watch_js("Theia") + "</script>")
+icon.use_in_dash(app, "theia")   # browser-tab icon: core/icons/theia.png, else asphodel.png
 # Spectrum graphs that get the bottom-right coordinate readout
 READOUT_GRAPHS = ["viewer-graph", "preview-graph", "snippet-graph", "refview-graph", "sum-graph"]
 TAB_STYLE = {"padding": "8px 16px", "fontWeight": "600"}

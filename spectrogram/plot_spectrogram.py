@@ -92,7 +92,7 @@ def slice_freq(freq, power, freq_min, freq_max):
 
 _HERE       = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(1, os.path.dirname(_HERE))
-from core import paths, tabwatch
+from core import icon, paths, tabwatch
 PREFS_PATH  = paths.settings_file("spectrogram_prefs.json")
 DECAY_PATH  = os.path.join(_HERE, "decay_fit.py")
 
@@ -1198,6 +1198,7 @@ def build_landing_page():
 <html>
 <head>
 <meta charset="utf-8">
+{icon.LINK_TAG}
 <title>Asphodel — open spectrogram</title>
 <style>
   * {{ box-sizing: border-box; }}
@@ -1407,6 +1408,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
 <html>
 <head>
 <meta charset="utf-8">
+{icon.LINK_TAG}
 <title>{title_html}</title>
 <style>
   * {{ box-sizing: border-box; }}
@@ -2491,6 +2493,10 @@ def serve(html, state):
             q   = parse_qs(url.query)
             if url.path in ("/", "/spectrogram.html"):
                 self._send(200, STATE["html"], "text/html; charset=utf-8")
+
+            elif url.path == icon.ICON_URL:
+                # browser-tab icon: core/icons/spectrogram.png, else asphodel.png
+                self._send(200, icon.png_bytes("spectrogram"), "image/png")
 
             elif url.path == tabwatch.ALIVE_PATH:
                 # regular check from the page (its tab closes once this stops

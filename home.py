@@ -40,7 +40,7 @@ import time
 import webbrowser
 
 sys.path.insert(1, os.path.dirname(os.path.abspath(__file__)))
-from core import paths, physics, sync, tabwatch
+from core import icon, paths, physics, sync, tabwatch
 
 import dash
 from dash import dcc, html, Input, Output, State, ALL, ctx
@@ -815,6 +815,7 @@ app.index_string = app.index_string.replace("</head>", f"<style>{CSS}</style></h
 # tab and home page stop together: closing the home tab/window works like Quit
 app.index_string = app.index_string.replace(
     "{%scripts%}", "{%scripts%}\n<script>" + tabwatch.watch_js("Asphodel") + "</script>")
+icon.use_in_dash(app, "asphodel")          # browser-tab icon (core/icons/)
 app.layout = serve_layout
 
 
