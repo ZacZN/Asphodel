@@ -2121,6 +2121,9 @@ ISO_SETTING_INPUTS = [   # first key, second key (range) or None, label, width
 ]
 ISO_SETTING_KEYS = [k for k, k2, _, _ in ISO_SETTING_INPUTS for k in (k, k2) if k]
 
+# heading of a fold-away section (html.Details); the ▸/▾ marker is styled in _INPUT_CSS
+FOLD_SUMMARY = {"fontWeight": "700", "fontSize": "14px", "cursor": "pointer", "marginBottom": "4px"}
+
 isochronicity_tab = html.Div([
     html.Div([
         html.H5("Isochronicity Curve", style={"fontWeight": "700", "margin": "0 8px 0 0"}),
@@ -2128,26 +2131,29 @@ isochronicity_tab = html.Div([
     ], style={"display": "flex", "alignItems": "center", "marginBottom": "8px"}),
     html.Div([
         html.Div(id="iso-info", style={"fontSize": "13px", "marginBottom": "6px"}),
-        dash_table.DataTable(
-            id="iso-table", data=[], row_deletable=True, editable=False,
-            sort_action="native",
-            columns=[{"name": n, "id": c} for c, n in ISO_TABLE_COLUMNS],
-            style_header={**TABLE_HEADER, "whiteSpace": "normal", "height": "auto"},
-            style_cell={**TABLE_CELL, "fontSize": "12px"},
-            style_data_conditional=TABLE_ODD,
-            style_cell_conditional=[
-                {"if": {"column_id": c}, "textAlign": "left", "fontFamily": "inherit"}
-                for c in ("ion", "shape", "fixed", "source", "sent")] + [
-                {"if": {"column_id": "ion"}, "fontWeight": "600"},
-                {"if": {"column_id": "source"}, "color": "#666", "maxWidth": "360px",
-                 "overflow": "hidden", "textOverflow": "ellipsis"}],
-            tooltip_duration=None,
-            style_table={"overflowX": "auto"}),
+        # table folds away (closed when the page loads)
+        html.Details([
+            html.Summary("Isochronicity points", style=FOLD_SUMMARY),
+            dash_table.DataTable(
+                id="iso-table", data=[], row_deletable=True, editable=False,
+                sort_action="native",
+                columns=[{"name": n, "id": c} for c, n in ISO_TABLE_COLUMNS],
+                style_header={**TABLE_HEADER, "whiteSpace": "normal", "height": "auto"},
+                style_cell={**TABLE_CELL, "fontSize": "12px"},
+                style_data_conditional=TABLE_ODD,
+                style_cell_conditional=[
+                    {"if": {"column_id": c}, "textAlign": "left", "fontFamily": "inherit"}
+                    for c in ("ion", "shape", "fixed", "source", "sent")] + [
+                    {"if": {"column_id": "ion"}, "fontWeight": "600"},
+                    {"if": {"column_id": "source"}, "color": "#666", "maxWidth": "360px",
+                     "overflow": "hidden", "textOverflow": "ellipsis"}],
+                tooltip_duration=None,
+                style_table={"overflowX": "auto"}),
+        ], open=False, className="theia-fold"),
     ], className="theia-box", style={**BOX_STYLE, "padding": "8px 10px"}),
     # values for the isochronicity curve, calculated from the points above
-    html.Div([
-        html.Div("Isochronicity curve parameters", style={"fontWeight": "700", "fontSize": "14px",
-                                                          "marginBottom": "2px"}),
+    html.Details([
+        html.Summary("Isochronicity curve parameters", style=FOLD_SUMMARY),
         html.Small("T = 10⁹ · h / centre  ·  FWHM(T) = (FWHM / centre) · T · 1000  ·  "
                    "σ(T) = FWHM(T) / 2√(2 ln 2)  ·  err σ(T) = (± FWHM / FWHM) · FWHM(T) / "
                    "2√(2 ln 2)   (2√(2 ln 2) ≈ 2.3548)",
@@ -2165,7 +2171,8 @@ isochronicity_tab = html.Div([
             style_cell_conditional=[{"if": {"column_id": "ion"}, "textAlign": "left",
                                      "fontFamily": "inherit", "fontWeight": "600"}],
             style_table={"overflowX": "auto", "width": "fit-content", "maxWidth": "100%"}),
-    ], className="theia-box", style={**BOX_STYLE, "padding": "8px 10px", "marginTop": "10px"}),
+    ], open=False, className="theia-box theia-fold",
+       style={**BOX_STYLE, "padding": "8px 10px", "marginTop": "10px"}),
     # fit of the curve  σ_T(T) = sqrt( ((1/γ² − 1/γ_t²) · σp/p · T)² + σ_sys² )
     html.Div([
         html.Div([
@@ -2628,6 +2635,9 @@ _INPUT_CSS = """
    folder path is cut off in the middle of the box. */
 .dash-input-container { display: flex; align-items: center; }
 .dash-input-container > input.dash-input-element { flex: 1 1 auto; width: 100%; min-width: 0; }
+/* fold-away sections (html.Details): orange disclosure marker */
+.theia-fold > summary::marker { color: #f57d15; }
+.theia-fold > summary:hover { color: #f57d15; }
 """
 
 _HARM_CSS = """
