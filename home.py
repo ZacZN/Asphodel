@@ -40,7 +40,7 @@ import time
 import webbrowser
 
 sys.path.insert(1, os.path.dirname(os.path.abspath(__file__)))
-from core import icon, paths, physics, sync, tabwatch
+from core import browser, icon, paths, physics, sync, tabwatch
 
 import dash
 from dash import dcc, html, Input, Output, State, ALL, ctx
@@ -102,7 +102,7 @@ def start_tool(key, args=()):
     if not os.path.isfile(path):
         raise FileNotFoundError(f"{script} not found")
     if key == "theia" and _port_open(THEIA_PORT):
-        webbrowser.open(f"http://127.0.0.1:{THEIA_PORT}/")
+        browser.open_url(f"http://127.0.0.1:{THEIA_PORT}/")
         return f"Theia is already running – opened it in the browser."
     if single and running(key):
         return f"{name} is already running."
@@ -1197,9 +1197,13 @@ def _default_browser_commands():
 
 def open_in_new_window(url):
     """Open the home page in a new browser window (the tools' tabs then open
-    in that window too).  Uses the default browser's --new-window option;
-    falls back to Python's webbrowser if no known browser is found."""
+    in that window too).  With Firefox this is the suite's own Firefox
+    window (core/browser.py: own profile, asphodel icon in the dock);
+    otherwise the default browser's --new-window option, falling back to
+    Python's webbrowser if no known browser is found."""
     import shutil
+    if browser.firefox() and browser.open_url(url, new_window=True):
+        return
     for cmds in _default_browser_commands():
         for cmd in cmds:
             exe = shutil.which(cmd)

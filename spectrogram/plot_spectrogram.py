@@ -92,7 +92,7 @@ def slice_freq(freq, power, freq_min, freq_max):
 
 _HERE       = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(1, os.path.dirname(_HERE))
-from core import icon, paths, tabwatch
+from core import browser, icon, paths, tabwatch
 PREFS_PATH  = paths.settings_file("spectrogram_prefs.json")
 DECAY_PATH  = os.path.join(_HERE, "decay_fit.py")
 
@@ -2769,7 +2769,7 @@ def serve(html, state):
 
     url = f"http://127.0.0.1:{port}/spectrogram.html"
     print(f"Serving spectrogram GUI at {url}  (Ctrl-C to quit)")
-    webbrowser.open(url)
+    browser.open_url(url)        # suite's Firefox window, else default browser
 
     try:
         while not STOP.is_set():

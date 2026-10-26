@@ -51,7 +51,7 @@ Peak detection (no smoothing is ever applied to the data)
 import os
 import sys
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import icon, paths, physics, tabwatch
+from core import browser, icon, paths, physics, tabwatch
 from core.nubase_reader import (df_nubase, rect_restrict, diag_restrict, index_by_name, unpack_npz,
                                 get_base_dataframe)
 from core.physics import (delta_f, apply_correction, ion_base_name, build_hover_label, HL_UNITS,
@@ -8157,5 +8157,6 @@ if __name__ == "__main__":
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
     url = "http://127.0.0.1:8052/"
     print(f"Starting Theia at {url}")
-    threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    # in the suite's Firefox window (core/browser.py), else the default browser
+    threading.Timer(1.0, lambda: browser.open_url(url)).start()
     app.run(debug=False, host="127.0.0.1", port=8052)
