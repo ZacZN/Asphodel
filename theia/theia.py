@@ -90,6 +90,8 @@ CONFIRMED_DIR = paths.outputs("confirmed")
 VIEWER_CONFIG_PATH = paths.settings_file("viewer_config.json")
 ACCENT      = "#f57d15"
 ACCENT_PALE = "#fff4ec"
+# solid black frame round a plot (axis lines on all four sides)
+PLOT_BOX = dict(showline=True, mirror=True, linecolor="black", linewidth=1)
 
 
 # ===========================================================================
@@ -4276,6 +4278,8 @@ def show_sum(_, _load, _req, restore, files, align, ion_key, unsure, show_sims, 
                       margin=dict(l=60, r=20, t=50, b=40), showlegend=False,
                       # keeps the user's zoom while the fit traces are patched
                       uirevision=key)
+    fig.update_xaxes(**PLOT_BOX)
+    fig.update_yaxes(**PLOT_BOX)
     # annotations of the plot itself; the energy labels are added after these
     _SUM_ANNOTATIONS[key] = [a.to_plotly_json() for a in fig.layout.annotations]
     _SUM_SHAPES[key] = [sh.to_plotly_json() for sh in fig.layout.shapes]
@@ -5314,6 +5318,8 @@ def show_residuals(state, key):
                                  font=dict(size=13)),
                       xaxis_title="Frequency (Hz)", yaxis_title="data − fit", dragmode="pan",
                       showlegend=False, font=dict(size=12), uirevision=str(state.get("region")))
+    fig.update_xaxes(**PLOT_BOX)
+    fig.update_yaxes(**PLOT_BOX)
     return fig, {"height": "200px", "display": "block"}
 
 
