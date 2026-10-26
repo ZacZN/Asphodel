@@ -1400,6 +1400,10 @@ LIMIT_KEYS = ("centre_min", "centre_max", "fwhm_min", "fwhm_max")
 
 FIT_COLUMNS = [
     {"name": "peak", "id": "peak", "editable": False},
+    # ion name (e.g. 207Tl81+) and harmonic: needed to send the peak to the
+    # isochronicity curve
+    {"name": "ion", "id": "ion", "editable": True},
+    {"name": "h", "id": "harmonic", "type": "numeric", "editable": True},
     {"name": "shape", "id": "shape", "presentation": "dropdown", "editable": True},
     {"name": "centre (Hz)", "id": "centre", "type": "numeric", "editable": True},
     {"name": "± centre", "id": "d_centre", "editable": False},
@@ -1476,6 +1480,10 @@ INFO_TEXTS = {
         "peaks added from then on.",
         "χ²/ndf uses a noise σ per bin estimated from the summed spectrum; uncertainties are "
         "scaled by √(χ²/ndf).",
+        "'Send to isocurve' sends every fitted peak to the Isochronicity Curve tab.  Each peak "
+        "needs an ion name with its charge (e.g. 207Tl81+, m207Tl81+) and a harmonic: type them "
+        "in the ion / h columns, or you are asked for the missing ones (with nearby simulated "
+        "ions as suggestions).  Press Fit first.",
     ]),
     "energy": ("Energy calculation", [
         "Step 1 – calibration: click two peaks, give their NUBASE names (or click a suggested "
@@ -1488,6 +1496,16 @@ INFO_TEXTS = {
         "Step 2: click peaks in pairs A, B:  ΔE = E(B) − E(A) = k·(f_B − f_A).",
         "A linear keV-per-Hz calibration is only accurate for pairs close in frequency to the "
         "calibration peaks (ideally the same A/q).",
+    ]),
+    "iso": ("Isochronicity curve", [
+        "Points come from 'Send to isocurve' in the peak-fitting box of Aligning and fitting: "
+        "one row per ion and harmonic, with the fitted centre, FWHM, amplitude, area (± 1σ) and "
+        "the revolution frequency f_rev = centre / h.",
+        "They are saved in outputs/isocurve/isocurve_points.csv of the active experiment, so "
+        "they are kept between sessions.",
+        "Sending the same ion and harmonic again replaces its point (you are asked first).",
+        "Delete a row (×) to remove the point from the file.",
+        "'fixed' lists parameters held fixed in the fit (their uncertainty is 0).",
     ]),
     "params": ("Fit parameters", [
         "centre, amplitude (height above the background), FWHM and – for pseudo-Voigt – η "
@@ -1609,6 +1627,36 @@ pid_modal = html.Div([
 ], id="pid-modal",
    style={"display": "none", "position": "fixed", "inset": "0", "zIndex": "1000",
           "background": "rgba(0,0,0,0.35)", "alignItems": "center", "justifyContent": "center"})
+
+
+# "Send to isocurve": asks for the ion names / harmonics that are missing and
+# confirms replacing points already on the curve
+iso_modal = html.Div([
+    html.Div([
+        html.Div([
+            html.Span("Send to isochronicity curve", style={"fontWeight": "700", "fontSize": "15px"}),
+            html.Button("✕", id="iso-cancel-x", className="btn btn-outline-secondary btn-sm"),
+        ], style={"display": "flex", "justifyContent": "space-between", "alignItems": "center",
+                  "marginBottom": "8px"}),
+        html.Div(id="iso-modal-body", style={"fontSize": "13px"}),
+        html.Div([
+            html.Button("Cancel", id="iso-cancel", className="btn btn-outline-secondary btn-sm",
+                        style={"marginRight": "8px"}),
+            html.Button("Send", id="iso-confirm", className="btn btn-sm",
+                        style={"backgroundColor": ACCENT, "color": "white", "fontWeight": "600",
+                               "minWidth": "80px"}),
+        ], style={"display": "flex", "justifyContent": "flex-end", "marginTop": "10px"}),
+    ], className="theia-box",
+       style={"border": "1px solid #dddddd", "borderRadius": "6px", "background": "white",
+              "width": "720px", "maxWidth": "94vw", "maxHeight": "92vh", "overflowY": "auto",
+              "padding": "14px 16px", "boxShadow": "0 8px 30px rgba(0,0,0,0.3)"}),
+], id="iso-modal",
+   style={"display": "none", "position": "fixed", "inset": "0", "zIndex": "1000",
+          "background": "rgba(0,0,0,0.35)", "alignItems": "center", "justifyContent": "center"})
+ISO_MODAL_SHOWN = {"display": "flex", "position": "fixed", "inset": "0", "zIndex": "1000",
+                   "background": "rgba(0,0,0,0.35)", "alignItems": "center",
+                   "justifyContent": "center"}
+ISO_MODAL_HIDDEN = {**ISO_MODAL_SHOWN, "display": "none"}
 
 
 align_fit_tab = html.Div([
@@ -1822,9 +1870,15 @@ align_fit_tab = html.Div([
                             style={"backgroundColor": ACCENT, "color": "white",
                                    "marginRight": "8px", "minWidth": "70px"}),
                 html.Button("Clear peaks", id="btn-fit-clear",
-                            className="btn btn-outline-secondary btn-sm"),
+                            className="btn btn-outline-secondary btn-sm",
+                            style={"marginRight": "8px"}),
+                html.Button("Send to isocurve", id="btn-iso-send",
+                            className="btn btn-outline-secondary btn-sm",
+                            title="Send the fitted peaks (each needs an ion name and harmonic) "
+                                  "to the Isochronicity Curve tab"),
             ], style={"display": "flex", "alignItems": "center", "marginBottom": "6px"}),
             html.Div(id="fit-status", style={"fontSize": "12px"}),
+            html.Div(id="iso-send-status", style={"fontSize": "12px", "marginTop": "2px"}),
         ]),
             html.Div([
                 html.Div(["Fit parameters", info_button("params", {"marginLeft": "6px"}),
@@ -1860,7 +1914,10 @@ align_fit_tab = html.Div([
                         {"if": {"column_id": "eta", "filter_query": '{shape} != "pvoigt"'},
                          "color": "transparent", "backgroundColor": "#f2f2f2"}],
                     style_cell_conditional=[{"if": {"column_id": "shape"}, "textAlign": "left",
-                                             "minWidth": "88px", "width": "88px"}],
+                                             "minWidth": "88px", "width": "88px"},
+                                            {"if": {"column_id": "ion"}, "textAlign": "left",
+                                             "minWidth": "80px", "fontWeight": "600"},
+                                            {"if": {"column_id": "harmonic"}, "minWidth": "34px"}],
                     # Bootstrap's CSS hides the DataTable dropdown menu
                     # (.Select-menu-outer gets display:none), so force it on; and
                     # let the menu hang below the table instead of being clipped
@@ -1911,6 +1968,7 @@ align_fit_tab = html.Div([
         dcc.Store(id="fit-run", data=None),
         dcc.Store(id="fit-region-set", data=None),
         dcc.Store(id="fit-state", data=None),
+        dcc.Store(id="iso-names-apply", data=None),
         html.Div(id="_fit-mode-hook", style={"display": "none"}),
         html.Div(id="_sum-sims-hook", style={"display": "none"}),
 
@@ -1927,8 +1985,42 @@ align_fit_tab = html.Div([
 ], id="further-page-align", style={"padding": "14px 18px", "overflowY": "auto",
                                    "height": "calc(100vh - 82px)"})
 
+# Points sent from the peak fitting ("Send to isocurve"), one per ion and
+# harmonic, kept in outputs/isocurve/isocurve_points.csv
+ISO_TABLE_COLUMNS = [
+    ("ion", "ion"), ("harmonic", "h"), ("A", "A"), ("Z", "Z"), ("q", "q"),
+    ("centre_hz", "centre (Hz)"), ("d_centre_hz", "± centre"),
+    ("f_rev_hz", "f_rev (Hz)"), ("d_f_rev_hz", "± f_rev"),
+    ("fwhm_hz", "FWHM (Hz)"), ("d_fwhm_hz", "± FWHM"),
+    ("amp", "amplitude"), ("d_amp", "± amp"), ("area", "area"), ("d_area", "± area"),
+    ("shape", "shape"), ("eta", "η"), ("d_eta", "± η"), ("fixed", "fixed"),
+    ("chi2_ndf", "χ²/ndf"), ("source", "data source"), ("sent", "sent"),
+]
+
 isochronicity_tab = html.Div([
-    html.H5("Isochronicity Curve", style={"fontWeight": "700"}),
+    html.Div([
+        html.H5("Isochronicity Curve", style={"fontWeight": "700", "margin": "0 8px 0 0"}),
+        info_button("iso"),
+    ], style={"display": "flex", "alignItems": "center", "marginBottom": "8px"}),
+    html.Div([
+        html.Div(id="iso-info", style={"fontSize": "13px", "marginBottom": "6px"}),
+        dash_table.DataTable(
+            id="iso-table", data=[], row_deletable=True, editable=False,
+            sort_action="native",
+            columns=[{"name": n, "id": c} for c, n in ISO_TABLE_COLUMNS],
+            style_header={**TABLE_HEADER, "whiteSpace": "normal", "height": "auto"},
+            style_cell={**TABLE_CELL, "fontSize": "12px"},
+            style_data_conditional=TABLE_ODD,
+            style_cell_conditional=[
+                {"if": {"column_id": c}, "textAlign": "left", "fontFamily": "inherit"}
+                for c in ("ion", "shape", "fixed", "source", "sent")] + [
+                {"if": {"column_id": "ion"}, "fontWeight": "600"},
+                {"if": {"column_id": "source"}, "color": "#666", "maxWidth": "360px",
+                 "overflow": "hidden", "textOverflow": "ellipsis"}],
+            tooltip_duration=None,
+            style_table={"overflowX": "auto"}),
+    ], className="theia-box", style={**BOX_STYLE, "padding": "8px 10px"}),
+    dcc.Store(id="iso-version", data=0),
 ], id="further-page-iso", style={"padding": "14px 18px", "overflowY": "auto",
                                  "height": "calc(100vh - 82px)", "display": "none"})
 
@@ -2372,6 +2464,7 @@ _BASE_LAYOUT = html.Div([
     folder_browser,
     info_modal,
     pid_modal,
+    iso_modal,
     dcc.Store(id="further-restore", data=None),
     dcc.Store(id="sum-view", data=None),
     html.Div(id="_sum-view-hook", style={"display": "none"}),
@@ -4295,7 +4388,8 @@ def fit_table_rows(state):
             return "fixed" if key in fix else _fmt_num(e.get(key), fmt)
         area = _peak_area(pk["amp"], pk["fwhm"], pk.get("eta", 0.5), shape)
         rows.append({
-            "peak": i, "shape": shape,
+            "peak": i, "ion": pk.get("ion") or "", "harmonic": pk.get("harmonic"),
+            "shape": shape,
             "centre": round(pk["centre"], 2), "d_centre": err("centre", ".2f"),
             "amp": float(f"{pk['amp']:.6g}"), "d_amp": err("amp", ".3g"),
             "fwhm": round(pk["fwhm"], 2), "d_fwhm": err("fwhm", ".2f"),
@@ -4328,6 +4422,42 @@ def _num_or_none(v):
         return v if np.isfinite(v) else None
     except (TypeError, ValueError):
         return None
+
+
+def _harmonic_or_none(v):
+    """Harmonic typed in the table: a positive integer, else None."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return int(round(f)) if np.isfinite(f) and f >= 1 and abs(f - round(f)) < 1e-6 else None
+
+
+def _only_names_changed(state, table):
+    """True if the table differs from the state only in the ion / harmonic
+    columns (same rows, same values otherwise)."""
+    if not state or not state.get("peaks") or table is None:
+        return False
+    old = fit_table_rows(state)
+    if len(old) != len(table):
+        return False
+    skip = {"ion", "harmonic"}
+    for a, b in zip(old, table):
+        for k, v in a.items():
+            if k in skip:
+                continue
+            w = b.get(k)
+            if v == w:
+                continue
+            try:                                   # numbers may come back as str / float
+                if float(v) == float(w):
+                    continue
+            except (TypeError, ValueError):
+                pass
+            if (v in (None, "") and w in (None, "")):
+                continue
+            return False
+    return True
 
 
 def _fit_status(state):
@@ -4777,12 +4907,13 @@ app.clientside_callback(
     Input("fit-show-limits", "value"),
     Input("btn-fit-clear", "n_clicks"),
     Input("sum-key", "data"),
+    Input("iso-names-apply", "data"),
     State("fit-state", "data"),
     State("fit-table", "data"),
     prevent_initial_call=True,
 )
 def update_fit(click, dragged, run, _ts, active, shape, bg, b0, b1, bg_fix, region_set,
-               region_lo, region_hi, show_limits, _clear, key, state, table):
+               region_lo, region_hi, show_limits, _clear, key, names_apply, state, table):
     """Every change to the fit goes through here (one callback, because these
     outputs also feed its inputs): clicks add peaks, table / background edits
     change the curve by hand, Fit runs the least-squares fit."""
@@ -4854,6 +4985,22 @@ def update_fit(click, dragged, run, _ts, active, shape, bg, b0, b1, bg_fix, regi
                     state["peaks"][k]["fix"] = sorted(fix)
             elif trig.startswith("fit-bg-fix"):
                 state["bg_fix"] = list(bg_fix or [])
+            elif trig.startswith("iso-names-apply"):
+                # names / harmonics given in the "Send to isocurve" popup
+                ok = bool(names_apply) and names_apply.get("sum_key") == key
+                state["peaks"] = [dict(pk) for pk in state["peaks"]]
+                for k, nm in ((names_apply.get("names") or {}) if ok else {}).items():
+                    k = int(k)
+                    if 0 <= k < len(state["peaks"]):
+                        state["peaks"][k]["ion"] = nm["ion"]
+                        state["peaks"][k]["harmonic"] = nm["harmonic"]
+            elif trig.startswith("fit-table") and _only_names_changed(state, table):
+                # ion / harmonic typed in the table: keep the fit and its
+                # uncertainties (nothing else changed)
+                state["peaks"] = [dict(pk) for pk in state["peaks"]]
+                for pk, r in zip(state["peaks"], table):
+                    pk["ion"] = str(r.get("ion") or "").strip()
+                    pk["harmonic"] = _harmonic_or_none(r.get("harmonic"))
             elif trig.startswith("fit-table"):
                 # hand edits (or deleted rows): rebuild the peaks from the table
                 peaks = []
@@ -4868,6 +5015,8 @@ def update_fit(click, dragged, run, _ts, active, shape, bg, b0, b1, bg_fix, regi
                               "fwhm": abs(float(r["fwhm"])), "shape": shp,
                               "eta": float(eta) if eta not in (None, "") else old.get("eta", 0.5),
                               "fix": list(old.get("fix") or []),
+                              "ion": str(r.get("ion") or "").strip(),
+                              "harmonic": _harmonic_or_none(r.get("harmonic")),
                               "lim": {k: (_num_or_none(r[k]) if k in r
                                           else (old.get("lim") or {}).get(k))
                                       for k in LIMIT_KEYS}}
@@ -4983,6 +5132,353 @@ def show_further_page(page):
     base = {"padding": "14px 18px", "overflowY": "auto", "height": "calc(100vh - 82px)"}
     return ({**base, "display": "block" if page == "align" else "none"},
             {**base, "display": "block" if page == "iso" else "none"})
+
+
+# ---------------------------------------------------------------------------
+# Isochronicity curve: points sent from the peak fitting
+# ---------------------------------------------------------------------------
+# One row per (ion, harmonic) in outputs/isocurve/isocurve_points.csv of the
+# active experiment.  Sending the same ion and harmonic again replaces the row.
+
+ISO_POINTS_NAME = "isocurve_points.csv"
+ISO_FILE_COLUMNS = ["ion", "harmonic", "A", "Z", "q", "isomer",
+                    "centre_hz", "d_centre_hz", "f_rev_hz", "d_f_rev_hz",
+                    "fwhm_hz", "d_fwhm_hz", "amp", "d_amp", "area", "d_area",
+                    "shape", "eta", "d_eta", "fixed", "chi2_ndf", "ndf",
+                    "region_lo_hz", "region_hi_hz", "background", "source", "sent"]
+ION_NAME_RE = re.compile(r"\s*([a-z]?)(\d+)([A-Z][a-z]?)(\d+)\+\s*")
+
+
+def iso_points_path():
+    return os.path.join(paths.outputs("isocurve"), ISO_POINTS_NAME)
+
+
+def load_iso_points():
+    path = iso_points_path()
+    if not os.path.exists(path):
+        return pd.DataFrame(columns=ISO_FILE_COLUMNS)
+    df = pd.read_csv(path)
+    for c in ISO_FILE_COLUMNS:
+        if c not in df.columns:
+            df[c] = np.nan
+    return df
+
+
+def save_iso_points(df):
+    """Write the points file (via a temporary file, so a crash never leaves
+    half a file), sorted by f_rev."""
+    path = iso_points_path()
+    df = df.sort_values("f_rev_hz", kind="stable") if len(df) else df
+    tmp = path + ".tmp"
+    df.to_csv(tmp, index=False)
+    os.replace(tmp, path)
+
+
+def parse_ion_name(name):
+    """Ion name with charge ('207Tl81+', 'm207Tl81+'), checked against NUBASE.
+    Returns dict(ion, A, Z, q, iso) or raises ValueError."""
+    m = ION_NAME_RE.fullmatch(name or "")
+    if not m:
+        raise ValueError("give the ion with its charge, e.g. 207Tl81+ or m207Tl81+")
+    iso, A, sym, q = m.group(1), m.group(2), m.group(3), int(m.group(4))
+    r = lookup_mass_excess(f"{iso}{A}{sym}")
+    if not 1 <= q <= r["Z"]:
+        raise ValueError(f"charge {q}+ is not possible for {sym} (Z = {r['Z']})")
+    return dict(ion=f"{iso}{A}{sym}{q}+", A=r["A"], Z=r["Z"], q=q, iso=iso)
+
+
+def _check_peak_name(ion, harmonic):
+    """(parsed dict, None) if the ion name and harmonic are valid, else
+    (None, reason)."""
+    if not (ion or "").strip():
+        return None, "no ion name"
+    try:
+        r = parse_ion_name(ion)
+    except ValueError as exc:
+        return None, str(exc)
+    h = _harmonic_or_none(harmonic)
+    if h is None:
+        return None, "no harmonic (a whole number ≥ 1)"
+    return dict(r, harmonic=h), None
+
+
+def _iso_source(key, files, align, ion_key):
+    """Short description of the spectrum the fit was made on."""
+    meta = _SUM_META.get(key) or {}
+    if meta.get("source") == "file":
+        return f"file {os.path.join(meta.get('dir') or '', meta.get('name') or '')}"
+    names = [os.path.basename(f.get("path", f) if isinstance(f, dict) else str(f))
+             for f in (files or [])]
+    how = {"none": "not aligned", "strongest": "aligned on strongest peak"}.get(align)
+    if align == "identified" and ion_key:
+        ion, harm = str(ion_key).rsplit("|", 1)
+        how = f"aligned on {ion} h={harm}"
+    return f"sum of {', '.join(names) or 'confirmation files'} ({how or align})"
+
+
+def iso_points_from_fit(state, named, source):
+    """One point per fitted peak.  named: peak index -> parsed name dict."""
+    unc = (state.get("unc") or {}).get("peaks") or [{} for _ in state["peaks"]]
+    shapes = _shapes(state)
+    now = datetime.datetime.now().isoformat(timespec="seconds")
+    rows = []
+    for i, (pk, e, shape) in enumerate(zip(state["peaks"], unc, shapes)):
+        nm = named[i]
+        fix = set(pk.get("fix") or [])
+
+        def u(k):
+            v = e.get(k)
+            return 0.0 if k in fix else (float(v) if v is not None else np.nan)
+        h = nm["harmonic"]
+        pv = shape == "pvoigt"
+        rows.append({
+            "ion": nm["ion"], "harmonic": h, "A": nm["A"], "Z": nm["Z"], "q": nm["q"],
+            "isomer": nm["iso"] or "",
+            "centre_hz": pk["centre"], "d_centre_hz": u("centre"),
+            "f_rev_hz": pk["centre"] / h, "d_f_rev_hz": u("centre") / h,
+            "fwhm_hz": pk["fwhm"], "d_fwhm_hz": u("fwhm"),
+            "amp": pk["amp"], "d_amp": u("amp"),
+            "area": _peak_area(pk["amp"], pk["fwhm"], pk.get("eta", 0.5), shape),
+            "d_area": float(e.get("area")) if e.get("area") is not None else np.nan,
+            "shape": shape, "eta": pk.get("eta", 0.5) if pv else np.nan,
+            "d_eta": u("eta") if pv else np.nan,
+            "fixed": " ".join(sorted(k for k in fix if k != "eta" or pv)),
+            "chi2_ndf": state.get("chi2"), "ndf": state.get("ndf"),
+            "region_lo_hz": state["region"][0], "region_hi_hz": state["region"][1],
+            "background": state.get("bg"), "source": source, "sent": now,
+        })
+    return pd.DataFrame(rows, columns=ISO_FILE_COLUMNS)
+
+
+def _iso_modal_body(state, key, missing, typed, errors, replaces):
+    """Popup content: an input row (name, harmonic, suggestions) for each peak
+    without a valid name, and the points that would be replaced."""
+    out = []
+    if missing:
+        out.append(html.Div("Each peak sent to the isochronicity curve needs an ion name with "
+                            "its charge (e.g. 207Tl81+ or m207Tl81+) and a harmonic.  Click a "
+                            "suggestion (nearby simulated ions) or type them.",
+                            style={"marginBottom": "8px"}))
+        th = {**CALIB_TH}
+        rows = []
+        for i in missing:
+            pk = state["peaks"][i]
+            name, h = typed.get(i, (pk.get("ion") or "", pk.get("harmonic")))
+            sugg = suggest_ions(key, pk["centre"], n=5)
+            chips = [html.Button(f"{ion} h{hh} ({d:+.0f} Hz)",
+                                 id={"type": "iso-sugg", "peak": i, "name": ion, "h": hh},
+                                 n_clicks=0, className="btn btn-outline-secondary btn-sm",
+                                 style={"margin": "0 4px 4px 0", "fontSize": "12px",
+                                        "padding": "1px 6px"})
+                     for ion, hh, d in sugg]
+            err = errors.get(i)
+            rows.append(html.Tr([
+                html.Td(f"{i + 1}", style={**CALIB_TD, "fontWeight": "700", "color": ACCENT}),
+                html.Td(f"{pk['centre']:,.1f}", style={**CALIB_TD, "fontFamily": "monospace"}),
+                html.Td([
+                    html.Div([
+                        dcc.Input(id={"type": "iso-name", "peak": i}, type="text", value=name,
+                                  placeholder="e.g. 207Tl81+", debounce=False,
+                                  className="form-control form-control-sm",
+                                  style={"width": "150px", "marginRight": "6px"}),
+                        html.Span("h", style={"marginRight": "4px"}),
+                        dcc.Input(id={"type": "iso-h", "peak": i}, type="number", value=h,
+                                  min=1, step=1, debounce=False,
+                                  className="form-control form-control-sm",
+                                  style={"width": "70px"}),
+                    ], style={"display": "flex", "alignItems": "center"}),
+                    html.Div(f"✗ {err}", style={"color": "#c0392b", "fontSize": "12px",
+                                                "marginTop": "3px"}) if err else None,
+                ], style=CALIB_TD),
+                html.Td(chips or html.Span("no simulated ions nearby",
+                                           style={"color": "#888", "fontSize": "12px"}),
+                        style=CALIB_TD),
+            ]))
+        out.append(html.Table([
+            html.Thead(html.Tr([html.Th(t, style=th) for t in
+                                ("Peak", "Centre (Hz)", "Ion and harmonic", "Suggestions")])),
+            html.Tbody(rows)],
+            style={"borderCollapse": "collapse", "border": CALIB_BORDER, "width": "100%"}))
+    if replaces:
+        out.append(html.Div([
+            html.B("Already on the curve, will be replaced: ", style={"color": ACCENT}),
+            ", ".join(replaces)], style={"marginTop": "10px"}))
+    return out
+
+
+@app.callback(
+    Output("iso-modal", "style"),
+    Output("iso-modal-body", "children"),
+    Output("iso-send-status", "children"),
+    Output("iso-names-apply", "data"),
+    Output("iso-version", "data"),
+    Input("btn-iso-send", "n_clicks"),
+    Input("iso-confirm", "n_clicks"),
+    Input("iso-cancel", "n_clicks"),
+    Input("iso-cancel-x", "n_clicks"),
+    State({"type": "iso-name", "peak": ALL}, "value"),
+    State({"type": "iso-name", "peak": ALL}, "id"),
+    State({"type": "iso-h", "peak": ALL}, "value"),
+    State({"type": "iso-h", "peak": ALL}, "id"),
+    State("fit-state", "data"),
+    State("sum-key", "data"),
+    State("further-files", "data"),
+    State("sum-align", "value"),
+    State("sum-ion", "value"),
+    State("iso-version", "data"),
+    prevent_initial_call=True,
+)
+def send_to_isocurve(_send, _confirm, _cancel, _x, name_vals, name_ids, h_vals, h_ids,
+                     state, key, files, align, ion_key, version):
+    """'Send to isocurve': every fitted peak needs a valid ion name and
+    harmonic.  Missing ones (and replacing existing points) go through the
+    popup; otherwise the points are written straight away."""
+    trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
+    nu = dash.no_update
+    if trig.startswith("iso-cancel"):
+        return ISO_MODAL_HIDDEN, nu, "", nu, nu
+
+    def fail(msg):
+        return ISO_MODAL_HIDDEN, nu, html.Span(msg, style={"color": "#c0392b"}), nu, nu
+    if not state or not state.get("peaks"):
+        return fail("No peaks to send: add peaks and press Fit first.")
+    if not state.get("fitted"):
+        return fail("The peaks are not fitted (values changed since the last Fit): "
+                    "press Fit first.")
+
+    # names typed in the popup (only present when it is open)
+    typed = {}
+    if trig.startswith("iso-confirm"):
+        hs = {d["peak"]: v for d, v in zip(h_ids or [], h_vals or [])}
+        for d, v in zip(name_ids or [], name_vals or []):
+            typed[d["peak"]] = ((v or "").strip(), hs.get(d["peak"]))
+
+    named, errors = {}, {}
+    for i, pk in enumerate(state["peaks"]):
+        ion, h = typed.get(i, (pk.get("ion") or "", pk.get("harmonic")))
+        r, err = _check_peak_name(ion, h)
+        if r is None:
+            errors[i] = err
+        else:
+            named[i] = r
+    keys = [(r["ion"], r["harmonic"]) for r in named.values()]
+    dup = sorted({f"{a} h{b}" for a, b in keys if keys.count((a, b)) > 1})
+    try:
+        old = load_iso_points()
+    except Exception as exc:
+        traceback.print_exc()
+        return fail(f"Could not read {iso_points_path()}: {exc}")
+    have = set(zip(old["ion"].astype(str), pd.to_numeric(old["harmonic"]).astype("Int64")))
+    replaces = sorted({f"{a} h{b}" for a, b in keys if (a, b) in have})
+
+    missing = sorted(set(errors) | set(typed))
+    if errors or dup or (replaces and not trig.startswith("iso-confirm")):
+        # on the first press a plain "no ion name" needs no error text
+        shown = errors if trig.startswith("iso-confirm") else {
+            i: e for i, e in errors.items() if e != "no ion name"}
+        body = _iso_modal_body(state, key, missing, typed, shown, replaces)
+        if dup:
+            body.append(html.Div(f"✗ The same ion and harmonic is given to more than one peak: "
+                                 f"{', '.join(dup)}", style={"color": "#c0392b",
+                                                             "marginTop": "8px"}))
+        return ISO_MODAL_SHOWN, body, "", nu, nu
+
+    # all named: write the points (replacing the same ion + harmonic)
+    new = iso_points_from_fit(state, named, _iso_source(key, files, align, ion_key))
+    if len(old):
+        drop = set(zip(new["ion"], new["harmonic"].astype(int)))
+        old_keys = list(zip(old["ion"].astype(str), pd.to_numeric(old["harmonic"]).astype(int)))
+        old = old[[k not in drop for k in old_keys]]
+        out = pd.concat([old, new], ignore_index=True)
+    else:
+        out = new
+    try:
+        save_iso_points(out)
+    except Exception as exc:
+        traceback.print_exc()
+        return fail(f"Could not write {iso_points_path()}: {exc}")
+    sent = ", ".join(f"{r['ion']} h{r['harmonic']}" for r in named.values())
+    msg = html.Span([html.B("Sent to isocurve: ", style={"color": "#2e7d32"}), sent]
+                    + ([f"  (replaced {', '.join(replaces)})"] if replaces else []))
+    apply = {"sum_key": key, "t": time.time(),
+             "names": {str(i): {"ion": r["ion"], "harmonic": r["harmonic"]}
+                       for i, r in named.items()}}
+    return ISO_MODAL_HIDDEN, [], msg, apply, (version or 0) + 1
+
+
+@app.callback(
+    Output({"type": "iso-name", "peak": ALL}, "value"),
+    Output({"type": "iso-h", "peak": ALL}, "value"),
+    Input({"type": "iso-sugg", "peak": ALL, "name": ALL, "h": ALL}, "n_clicks"),
+    State({"type": "iso-name", "peak": ALL}, "value"),
+    State({"type": "iso-name", "peak": ALL}, "id"),
+    State({"type": "iso-h", "peak": ALL}, "value"),
+    prevent_initial_call=True,
+)
+def pick_iso_suggestion(_clicks, names, ids, hs):
+    """A suggestion in the popup fills that peak's name and harmonic."""
+    trig = dash.callback_context.triggered[0] if dash.callback_context.triggered else None
+    if not trig or not trig["value"] or '"iso-sugg"' not in trig["prop_id"]:
+        raise PreventUpdate
+    idd = json.loads(trig["prop_id"].rsplit(".", 1)[0])
+    names, hs = list(names), list(hs)
+    for j, d in enumerate(ids):
+        if d["peak"] == idd["peak"]:
+            names[j], hs[j] = idd["name"], int(idd["h"])
+    return names, hs
+
+
+def _iso_cell(v, fmt):
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return "" if v is None or (isinstance(v, float) and np.isnan(v)) else str(v)
+    return "–" if not np.isfinite(f) else format(f, fmt)
+
+
+ISO_FORMATS = {"centre_hz": ",.2f", "d_centre_hz": ".2f", "f_rev_hz": ",.4f",
+               "d_f_rev_hz": ".4f", "fwhm_hz": ".2f", "d_fwhm_hz": ".2f", "amp": ".5g",
+               "d_amp": ".3g", "area": ".5g", "d_area": ".3g", "eta": ".3f", "d_eta": ".3f",
+               "chi2_ndf": ".3g", "harmonic": ".0f", "A": ".0f", "Z": ".0f", "q": ".0f"}
+
+
+@app.callback(
+    Output("iso-table", "data"),
+    Output("iso-table", "tooltip_data"),
+    Output("iso-info", "children"),
+    Input("iso-version", "data"),
+    Input("further-subtabs", "value"),
+    Input("iso-table", "data_timestamp"),
+    State("iso-table", "data"),
+)
+def show_iso_points(_version, page, _ts, table):
+    """Table of the points on the curve.  Deleting a row removes the point
+    from the file."""
+    trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
+    path = iso_points_path()
+    try:
+        df = load_iso_points()
+        if trig.startswith("iso-table") and table is not None:
+            keep = {(r["ion"], int(float(r["harmonic"]))) for r in table}
+            keys = list(zip(df["ion"].astype(str), pd.to_numeric(df["harmonic"]).astype(int)))
+            df = df[[k in keep for k in keys]]
+            save_iso_points(df)
+    except Exception as exc:
+        traceback.print_exc()
+        return [], [], html.Span(f"Could not read/write {path}: {exc}", style={"color": "#c0392b"})
+    if len(df):
+        df = df.sort_values("f_rev_hz", kind="stable")
+    rows = [{c: _iso_cell(r.get(c), ISO_FORMATS[c]) if c in ISO_FORMATS
+             else ("" if pd.isna(r.get(c)) else str(r.get(c)))
+             for c, _ in ISO_TABLE_COLUMNS} for r in df.to_dict("records")]
+    tips = [{"source": {"value": row["source"], "type": "text"}} for row in rows]
+    info = [html.B(f"{len(rows)} point(s)"), "  ·  ",
+            html.Span(path, style={"fontFamily": "monospace", "fontSize": "12px",
+                                   "color": "#666"})]
+    if not rows:
+        info.append(html.Div("No points yet: fit peaks in Aligning and fitting and press "
+                             "'Send to isocurve'.", style={"color": "#888", "marginTop": "4px"}))
+    return rows, tips, info
 
 
 # ---------------------------------------------------------------------------

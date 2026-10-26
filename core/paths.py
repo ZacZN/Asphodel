@@ -33,7 +33,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_ROOT = os.path.join(REPO_ROOT, "data")
 SUITE_SETTINGS = os.path.join(DATA_ROOT, "asphodel_settings.json")
 
-OUTPUT_KINDS = ("scans", "confirmed", "fits", "figures")
+OUTPUT_KINDS = ("scans", "confirmed", "fits", "figures", "isocurve")
 
 
 # --------------------------------------------------------------------------- experiments (profiles)
@@ -191,7 +191,7 @@ def rionid(exp=None):
 
 
 def outputs(kind, exp=None):
-    """outputs/<kind> folder (scans, confirmed, fits or figures), created if missing."""
+    """outputs/<kind> folder (scans, confirmed, fits, figures or isocurve), created if missing."""
     if kind not in OUTPUT_KINDS:
         raise ValueError(f"Unknown output kind {kind!r}; expected one of {OUTPUT_KINDS}")
     d = os.path.join(experiment_dir(exp), "outputs", kind)
