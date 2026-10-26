@@ -624,7 +624,8 @@ def sidebar():
     nub = os.path.join(paths.REPO_ROOT, "core", "nubase_4.mas20")
     return html.Aside([
         html.H3("Data sources"), *srcs,
-        html.H3("Shared physics"), physics_panel(),
+        html.Details([html.Summary("Shared physics"), physics_panel()],
+                     open=False, className="fold"),
         html.H3("Reference data"),
         html.Div([html.B("NUBASE"), html.Code("core/nubase_4.mas20"),
                   html.Div(_mtime(nub))], className="src"),
@@ -748,6 +749,12 @@ header .spacer{{flex:1}}
 aside{{width:330px;min-width:330px;background:var(--side);border-right:1px solid var(--line);padding:14px 16px}}
 aside h3{{font-size:12px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin:18px 0 8px}}
 aside h3:first-child{{margin-top:0}}
+details.fold{{margin:18px 0 8px}}
+details.fold>summary{{font-size:12px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);font-weight:700;cursor:pointer;list-style:none;margin-bottom:8px}}
+details.fold>summary::-webkit-details-marker{{display:none}}
+details.fold>summary::before{{content:"\\25B8";display:inline-block;width:12px;color:var(--accent);transition:transform .15s}}
+details.fold[open]>summary::before{{transform:rotate(90deg)}}
+details.fold>summary:hover{{color:var(--accent)}}
 .src{{background:#fff;border:1px solid var(--line);border-radius:5px;padding:7px 9px;margin-bottom:6px;font-size:12px}}
 .src b{{display:block;font-size:13px}} .src code{{color:var(--muted);font-size:11px;word-break:break-all;display:block}}
 .kv{{display:grid;grid-template-columns:auto 1fr;gap:4px 8px;font-size:12px;align-items:center}}
