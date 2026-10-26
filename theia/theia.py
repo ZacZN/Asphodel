@@ -2544,23 +2544,27 @@ viewer_tab = html.Div([
         html.Div([
             html.H6("Calculated Frequencies overlayed with data",
                     style={"fontWeight": "600", "marginBottom": "6px"}),
-            dcc.Graph(id="viewer-graph", style={"flex": "1 1 auto", "minHeight": "0"},
-                      responsive=True,
-                      config={"scrollZoom": True, "displayModeBar": True, "displaylogo": False}),
+            html.Div([
+                dcc.Graph(id="viewer-graph", style={"height": "100%"}, responsive=True,
+                          config={"scrollZoom": True, "displayModeBar": True,
+                                  "displaylogo": False}),
+                # show/hide all lines (grey and highlighted) of each harmonic;
+                # placed in the plot just under the legend by the clientside
+                # callback v-harm-place (hidden until placed)
+                html.Div([
+                    html.Div("Harmonics", style={"fontSize": "15px", "marginBottom": "4px",
+                                                 "color": "#2a3f5f"}),
+                    dcc.Checklist(id="v-harm-toggle", options=_V_HARM_OPTS, value=_V_HARM_ON,
+                                  className="harm-toggle", inputStyle={"display": "none"}),
+                ], id="v-harm-overlay", title="Click to show or hide all simulated lines of a harmonic",
+                   style={"position": "absolute", "top": "0", "left": "0", "zIndex": "10",
+                          "visibility": "hidden"}),
+            ], style={"position": "relative", "flex": "1 1 auto", "minHeight": "0"}),
+            html.Div(id="_v-harm-hook", style={"display": "none"}),
         ], className="theia-box",
-           style={**BOX_STYLE, "height": "100%", "display": "flex", "flexDirection": "column",
-                  "flex": "1 1 auto", "minWidth": "0"}),
-        # show/hide all lines (grey and highlighted) of each harmonic
-        html.Div([
-            html.H6("Harmonics", style={"fontWeight": "600", "marginBottom": "6px"}),
-            dcc.Checklist(id="v-harm-toggle", options=_V_HARM_OPTS, value=_V_HARM_ON,
-                          className="harm-toggle", inputStyle={"display": "none"}),
-            html.Small("Click to show or hide all simulated lines of a harmonic.",
-                       style=HELP_STYLE),
-        ], className="theia-box",
-           style={**BOX_STYLE, "width": "130px", "flex": "0 0 auto", "alignSelf": "flex-start"}),
+           style={**BOX_STYLE, "height": "100%", "display": "flex", "flexDirection": "column"}),
     ], style={"flex": "1", "minWidth": "0", "height": "calc(100vh - 42px)",
-              "padding": "10px 14px", "display": "flex", "columnGap": "10px"}),
+              "padding": "10px 14px"}),
     html.Div(id="_viewer-saved", style={"display": "none"}),
 ], style={"display": "flex"})
 
@@ -2606,8 +2610,8 @@ _FIT_CSS = """
 
 _HARM_CSS = """
 /* Viewer harmonic toggles: checklist labels drawn as on/off buttons */
-.harm-toggle label { display: block; border: 1px solid #6c757d; border-radius: 4px;
-    padding: 3px 8px; margin-bottom: 5px; font-size: 13px; text-align: center;
+.harm-toggle label { display: inline-block; border: 1px solid #6c757d; border-radius: 4px;
+    padding: 2px 8px; margin: 0 5px 5px 0; font-size: 13px; text-align: center;
     cursor: pointer; user-select: none; color: #6c757d; background: #ffffff; }
 .harm-toggle label:hover { border-color: #f57d15; }
 .harm-toggle label:has(input:checked) { background: #f57d15; border-color: #f57d15;
@@ -3053,6 +3057,45 @@ def v_harmonic_toggles(text, old_opts, old_on):
     before = {o["value"] for o in (old_opts or [])}
     on = set(old_on or [])
     return opts, [h for h in hs if h in on or h not in before]
+
+
+# Put the harmonic toggles inside the plot, just under the legend; moved
+# again after every redraw (legend length changes) and on window resize.
+app.clientside_callback(
+    """
+    function(fig) {
+        var tries = 0;
+        function setup() {
+            var gd = document.querySelector('#viewer-graph .js-plotly-plot');
+            var ov = document.getElementById('v-harm-overlay');
+            if (!gd || !ov || typeof gd.on !== 'function') {
+                if (tries++ < 50) { setTimeout(setup, 100); }
+                return;
+            }
+            function place() {
+                var lg = gd.querySelector('.legend');
+                if (!lg) { ov.style.visibility = 'hidden'; return; }
+                var r = lg.getBoundingClientRect();
+                var w = ov.parentElement.getBoundingClientRect();
+                ov.style.left = (r.left - w.left + 10) + 'px';
+                ov.style.top = (r.bottom - w.top + 6) + 'px';
+                ov.style.maxWidth = Math.max(r.width - 10, 120) + 'px';
+                ov.style.visibility = 'visible';
+            }
+            if (!gd._harmHook) {
+                gd._harmHook = true;
+                gd.on('plotly_afterplot', place);
+                window.addEventListener('resize', function() { setTimeout(place, 100); });
+            }
+            setTimeout(place, 0);
+        }
+        setup();
+        return '';
+    }
+    """,
+    Output("_v-harm-hook", "children"),
+    Input("viewer-graph", "figure"),
+)
 
 
 @app.callback(Output("viewer-graph", "figure"), Output("v-error-box", "children"), *_V_INPUTS,
