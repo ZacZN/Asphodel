@@ -2304,10 +2304,13 @@ def v_parse_highlight_ions(s):
 
 def v_ion_matches_highlight(ion_name, highlight_list):
     """An entry with '+' must match the full ion name; without it, it matches
-    every charge state of that isotope ('204Hg' matches '204Hg79+')."""
-    base = ion_base_name(ion_name)
+    every charge state of that isotope ('204Hg' matches '204Hg79+').
+    Case-insensitive, so '205tl' and '205TL81+' work too."""
+    name = ion_name.lower()
+    base = ion_base_name(ion_name).lower()
     for h in highlight_list:
-        if ("+" in h and ion_name == h) or ("+" not in h and base == h):
+        h = h.lower()
+        if ("+" in h and name == h) or ("+" not in h and base == h):
             return True
     return False
 
@@ -2531,7 +2534,7 @@ viewer_sidebar = html.Div([
        style={"display": "block" if VCFG["correction_enabled"] else "none"}),
     *section("Highlight ions"),
     v_input("Ion names (comma-separated)", "highlight_ions", placeholder="e.g. 204Hg, 208Tl79+",
-            help="Omit charge state to highlight all charge states"),
+            help="Omit charge state to highlight all charge states (upper or lower case)"),
     html.Hr(style={"margin": "10px 0"}),
     html.Div(id="v-error-box", style={"color": "#c0392b", "fontSize": "12px",
                                       "whiteSpace": "pre-wrap"}),
