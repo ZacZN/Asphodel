@@ -100,6 +100,35 @@ from scipy.optimize import curve_fit
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core import paths
 
+# Set by plot_spectrogram.py when it starts a fit: this file is created once
+# the fit window has been drawn, so the page can tell "window open" from a
+# fit that crashed or never showed a window.
+READY_FILE = os.environ.get("ASPHODEL_READY_FILE")
+_NON_GUI_BACKENDS = {"agg", "cairo", "pdf", "pgf", "ps", "svg", "template"}
+
+
+def show_window():
+    """plt.show(), reporting to the spectrogram page once the window is drawn."""
+    if READY_FILE:
+        backend = plt.get_backend().lower()
+        if backend in _NON_GUI_BACKENDS:
+            sys.exit(f"Error: matplotlib has no GUI backend (it is using '{backend}'), "
+                     "so the fit window cannot open.")
+        cids = []
+
+        def _drawn(_evt):
+            try:
+                open(READY_FILE, "w").close()
+            except OSError:
+                pass
+            for f, c in cids:
+                f.canvas.mpl_disconnect(c)
+
+        for n in plt.get_fignums():
+            f = plt.figure(n)
+            cids.append((f, f.canvas.mpl_connect("draw_event", _drawn)))
+    plt.show()
+
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -1060,7 +1089,7 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
     fig.canvas.mpl_connect("resize_event", relayout_boxes)
     if record is not None:
         add_save_button(fig, record)
-    plt.show()
+    show_window()
 
     # Console summary
     print(f"\n{'─'*55}")
@@ -1348,7 +1377,7 @@ def plot_joint(args, tP, IP, tD, ID, sigmaP, sigmaD, vals, errs,
     fig.tight_layout()
     if record is not None:
         add_save_button(fig, record)
-    plt.show()
+    show_window()
 
     # Console summary
     print(f"\n{'─'*60}")

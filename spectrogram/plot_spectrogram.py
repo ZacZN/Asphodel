@@ -2121,8 +2121,9 @@ async function runDecayFit() {{
     }});
     var data = await r.json();
     if (r.ok) {{
-      status.textContent = '✓ Launched';
-      status.style.color = '#4ade80';
+      status.textContent = 'Fitting…';
+      status.title = '';
+      _watchDecayFit(data.id, status);
     }} else {{
       status.textContent = '✗ ' + (data.error || 'Error');
       status.style.color = '#f87171';
@@ -2131,6 +2132,33 @@ async function runDecayFit() {{
     status.textContent = '✗ ' + e.message;
     status.style.color = '#f87171';
   }}
+}}
+
+// Follow a started fit until its window is drawn, or report why it died
+var _decayWatch = 0;
+function _watchDecayFit(id, status) {{
+  var token = ++_decayWatch, t0 = Date.now();
+  function done(text, color, tip) {{
+    status.textContent = text; status.style.color = color; status.title = tip || '';
+  }}
+  async function poll() {{
+    if (token !== _decayWatch) return;            // a newer fit took over the status
+    try {{
+      var r = await fetch('/decay-fit-status?id=' + encodeURIComponent(id));
+      var d = await r.json();
+      if (!r.ok) return done('✗ ' + (d.error || 'Error'), '#f87171');
+      if (d.state === 'shown') return done('✓ Fit window open', '#4ade80');
+      if (d.state === 'failed') {{
+        var msg = d.message || '';
+        if (msg.length > 140) msg = msg.slice(0, 137) + '…';   // full log in the tooltip
+        return done('✗ Decay fit ' + (d.reason || 'failed') + (msg ? ': ' + msg : ''),
+                    '#f87171', d.log || '');
+      }}
+      if (Date.now() - t0 > 600000) return done('Still fitting after 10 min…', '#fbbf24');
+      setTimeout(poll, 500);
+    }} catch (e) {{ done('✗ ' + e.message, '#f87171'); }}
+  }}
+  poll();
 }}
 
 // 3-D style radio buttons: bars / surface (saved as the "bars3d" pref)
@@ -2468,6 +2496,34 @@ def serve(html, state):
     TABS  = tabwatch.TabTracker(on_last_closed=STOP.set, name="plot_spectrogram.py")
     STATE["html"] = html
 
+    # decay fits started from the page: id -> {proc, ready file, stderr file}
+    import tempfile, itertools, shutil
+    FIT_DIR  = tempfile.mkdtemp(prefix="asphodel_decayfit_")
+    FITS     = {}
+    _fit_ids = itertools.count(1)
+
+    def _fit_error(fit):
+        """Short reason why a decay fit ended without its window."""
+        try:
+            with open(fit["err"], errors="replace") as fh:
+                lines = [l.strip() for l in fh if l.strip()]
+        except OSError:
+            lines = []
+        rc = fit["proc"].returncode
+        if rc < 0:
+            import signal as _signal
+            try:
+                why = f"killed by {_signal.Signals(-rc).name}"
+            except ValueError:
+                why = f"killed by signal {-rc}"
+        else:
+            why = f"exit code {rc}" if rc else "ended without opening a window"
+        # prefer the last error-looking line (traceback end, Qt message, sys.exit text)
+        msg = next((l for l in reversed(lines)
+                    if any(k in l for k in ("Error", "error", "failed", "Could not", "Aborted"))),
+                   lines[-1] if lines else "")
+        return {"reason": why, "message": msg, "log": "\n".join(lines[-15:])}
+
     with socket.socket() as _s:
         _s.bind(("127.0.0.1", 0))
         port = _s.getsockname()[1]
@@ -2513,6 +2569,18 @@ def serve(html, state):
                 self._send(200, {"mode": read_prefs().get("decayRegion") or "sliders",
                                  "box": rb if isinstance(rb, list) and len(rb) == 4 else None,
                                  "title": view.get("decayTitle") or ""})
+
+            elif url.path == "/decay-fit-status":
+                # state of a fit started by /run-decay-fit: running (still fitting),
+                # shown (its window was drawn), crashed / no-window (+ reason)
+                fit = FITS.get(q.get("id", [""])[0])
+                if fit is None:
+                    return self._send(404, {"error": "unknown fit"})
+                if os.path.exists(fit["ready"]):
+                    return self._send(200, {"state": "shown"})
+                if fit["proc"].poll() is None:
+                    return self._send(200, {"state": "running"})
+                self._send(200, {"state": "failed", **_fit_error(fit)})
 
             elif url.path == "/get-pref":
                 key = q.get("key", [""])[0]
@@ -2637,8 +2705,16 @@ def serve(html, state):
                         cmd += ["--title-full", str(body["titleFull"])]
                     elif body.get("title"):
                         cmd += ["--title", str(body["title"])]
-                    _subprocess.Popen(cmd)
-                    self._send(200, {"status": "launched"})
+                    fid   = str(next(_fit_ids))
+                    ready = os.path.join(FIT_DIR, f"fit{fid}.ready")
+                    err   = os.path.join(FIT_DIR, f"fit{fid}.err")
+                    env   = dict(os.environ, ASPHODEL_READY_FILE=ready)
+                    # stderr to a file (read back if the fit dies); stdout stays
+                    # on the terminal as before
+                    with open(err, "wb") as errfh:
+                        proc = _subprocess.Popen(cmd, env=env, stderr=errfh)
+                    FITS[fid] = {"proc": proc, "ready": ready, "err": err}
+                    self._send(200, {"status": "launched", "id": fid})
                 except Exception as exc:
                     self._send(500, {"error": str(exc)})
 
@@ -2779,6 +2855,7 @@ def serve(html, state):
     except KeyboardInterrupt:
         pass
     _srv.shutdown()
+    shutil.rmtree(FIT_DIR, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------

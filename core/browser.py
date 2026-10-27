@@ -102,17 +102,50 @@ def open_url(url, new_window=False):
         return False
 
 
+def _conda_exe(prefix):
+    """The conda (or mamba) command that manages the env at prefix, or None."""
+    for exe in (os.environ.get("CONDA_EXE"),
+                os.path.join(os.path.dirname(os.path.dirname(prefix)), "bin", "conda"),
+                shutil.which("conda")):
+        if exe and os.path.isfile(exe) and os.access(exe, os.X_OK):
+            return exe
+    return None
+
+
+def launch_command(python=None):
+    """Command line that starts home.py. In a conda env the env is activated
+    first (`conda run -p <env>`): a desktop launcher does not activate it, and
+    without that Qt cannot find its platform plugins, so matplotlib windows
+    such as the decay fit abort before they open."""
+    python = python or sys.executable
+    home = os.path.join(REPO, "home.py")
+    prefix = os.path.dirname(os.path.dirname(os.path.abspath(python)))
+    conda = _conda_exe(prefix) if os.path.isdir(os.path.join(prefix, "conda-meta")) else None
+    if conda:
+        return [conda, "run", "-p", prefix, "--no-capture-output", "python", home]
+    return [python, home]
+
+
+def _desktop_exec(args):
+    """Quote arguments for a .desktop Exec line."""
+    def q(a):
+        if not any(c in a for c in ' \t\n"\'\\><~|&;$*?#()`'):
+            return a
+        return '"' + a.replace("\\", "\\\\").replace('"', '\\"').replace("`", "\\`").replace("$", "\\$") + '"'
+    return " ".join(q(a) for a in args)
+
+
 def install_desktop_file(python=None):
     """Write ~/.local/share/applications/asphodel.desktop: an 'Asphodel'
-    launcher (starts home.py) whose StartupWMClass matches the window, so the
-    dock shows the asphodel icon for the suite's Firefox window."""
-    python = python or sys.executable
+    launcher (starts home.py, with its conda env activated) whose
+    StartupWMClass matches the window, so the dock shows the asphodel icon
+    for the suite's Firefox window."""
     text = (
         "[Desktop Entry]\n"
         "Type=Application\n"
         "Name=Asphodel\n"
         "Comment=ESR analysis suite\n"
-        f"Exec={python} {os.path.join(REPO, 'home.py')}\n"
+        f"Exec={_desktop_exec(launch_command(python))}\n"
         f"Path={REPO}\n"
         f"Icon={ICON_PNG}\n"
         "Terminal=false\n"
@@ -133,6 +166,7 @@ def install_desktop_file(python=None):
 if __name__ == "__main__":
     if sys.argv[1:] == ["install"]:
         print("Wrote", install_desktop_file())
+        print("Launcher runs:", _desktop_exec(launch_command()))
         print("Log out and back in (or restart GNOME Shell) if the icon does not show at once.")
     else:
         print(__doc__)
