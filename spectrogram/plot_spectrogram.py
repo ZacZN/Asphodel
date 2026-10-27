@@ -791,49 +791,80 @@ async function loadAroundIon(file, l, statusFn) {
   } catch (e) { _st('✗ ' + e.message, 'err'); }
 }
 
-// ── Harmonic step: toolbar h−1 / h+1 for the ion loaded by Search ions ──────
-// CUR_ION_LABEL ("m186Hf72+, h213") is set by the page; the neighbouring
-// harmonics come from the same simulated lines as Search ions, and a button
-// is disabled when that harmonic isn't among them (outside the file, etc.).
-var _harmLines = {};   // {-1: line, +1: line}
+// ── Step buttons: toolbar h±1, q±1, A±1 for the ion loaded by Search ions ───
+// CUR_ION_LABEL ("m186Hf72+, h213") is set by the page.  h±1: same ion, next
+// harmonic.  q±1: same nuclide (isomer kept), same harmonic.  A±1: neighbouring
+// isotope (ground state), same charge and harmonic.  The targets come from the
+// same simulated lines as Search ions, and a button is disabled when its line
+// isn't among them (outside the file, outside the Z/N range, etc.).
+var _stepLines = {};   // {'h-1': {file, line}, 'q1': …, 'A-1': …}
 function _harmStatus(msg, kind) {
   var s = document.getElementById('harmStatus');
   if (!s) return;
   s.textContent = msg;
   s.style.color = kind === 'err' ? '#f87171' : kind === 'ok' ? '#4ade80' : '#fbbf24';
 }
+// "m186Hf72+" -> {iso: 'm', A: 186, sym: 'Hf', q: 72}, or null
+function _parseIon(name) {
+  var m = /^([a-z]?)(\\d+)([A-Z][a-z]?)(\\d+)\\+$/.exec(String(name).trim());
+  return m ? {iso: m[1], A: +m[2], sym: m[3], q: +m[4]} : null;
+}
 async function _harmInit() {
   var grp = document.getElementById('harmGrp');
   if (!grp || typeof CUR_ION_LABEL !== 'string' || !CUR_ION_LABEL) return;
   var m = /^(.*),\\s*h(\\d+)$/.exec(CUR_ION_LABEL.trim());
   if (!m) return;
-  var ion = m[1].trim(), h = parseInt(m[2], 10);
+  var ion = m[1].trim(), h = parseInt(m[2], 10), p = _parseIon(ion);
   grp.style.display = 'inline-flex';
   document.getElementById('harmCur').textContent = 'h' + h;
-  var btns = {'-1': document.getElementById('harmDn'), '1': document.getElementById('harmUp')};
-  btns['-1'].disabled = btns['1'].disabled = true;
+  // what each button loads: [key, button id, target ion, harmonic, tooltip name]
+  var steps = [['h-1', 'harmDn', ion, h - 1], ['h1', 'harmUp', ion, h + 1]];
+  if (p) {
+    document.getElementById('qGrp').style.display = 'inline-flex';
+    document.getElementById('aGrp').style.display = 'inline-flex';
+    document.getElementById('qCur').textContent = p.q + '+';
+    document.getElementById('aCur').textContent = (p.iso ? p.iso : '') + p.A + p.sym;
+    steps.push(['q-1', 'qDn', p.iso + p.A + p.sym + (p.q - 1) + '+', h],
+               ['q1',  'qUp', p.iso + p.A + p.sym + (p.q + 1) + '+', h],
+               ['A-1', 'aDn', (p.A - 1) + p.sym + p.q + '+', h],
+               ['A1',  'aUp', (p.A + 1) + p.sym + p.q + '+', h]);
+  }
+  steps.forEach(function(s) { document.getElementById(s[1]).disabled = true; });
   try {
-    var r = await fetch('/search-ion', {method: 'POST', headers: {'Content-Type': 'application/json'},
-                                        body: JSON.stringify({q: ion})});
-    var d = await r.json();
-    if (!r.ok) { _harmStatus('✗ ' + (d.error || 'error'), 'err'); return; }
-    [-1, 1].forEach(function(step) {
-      var b = btns[String(step)];
-      var l = d.hits.filter(function(x) { return x.ion === ion && x.h === h + step; })[0];
-      if (!l) { b.title = 'h' + (h + step) + ' of ' + ion + ' is not among the simulated lines in this file'; return; }
-      _harmLines[step] = {file: d.file, line: l};
+    // one /search-ion request per distinct target ion (exact name matched below)
+    var names = steps.map(function(s) { return s[2]; })
+                     .filter(function(n, i, a) { return a.indexOf(n) === i && !/(^|[^\\d])0\\+$/.test(n); });
+    var res = await Promise.all(names.map(function(n) {
+      return fetch('/search-ion', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                   body: JSON.stringify({q: n})})
+        .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, d: d}; }); });
+    }));
+    var byName = {}, err = null;
+    names.forEach(function(n, i) {
+      if (!res[i].ok) { err = res[i].d.error || 'error'; return; }
+      byName[n] = res[i].d;
+    });
+    if (err) { _harmStatus('✗ ' + err, 'err'); return; }
+    var hw = _srchHalfWidthHz();
+    steps.forEach(function(s) {
+      var b = document.getElementById(s[1]), d = byName[s[2]];
+      var l = d && d.hits.filter(function(x) { return x.ion === s[2] && x.h === s[3]; })[0];
+      if (!l) { b.title = s[2] + ', h' + s[3] + ' is not among the simulated lines in this file'; return; }
+      _stepLines[s[0]] = {file: d.file, line: l};
       b.disabled = false;
-      var hw = _srchHalfWidthHz();
-      b.title = 'Load ' + ion + ', h' + l.h + ': ' +
+      b.title = 'Load ' + s[2] + ', h' + l.h + ': ' +
                 Math.round(l.f - hw).toLocaleString('en-GB') + ' – ' +
-                Math.round(l.f + hw).toLocaleString('en-GB') + ' Hz';
+                Math.round(l.f + hw).toLocaleString('en-GB') + ' Hz' +
+                (l.excluded ? '  (below the T½ cut)' : '');
     });
   } catch (e) { _harmStatus('✗ ' + e.message, 'err'); }
 }
-function harmStep(step) {
-  var t = _harmLines[step];
+// kind 'h' (harmonic), 'q' (charge state) or 'A' (isotope); step ±1
+function ionStep(kind, step) {
+  var t = _stepLines[kind + step];
   if (t) loadAroundIon(t.file, t.line, _harmStatus);
 }
+function harmStep(step) { ionStep('h', step); }
 window.addEventListener('load', _harmInit);
 
 // ── Decay-fit region: slider window or a box dragged on the 2-D heatmap ─────
@@ -1532,8 +1563,18 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
         <button id="harmDn" onclick="harmStep(-1)" disabled>h−1</button>
         <span id="harmCur" title="Harmonic of the ion loaded by Search ions"></span>
         <button id="harmUp" onclick="harmStep(1)" disabled>h+1</button>
-        <span id="harmStatus" style="text-transform:none; font-weight:400;"></span>
       </span>
+      <span id="qGrp" style="display:none; align-items:center; gap:6px;">
+        <button id="qDn" onclick="ionStep('q', -1)" disabled>q−1</button>
+        <span id="qCur" title="Charge state of the ion loaded by Search ions"></span>
+        <button id="qUp" onclick="ionStep('q', 1)" disabled>q+1</button>
+      </span>
+      <span id="aGrp" style="display:none; align-items:center; gap:6px;">
+        <button id="aDn" onclick="ionStep('A', -1)" disabled>A−1</button>
+        <span id="aCur" title="Isotope of the ion loaded by Search ions (A±1 goes to the ground state)"></span>
+        <button id="aUp" onclick="ionStep('A', 1)" disabled>A+1</button>
+      </span>
+      <span id="harmStatus" style="text-transform:none; font-weight:400;"></span>
       <button onclick="modalOpen('decayModal', 'batemanChk')" title="Decay-fit settings and Run">Decay fit…</button>
     </div>
     <div class="title-row">

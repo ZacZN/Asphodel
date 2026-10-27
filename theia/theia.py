@@ -1819,13 +1819,22 @@ align_fit_tab = html.Div([
             html.Button("Search ions…", id="btn-srch", className="btn btn-outline-secondary btn-sm",
                         title="Find an ion's simulated lines and zoom to a window around one",
                         style={"marginRight": "8px"}),
-            # h−1 / h+1 for the ion chosen in Search ions
+            # h−1 / h+1, q−1 / q+1 (charge state) and A−1 / A+1 (isotope) for
+            # the ion chosen in Search ions
             html.Span([
                 html.Button("h−1", id="btn-harm-dn", className="btn btn-outline-secondary btn-sm",
                             disabled=True),
                 html.Span(id="harm-cur", style={"fontSize": "13px", "fontWeight": "600",
                                                 "margin": "0 6px"}),
                 html.Button("h+1", id="btn-harm-up", className="btn btn-outline-secondary btn-sm",
+                            disabled=True, style={"marginRight": "8px"}),
+                html.Button("q−1", id="btn-q-dn", className="btn btn-outline-secondary btn-sm",
+                            disabled=True),
+                html.Button("q+1", id="btn-q-up", className="btn btn-outline-secondary btn-sm",
+                            disabled=True, style={"marginRight": "8px"}),
+                html.Button("A−1", id="btn-a-dn", className="btn btn-outline-secondary btn-sm",
+                            disabled=True),
+                html.Button("A+1", id="btn-a-up", className="btn btn-outline-secondary btn-sm",
                             disabled=True),
             ], id="harm-grp", style={"display": "none", "alignItems": "center"}),
         ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap", "rowGap": "6px",
@@ -5541,7 +5550,7 @@ def show_further_page(page):
 
 
 # ---------------------------------------------------------------------------
-# Search ions (as in the spectrogram) and the h−1 / h+1 buttons
+# Search ions (as in the spectrogram) and the h±1 / q±1 / A±1 buttons
 # ---------------------------------------------------------------------------
 
 def _srch_half_width_hz(width_khz):
@@ -5640,16 +5649,43 @@ def search_ions(q, width, key):
     return out, status, hits, w_style
 
 
-def _srch_neighbour(key, cur, step):
-    """Simulated line of the current ion at harmonic h + step, or None."""
+# step buttons: (kind, step) -> button id
+SRCH_STEP_BTNS = {("h", -1): "btn-harm-dn", ("h", 1): "btn-harm-up",
+                  ("q", -1): "btn-q-dn", ("q", 1): "btn-q-up",
+                  ("A", -1): "btn-a-dn", ("A", 1): "btn-a-up"}
+
+
+def _srch_step_target(cur, kind, step):
+    """(ion name, harmonic) that a step button goes to from the current line:
+    'h' same ion at h + step; 'q' same nuclide (isomer kept) with charge
+    q + step, same harmonic; 'A' isotope A + step (ground state), same charge
+    and harmonic.  None if the name can't be parsed or q would be 0."""
+    if kind == "h":
+        return cur["ion"], cur["h"] + step
+    m = ION_NAME_RE.fullmatch(cur["ion"])
+    if not m:
+        return None
+    iso, A, sym, q = m.group(1), int(m.group(2)), m.group(3), int(m.group(4))
+    if kind == "q":
+        return (f"{iso}{A}{sym}{q + step}+", cur["h"]) if q + step >= 1 else None
+    return f"{A + step}{sym}{q}+", cur["h"]
+
+
+def _srch_neighbour(key, cur, step, kind="h"):
+    """Simulated line that the h/q/A step button (kind, step) loads, or None
+    (with the target name) if it isn't among the simulated lines."""
     sims = _srch_lines(key)
     if sims is None or not cur:
         return None
-    m = sims[(sims["ion"].astype(str) == cur["ion"]) & (sims["harmonic"] == cur["h"] + step)]
+    tgt = _srch_step_target(cur, kind, step)
+    if tgt is None:
+        return None
+    m = sims[(sims["ion"].astype(str) == tgt[0]) & (sims["harmonic"] == tgt[1])]
     if not len(m):
         return None
     r = m.iloc[0]
-    return {"ion": cur["ion"], "h": int(r["harmonic"]), "f": float(r["f_sim"])}
+    return {"ion": tgt[0], "h": int(r["harmonic"]), "f": float(r["f_sim"]),
+            "excluded": bool(r["excluded"]) if "excluded" in m.columns else False}
 
 
 @app.callback(
@@ -5657,16 +5693,16 @@ def _srch_neighbour(key, cur, step):
     Output("srch-current", "data"),
     Output("harm-cur", "children"),
     Input({"type": "srch-line", "i": ALL}, "n_clicks"),
-    Input("btn-harm-dn", "n_clicks"),
-    Input("btn-harm-up", "n_clicks"),
+    *[Input(b, "n_clicks") for b in SRCH_STEP_BTNS.values()],
     State("srch-hits", "data"),
     State("srch-current", "data"),
     State("srch-width", "value"),
     State("sum-key", "data"),
     prevent_initial_call=True,
 )
-def search_pick(_rows, _dn, _up, hits, cur, width, key):
-    """A line from the list, or h−1 / h+1: zoom to f ± width."""
+def search_pick(_rows, *args):
+    """A line from the list, or an h±1 / q±1 / A±1 button: zoom to f ± width."""
+    hits, cur, width, key = args[len(SRCH_STEP_BTNS):]
     trig = dash.callback_context.triggered[0] if dash.callback_context.triggered else None
     if not trig or not trig["value"]:
         raise PreventUpdate
@@ -5678,7 +5714,9 @@ def search_pick(_rows, _dn, _up, hits, cur, width, key):
             raise PreventUpdate
         line = hits[i]
     else:
-        line = _srch_neighbour(key, cur, -1 if pid.startswith("btn-harm-dn") else 1)
+        bid = pid.rsplit(".", 1)[0]
+        kind, step = next(k for k, b in SRCH_STEP_BTNS.items() if b == bid)
+        line = _srch_neighbour(key, cur, step, kind)
         if line is None:
             raise PreventUpdate
     hw = _srch_half_width_hz(width)
@@ -5690,27 +5728,27 @@ def search_pick(_rows, _dn, _up, hits, cur, width, key):
 @app.callback(
     Output("harm-grp", "style"),
     Output("harm-cur", "title"),
-    Output("btn-harm-dn", "disabled"),
-    Output("btn-harm-dn", "title"),
-    Output("btn-harm-up", "disabled"),
-    Output("btn-harm-up", "title"),
+    *[o for b in SRCH_STEP_BTNS.values()
+      for o in (Output(b, "disabled"), Output(b, "title"))],
     Input("srch-current", "data"),
     Input("sum-key", "data"),
     Input("srch-width", "value"),
 )
 def show_harmonic_step(cur, key, width):
     if not cur:
-        return {"display": "none"}, "", True, "", True, ""
+        return {"display": "none"}, "", *([True, ""] * len(SRCH_STEP_BTNS))
     hw = _srch_half_width_hz(width)
     out = []
-    for step in (-1, 1):
-        l = _srch_neighbour(key, cur, step)
+    for kind, step in SRCH_STEP_BTNS:
+        l = _srch_neighbour(key, cur, step, kind)
         if l is None:
-            out += [True, f"h{cur['h'] + step} of {cur['ion']} is not among the simulated "
-                          f"lines of this spectrum"]
+            tgt = _srch_step_target(cur, kind, step)
+            out += [True, (f"{tgt[0]}, h{tgt[1]} is not among the simulated lines of this "
+                           f"spectrum") if tgt else "No charge state below 1+"]
         else:
-            out += [False, f"Zoom to {cur['ion']}, h{l['h']}: {l['f'] - hw:,.0f} – "
-                           f"{l['f'] + hw:,.0f} Hz"]
+            out += [False, f"Zoom to {l['ion']}, h{l['h']}: {l['f'] - hw:,.0f} – "
+                           f"{l['f'] + hw:,.0f} Hz"
+                           + ("  (below the half-life cut)" if l["excluded"] else "")]
     return ({"display": "inline-flex", "alignItems": "center", "marginRight": "8px"},
             "Ion and harmonic chosen in Search ions", *out)
 
