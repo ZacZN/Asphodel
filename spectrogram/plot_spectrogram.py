@@ -975,9 +975,10 @@ async function suggestDecayTitle() {
     });
     list.appendChild(hdr);
     d.hits.forEach(function(l) {
-      var it = document.createElement('div'); it.className = 'item'; it.tabIndex = 0;
+      var it = document.createElement('div');
+      it.className = 'item' + (l.excluded ? ' ex' : ''); it.tabIndex = 0;
       var txt = l.ion + ', h' + l.h;
-      it.title = 'Use "' + txt + '" as the title';
+      it.title = 'Use "' + txt + '" as the title' + (l.excluded ? '  (below the T½ cut)' : '');
       [l.ion + (l.is_ref ? '  (ref)' : ''), 'h' + l.h,
        l.f.toLocaleString('en-GB', {maximumFractionDigits: 1}),
        (l.df >= 0 ? '+' : '−') + Math.abs(l.df).toLocaleString('en-GB', {maximumFractionDigits: 0}) + ' Hz'
@@ -2720,7 +2721,8 @@ def serve(html, state):
 
             elif self.path == "/region-ions":
                 # simulated lines (current PID settings) inside [fMin, fMax],
-                # T1/2-cut ions left out, nearest to the window centre first
+                # T1/2-cut ions included (greyed in the list), nearest to the
+                # window centre first
                 try:
                     b = self._body()
                     f0, f1 = sorted((float(b["fMin"]), float(b["fMax"])))
@@ -2728,7 +2730,7 @@ def serve(html, state):
                         raise ValueError("no file loaded")
                     res = compute_sim_lines(STATE["file_freq"], STATE["file_sum"], sim_prefs())
                     c = 0.5 * (f0 + f1)
-                    hits = [l for l in res["lines"] if f0 <= l["f"] <= f1 and not l["excluded"]]
+                    hits = [l for l in res["lines"] if f0 <= l["f"] <= f1]
                     hits.sort(key=lambda l: abs(l["f"] - c))
                     for l in hits:
                         l.pop("label", None)
