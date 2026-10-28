@@ -308,13 +308,15 @@ HALF = 0.47                  # half side of a square (cells are 1 wide: a thin w
 
 
 def build_figure(by, state, overlays, mark=None, view=None, uirev="0"):
-    """The squares are filled SVG paths (one trace per colour), not a heatmap:
-    a heatmap is a raster image that Plotly re-encodes after every zoom step,
+    """The squares are SVG path shapes (one per colour), not a heatmap: a
+    heatmap is a raster image that Plotly re-encodes after every zoom step,
     and the browser shows a blank frame while it decodes the new one (the
-    flicker).  Paths are vectors, so a zoom just redraws them.  On top: an
-    invisible marker per nuclide for the hover label (sized to the square by
-    the page after each zoom), a text trace for the A + symbol labels, and a
-    dummy trace that carries the colour bar."""
+    flicker).  Paths are vectors, so a zoom just redraws them; as layout
+    shapes they redraw about twice as fast as filled scatter traces.  On top:
+    an invisible WebGL marker per nuclide for the hover label (the page sets
+    hoverdistance to the square size after each zoom), the A + symbol labels
+    around the view (copied by the page from the hidden "labels-all" trace),
+    and a dummy trace that carries the colour bar."""
     rows = state_rows(state)
     z, scale, zmin, zmax, cbar = colouring(rows, by)
     cols = scale_colours(z, scale, zmin, zmax)
@@ -324,25 +326,31 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0"):
     by_colour = {}
     for n, zz, c in zip(n_arr, z_arr, cols):
         by_colour.setdefault(c, []).append((n, zz))
+    cell_shapes = []
     for c, cells in by_colour.items():
-        xs, ys = [], []
-        for n, zz in cells:
-            xs += [n - HALF, n + HALF, n + HALF, n - HALF, n - HALF, None]
-            ys += [zz - HALF, zz - HALF, zz + HALF, zz + HALF, zz - HALF, None]
-        fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", fill="toself", fillcolor=c,
-                                 line=dict(width=0, color=c), hoverinfo="skip",
-                                 showlegend=False, name="cells"))
+        path = "".join(f"M{n - HALF:g},{zz - HALF:g}H{n + HALF:g}V{zz + HALF:g}H{n - HALF:g}Z"
+                       for n, zz in cells)
+        cell_shapes.append(dict(type="path", path=path, fillcolor=c, line=dict(width=0),
+                                layer="below", xref="x", yref="y"))
     # hover: one invisible square marker per nuclide, coloured like its square
-    # (the hover label takes that colour, as the heatmap's did)
-    fig.add_trace(go.Scatter(
+    # (the hover label takes that colour, as the heatmap's did).  WebGL: 3500
+    # SVG markers made every zoom step slow to redraw; WebGL ones cost nothing.
+    fig.add_trace(go.Scattergl(
         x=n_arr, y=z_arr, mode="markers", name="hover",
-        marker=dict(symbol="square", size=6, color=cols, opacity=0),
+        marker=dict(symbol="square", size=1, color=cols, opacity=0),
         hovertext=rows["hover"].to_numpy(), hoverinfo="text", showlegend=False))
-    # A + symbol labels, switched on by the page when the squares are big enough
+    # A + symbol labels: all of them in a hidden trace (data for the page), and
+    # the ones around the view, copied by the page into "labels" once the
+    # squares are big enough (a few hundred text elements instead of 3500)
     fig.add_trace(go.Scatter(
-        x=n_arr, y=z_arr, mode="text", name="labels", visible=False,
-        text=(rows["A"].astype(str) + rows["sym"]).to_numpy(),
+        # plain lists: numpy arrays reach the page base64-encoded, which the
+        # page's own code can't read
+        x=n_arr.tolist(), y=z_arr.tolist(), mode="text", name="labels-all", visible=False,
+        text=(rows["A"].astype(str) + rows["sym"]).tolist(),
         textfont=dict(size=9, color=[_text_colour(c) for c in cols]),
+        hoverinfo="skip", showlegend=False))
+    fig.add_trace(go.Scatter(
+        x=[], y=[], text=[], mode="text", name="labels", textfont=dict(size=9),
         hoverinfo="skip", showlegend=False))
     # colour bar
     fig.add_trace(go.Scatter(
@@ -379,7 +387,7 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0"):
     fig.update_layout(
         margin=dict(l=55, r=10, t=10, b=45), plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
         hovermode="closest", hoverdistance=1,
-        shapes=shapes, dragmode="zoom", uirevision=uirev,
+        shapes=cell_shapes + shapes, dragmode="zoom", uirevision=uirev,
         xaxis=dict(title="N (neutrons)", range=xr or [-1, N_MAX + 1], showgrid=False,
                    zeroline=False, constrain="domain", ticks="outside"),
         yaxis=dict(title="Z (protons)", range=yr or [-1, Z_MAX + 1], showgrid=False,
@@ -565,22 +573,44 @@ app.clientside_callback(
                     if (!gd._fullLayout || !gd._fullLayout.yaxis || !gd.data || !gd.data.length) return;
                     var ya = gd._fullLayout.yaxis, r = ya.range;
                     var px = ya._length / Math.abs(r[1] - r[0]);       // one square, in pixels
-                    var iH = -1, iL = -1;
+                    var iL = -1, iA = -1;
                     gd.data.forEach(function(t, i) {
-                        if (t.name === 'hover') iH = i;
                         if (t.name === 'labels') iL = i;
+                        if (t.name === 'labels-all') iA = i;
                     });
-                    var jobs = [];
-                    // hover markers as big as the squares: the label shows anywhere on a square
-                    var size = Math.max(2, Math.round(px * 0.92));
-                    if (iH >= 0 && gd.data[iH].marker.size !== size)
-                        jobs.push([{'marker.size': size}, [iH]]);
-                    var show = px >= %d;
-                    if (iL >= 0 && (gd.data[iL].visible === true) !== show)
-                        jobs.push([{visible: show}, [iL]]);
-                    if (!jobs.length) return;
+                    var jobs = [], relayoutHD = null;
+                    // WebGL hover finds the nearest marker centre within hoverdistance
+                    // pixels; the nearest centre is the square under the mouse, so a
+                    // radius of ~0.6 square covers the whole square
+                    var hd = Math.max(2, Math.round(px * 0.6));
+                    if (gd._fullLayout.hoverdistance !== hd) relayoutHD = hd;
+                    // labels: the squares in and around the view (half a view width
+                    // each side, so a short pan still shows them), only when big enough
+                    if (iL >= 0 && iA >= 0) {
+                        var xr = gd._fullLayout.xaxis.range.map(Number), yr = r.map(Number);
+                        var x0 = Math.min(xr[0], xr[1]), x1 = Math.max(xr[0], xr[1]);
+                        var y0 = Math.min(yr[0], yr[1]), y1 = Math.max(yr[0], yr[1]);
+                        var cov = gd._segreCover;      // region the current labels cover
+                        if (px < %d) {
+                            if (gd.data[iL].x.length) jobs.push([{x: [[]], y: [[]], text: [[]]}, [iL]]);
+                            gd._segreCover = null;
+                        } else if (!cov || x0 < cov[0] || x1 > cov[1] || y0 < cov[2] || y1 > cov[3]) {
+                            var w = x1 - x0, h = y1 - y0;
+                            cov = [x0 - w / 2, x1 + w / 2, y0 - h / 2, y1 + h / 2];
+                            var A = gd.data[iA], X = [], Y = [], T = [], C = [];
+                            for (var k = 0; k < A.x.length; k++) {
+                                if (A.x[k] < cov[0] || A.x[k] > cov[1] || A.y[k] < cov[2] || A.y[k] > cov[3]) continue;
+                                X.push(A.x[k]); Y.push(A.y[k]); T.push(A.text[k]); C.push(A.textfont.color[k]);
+                            }
+                            gd._segreCover = cov;
+                            jobs.push([{x: [X], y: [Y], text: [T], 'textfont.color': [C]}, [iL]]);
+                        }
+                    }
+                    if (!jobs.length && relayoutHD === null) return;
                     gd._segreBusy = true;
                     var p = Promise.resolve();
+                    if (relayoutHD !== null)
+                        p = p.then(function() { return Plotly.relayout(gd, {hoverdistance: relayoutHD}); });
                     jobs.forEach(function(j) { p = p.then(function() { return Plotly.restyle(gd, j[0], j[1]); }); });
                     p.then(function() { gd._segreBusy = false; }, function() { gd._segreBusy = false; });
                 };
@@ -602,6 +632,7 @@ app.clientside_callback(
                 window.addEventListener('resize', soon);
                 gd._segreSoon = soon;
             }
+            gd._segreCover = null;           // a new figure has no labels yet
             gd._segreSoon();
         }, 150);
         return window.dash_clientside.no_update;
