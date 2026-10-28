@@ -566,7 +566,33 @@ def parse_int_list(text, lo, hi):
     return sorted(out), None
 
 
+NEW_ISOMER = "new"            # Energy State value of a newly identified isomer (not in NUBASE)
+NEW_FIELDS = ["new_ex", "new_ex_unc", "new_t", "new_t_unc"]     # optional numbers of a new isomer
+T_UNITS = ["ns", "us", "ms", "s", "m", "h", "d", "y"]
+
+
+def _num(v):
+    return f"{v:g}" if isinstance(v, (int, float)) else None
+
+
+def new_isomer_text(e, html_=False):
+    """'E_x = 1234 ± 5 keV, T½ = 3 ± 1 s' for a new isomer ('' if nothing is known yet)."""
+    parts = []
+    ex, exu = _num(e.get("new_ex")), _num(e.get("new_ex_unc"))
+    if ex:
+        parts.append(f"E_x = {ex}" + (f" ± {exu}" if exu else "") + " keV")
+    t, tu = _num(e.get("new_t")), _num(e.get("new_t_unc"))
+    if t:
+        parts.append(f"T½ = {t}" + (f" ± {tu}" if tu else "") + f" {e.get('new_t_unit') or 's'}")
+    return ", ".join(parts)
+
+
 def ion_name(e):
+    """'186Hf72+', 'm186Hf72+'; a new isomer by its energy: '186Hf(1234 keV)72+'
+    ('186Hf(new)72+' while its energy is not known)."""
+    if e.get("isomer") == NEW_ISOMER:
+        ex = _num(e.get("new_ex"))
+        return f"{e['A']}{e['sym']}({ex + ' keV' if ex else 'new'}){e['charge']}+"
     iso = "" if e.get("isomer", "g") == "g" else e["isomer"]
     return f"{iso}{e['A']}{e['sym']}{e['charge']}+"
 
@@ -661,7 +687,9 @@ def entry_hover_line(e):
     if len(note) > 60:
         note = note[:57] + "…"
     src = " [Theia list]" if e.get("source") else ""
-    return f"{mark} {ion_name(e)} h{e['harmonic']}{src}" + (f" – {note}" if note else "")
+    new = f" [new isomer{': ' + new_isomer_text(e) if new_isomer_text(e) else ''}]" \
+        if e.get("isomer") == NEW_ISOMER else ""
+    return f"{mark} {ion_name(e)} h{e['harmonic']}{new}{src}" + (f" – {note}" if note else "")
 
 
 # ===========================================================================
@@ -706,6 +734,7 @@ header .exp{{color:#777;font-family:monospace;font-size:12px}}
 .panel .lists input{{accent-color:{ACCENT};margin-right:5px}}
 .entry{{background:#fff;border:1px solid {LINE};border-left:5px solid #ccc;border-radius:4px;padding:6px 8px;margin:6px 0}}
 .entry.confident{{border-left-color:{ID_COLOURS[0][1]}}} .entry.unsure{{border-left-color:{ID_COLOURS[1][1]}}}
+.entry .newiso{{color:{ISOMER_CORNER_COLOUR};font-weight:600;margin-top:3px}}
 .entry .ion{{font-weight:700;font-family:monospace;font-size:13px}} .entry .st{{color:#555;margin-left:6px}}
 .entry .notes{{white-space:pre-wrap;margin-top:3px;color:#333}} .entry .src{{color:#777;font-size:11px;margin-top:3px;word-break:break-all}}
 .entry .btns{{margin-top:5px;display:flex;gap:6px}}
@@ -716,6 +745,7 @@ header .exp{{color:#777;font-family:monospace;font-size:12px}}
 .form textarea{{width:100%;min-height:70px;padding:4px 6px;border:1px solid {LINE};border-radius:4px;font-size:13px;font-family:inherit}}
 .form .radio label{{margin-right:12px}} .form .radio input{{accent-color:{ACCENT};margin-right:3px}}
 .form .btns{{margin-top:8px;display:flex;gap:8px;align-items:center}}
+.form .newbox{{border-left:4px solid {ISOMER_CORNER_COLOUR};padding:2px 0 4px 8px;margin-top:6px}}
 .btn.primary{{background:{ACCENT};border-color:{ACCENT};color:#fff}} .btn.primary:hover{{color:#fff;opacity:.9}}
 .btn.danger:hover{{border-color:#c62828;color:#c62828}}
 .alllist{{max-height:260px;overflow-y:auto}}
@@ -750,9 +780,31 @@ def id_panel():
         html.Div(id="id-sel-title", className="selt"),
         html.Div(id="id-entries"),
         html.Div([
-            lbl("Isomer"),
+            lbl("Energy State"),
             dcc.Dropdown(id="id-iso", clearable=False, value="g",
                          options=[{"label": "ground state", "value": "g"}]),
+            # a newly identified isomer: every number optional (fill in later by editing)
+            html.Div([
+                html.Div([html.Div([lbl("Energy E_x (keV)"),
+                                    dcc.Input(id="id-new-ex", type="text", inputMode="decimal",
+                                              placeholder="optional", autoComplete="off")]),
+                          html.Div([lbl("± (keV)"),
+                                    dcc.Input(id="id-new-ex-unc", type="text", inputMode="decimal",
+                                              placeholder="optional", autoComplete="off")])],
+                         className="row"),
+                html.Div([html.Div([lbl("Half-life T½"),
+                                    dcc.Input(id="id-new-t", type="text", inputMode="decimal",
+                                              placeholder="optional", autoComplete="off")]),
+                          html.Div([lbl("±"),
+                                    dcc.Input(id="id-new-t-unc", type="text", inputMode="decimal",
+                                              placeholder="optional", autoComplete="off")]),
+                          html.Div([lbl("Unit"),
+                                    dcc.Dropdown(id="id-new-t-unit", clearable=False, value="s",
+                                                 options=T_UNITS)])],
+                         className="row"),
+                html.Div("All optional: rough values or ones measured later can be added by editing.",
+                         className="hint"),
+            ], id="id-new-box", className="newbox", style={"display": "none"}),
             html.Div([html.Div([lbl("Charge state(s) q *"),
                                 dcc.Input(id="id-charge", type="text", inputMode="numeric", debounce=False,
                                           placeholder="72 or 70-72", autoComplete="off")]),
@@ -946,6 +998,9 @@ def _entry_card(e):
     body = [html.Span(ion_name(e), className="ion"),
             html.Span(f"h = {e['harmonic']} · {st}", className="st")]
     out = [html.Div(body)]
+    if e.get("isomer") == NEW_ISOMER:
+        out.append(html.Div("New isomer" + (": " + new_isomer_text(e) if new_isomer_text(e) else
+                                            " (energy and half-life not given yet)"), className="newiso"))
     if (e.get("notes") or "").strip():
         out.append(html.Div(e["notes"], className="notes"))
     if e.get("source"):
@@ -995,15 +1050,58 @@ def _id_panel(sel, _ver):
         {"label": f"{st} (E_x {x} keV)" if str(x) not in ("", "nan") else st, "value": st}
         for st, x in TABLE[(TABLE["Z"] == zz) & (TABLE["N"] == nn) & ~TABLE["state"].isin(["g", "i", "j"])]
         [["state", "E_x"]].itertuples(index=False)]
+    isos.append({"label": "New isomer (not in NUBASE)", "value": NEW_ISOMER})
     es = cells.get((zz, nn), [])
     cards = [_entry_card(e) for e in es] or [html.Div("Not identified yet – add it below.", className="hint")]
     return title, cards, {}, isos, allrows, count
+
+
+@app.callback(Output("id-new-box", "style"), Input("id-iso", "value"))
+def _id_new_box(iso):
+    return {} if iso == NEW_ISOMER else {"display": "none"}
+
+
+EDIT_OUTPUTS = ["ver", "editing", "iso", "charge", "harm", "status", "notes",
+                "new_ex", "new_ex_unc", "new_t", "new_t_unc", "new_t_unit", "msg", "save_label", "cancel_style"]
+
+
+def _out(**kw):
+    """The outputs of _id_edit in order; anything not given is left unchanged."""
+    return tuple(kw.get(k, dash.no_update) for k in EDIT_OUTPUTS)
+
+
+def _cleared(**kw):
+    """Outputs that empty the form (the harmonic and status are kept: often the same)."""
+    base = dict(editing=None, iso="g", charge="", notes="", new_ex="", new_ex_unc="", new_t="",
+                new_t_unc="", new_t_unit="s", save_label="Add", cancel_style={"display": "none"})
+    base.update(kw)
+    return _out(**base)
+
+
+def _opt_float(text, name):
+    """Optional non-negative number from a text field: (value or None, error or None)."""
+    t = str(text or "").strip()
+    if not t:
+        return None, None
+    try:
+        v = float(t)
+    except ValueError:
+        return None, f"⚠ {name}: can't read '{t}' (a number, or leave it empty)."
+    if v < 0 or v != v:
+        return None, f"⚠ {name}: must be ≥ 0."
+    return v, None
+
+
+def _str(v):
+    return "" if v is None else f"{v:g}"
 
 
 @app.callback(
     Output("id-ver", "data"), Output("id-editing", "data"),
     Output("id-iso", "value"), Output("id-charge", "value"), Output("id-harm", "value"),
     Output("id-status", "value"), Output("id-notes", "value"),
+    Output("id-new-ex", "value"), Output("id-new-ex-unc", "value"),
+    Output("id-new-t", "value"), Output("id-new-t-unc", "value"), Output("id-new-t-unit", "value"),
     Output("id-msg", "children"), Output("id-save", "children"), Output("id-cancel", "style"),
     Input("id-save", "n_clicks"), Input("id-cancel", "n_clicks"),
     Input({"type": "idedit", "id": ALL}, "n_clicks"),
@@ -1011,63 +1109,80 @@ def _id_panel(sel, _ver):
     Input("id-sel", "data"),
     State("id-iso", "value"), State("id-charge", "value"), State("id-harm", "value"),
     State("id-status", "value"), State("id-notes", "value"),
+    State("id-new-ex", "value"), State("id-new-ex-unc", "value"),
+    State("id-new-t", "value"), State("id-new-t-unc", "value"), State("id-new-t-unit", "value"),
     State("id-editing", "data"), State("id-ver", "data"),
     prevent_initial_call=True,
 )
-def _id_edit(_save, _cancel, _edit, _del, sel, iso, charge, harm, status, notes, editing, ver):
+def _id_edit(_save, _cancel, _edit, _del, sel, iso, charge, harm, status, notes,
+             new_ex, new_ex_unc, new_t, new_t_unc, new_t_unit, editing, ver):
     """Add / save / edit / delete an identification of the selected nuclide."""
-    nu = dash.no_update
     t = ctx.triggered_id
     ver = ver or 0
-    hide, show = {"display": "none"}, {}
-    # new selection: empty form (the harmonic and status are kept: often the same)
     if t == "id-sel" or t == "id-cancel":
-        return nu, None, "g", "", nu, nu, "", "", "Add", hide
+        return _cleared(msg="")
     if isinstance(t, dict):
         if not (ctx.triggered and ctx.triggered[0]["value"]):
-            return (nu,) * 10
+            return _out()
         d = load_ids()
         e = next((x for x in d["entries"] if x.get("id") == t["id"]), None)
         if e is None:
-            return (nu,) * 7 + ("⚠ that entry no longer exists", nu, nu)
+            return _out(msg="⚠ that entry no longer exists")
         if t["type"] == "iddel":
             d["entries"] = [x for x in d["entries"] if x.get("id") != t["id"]]
             save_ids(d)
-            return (ver + 1, None, "g", "", nu, nu, "", f"Deleted {ion_name(e)} h{e['harmonic']}.",
-                    "Add", hide)
-        return (nu, e["id"], e.get("isomer", "g"), str(e["charge"]), str(e["harmonic"]), e["status"],
-                e.get("notes", ""), f"Editing {ion_name(e)} h{e['harmonic']}", "Save changes", show)
+            return _cleared(ver=ver + 1, msg=f"Deleted {ion_name(e)} h{e['harmonic']}.")
+        return _out(editing=e["id"], iso=e.get("isomer", "g"), charge=str(e["charge"]),
+                    harm=str(e["harmonic"]), status=e["status"], notes=e.get("notes", ""),
+                    new_ex=_str(e.get("new_ex")), new_ex_unc=_str(e.get("new_ex_unc")),
+                    new_t=_str(e.get("new_t")), new_t_unc=_str(e.get("new_t_unc")),
+                    new_t_unit=e.get("new_t_unit") or "s",
+                    msg=f"Editing {ion_name(e)} h{e['harmonic']}", save_label="Save changes",
+                    cancel_style={})
     # Add / Save changes
     if not sel:
-        return (nu,) * 7 + ("Select a nuclide first (click its square).", nu, nu)
+        return _out(msg="Select a nuclide first (click its square).")
     zz, nn = sel
     r = _gs_row(zz, nn)
     qs, err = parse_int_list(charge, 1, zz)
     if err:
-        return (nu,) * 7 + (f"⚠ Charge state q: {err} (whole numbers from 1 to {zz}).", nu, nu)
+        return _out(msg=f"⚠ Charge state q: {err} (whole numbers from 1 to {zz}).")
     hs, err = parse_int_list(harm, 1, None)
     if err:
-        return (nu,) * 7 + (f"⚠ Harmonic: {err} (whole numbers ≥ 1).", nu, nu)
+        return _out(msg=f"⚠ Harmonic: {err} (whole numbers ≥ 1).")
     if editing and (len(qs) > 1 or len(hs) > 1):
-        return (nu,) * 7 + ("⚠ An edited entry has one charge state and one harmonic – "
-                            "add the others as new entries.", nu, nu)
+        return _out(msg="⚠ An edited entry has one charge state and one harmonic – "
+                        "add the others as new entries.")
     iso = iso or "g"
+    newvals = {}
+    if iso == NEW_ISOMER:
+        for key, text, name in [("new_ex", new_ex, "Energy"), ("new_ex_unc", new_ex_unc, "Energy ±"),
+                                ("new_t", new_t, "Half-life"), ("new_t_unc", new_t_unc, "Half-life ±")]:
+            v, err = _opt_float(text, name)
+            if err:
+                return _out(msg=err)
+            newvals[key] = v
+        newvals["new_t_unit"] = new_t_unit if new_t_unit in T_UNITS else "s"
     d = load_ids()
     now = datetime.datetime.now().isoformat(timespec="seconds")
     base = {"Z": zz, "N": nn, "A": zz + nn, "sym": r["sym"] if r is not None else SYMBOLS.get(zz, "?"),
             "isomer": iso, "status": "unsure" if status == "unsure" else "confident",
-            "notes": (notes or "").strip(), "updated": now}
+            "notes": (notes or "").strip(), "updated": now, **newvals}
 
     def clash(q, h):
+        # a new isomer is told apart from other new isomers of the nuclide by its energy
         return next((x for x in d["entries"] if x.get("id") != editing and x["Z"] == zz and x["N"] == nn
-                     and x.get("isomer", "g") == iso and x["charge"] == q and x["harmonic"] == h), None)
+                     and x.get("isomer", "g") == iso and x["charge"] == q and x["harmonic"] == h
+                     and (iso != NEW_ISOMER or x.get("new_ex") == newvals.get("new_ex"))), None)
 
     old = next((x for x in d["entries"] if x.get("id") == editing), None) if editing else None
     if old is not None:
         q, h = qs[0], hs[0]
         c = clash(q, h)
         if c:
-            return (nu,) * 7 + (f"⚠ {ion_name(c)} h{h} is already in the list – edit that one.", nu, nu)
+            return _out(msg=f"⚠ {ion_name(c)} h{h} is already in the list – edit that one.")
+        for k in NEW_FIELDS + ["new_t_unit"]:          # no stale new-isomer values on other states
+            old.pop(k, None)
         old.update(base, charge=q, harmonic=h)
         msg = f"Saved {ion_name(old)} h{h}."
     else:
@@ -1083,11 +1198,11 @@ def _id_edit(_save, _cancel, _edit, _del, sel, iso, charge, harm, status, notes,
                 d["entries"].append(e)
                 added.append(f"{ion_name(e)} h{h}")
         if not added:
-            return (nu,) * 7 + ("⚠ Already in the list: " + ", ".join(skipped) + " – edit those.", nu, nu)
+            return _out(msg="⚠ Already in the list: " + ", ".join(skipped) + " – edit those.")
         msg = f"Added {len(added)}: " + ", ".join(added) + "." + \
             (f" Skipped (already in the list): {', '.join(skipped)}." if skipped else "")
     save_ids(d)
-    return ver + 1, None, "g", "", nu, nu, "", msg, "Add", hide
+    return _cleared(ver=ver + 1, msg=msg)
 
 
 @app.callback(
