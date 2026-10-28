@@ -319,7 +319,8 @@ def _text_colour(hexc):
 
 
 HALF = 0.47                  # half side of a square (cells are 1 wide: a thin white gap)
-STABLE_CORNER = 0.38         # Identified ions: side of the black corner triangle on stable squares
+STABLE_CORNER = 0.38         # Identified ions: side of the corner triangles (stable / isomer identified)
+ISOMER_CORNER_COLOUR = "#8e44ad"   # bottom-left corner: an isomer of this nuclide is identified
 
 
 def selection_trace(sel):
@@ -377,6 +378,16 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
                                     layer="below", xref="x", yref="y"))
             fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name="stable",
                                      marker=dict(symbol="triangle-ne", size=11, color="#000000"),
+                                     hoverinfo="skip", showlegend=True))
+        # an isomer identified (any entry with isomer m, n, ...): bottom-left corner purple
+        iso_cells = [c for c, es in (id_cells or {}).items() if any(e.get("isomer", "g") != "g" for e in es)]
+        path = "".join(f"M{n - HALF:g},{zz - HALF:g}H{n - HALF + k:g}L{n - HALF:g},{zz - HALF + k:g}Z"
+                       for zz, n in iso_cells)
+        if path:
+            cell_shapes.append(dict(type="path", path=path, fillcolor=ISOMER_CORNER_COLOUR,
+                                    line=dict(width=0), layer="below", xref="x", yref="y"))
+            fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name="isomer identified",
+                                     marker=dict(symbol="triangle-sw", size=11, color=ISOMER_CORNER_COLOUR),
                                      hoverinfo="skip", showlegend=True))
     # hover: one invisible square marker per nuclide, coloured like its square
     # (the hover label takes that colour, as the heatmap's did).  WebGL: 3500
