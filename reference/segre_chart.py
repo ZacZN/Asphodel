@@ -387,7 +387,7 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0"):
     fig.update_layout(
         margin=dict(l=55, r=10, t=10, b=45), plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
         hovermode="closest", hoverdistance=1,
-        shapes=cell_shapes + shapes, dragmode="zoom", uirevision=uirev,
+        shapes=cell_shapes + shapes, dragmode="pan", uirevision=uirev,
         xaxis=dict(title="N (neutrons)", range=xr or [-1, N_MAX + 1], showgrid=False,
                    zeroline=False, constrain="domain", ticks="outside"),
         yaxis=dict(title="Z (protons)", range=yr or [-1, Z_MAX + 1], showgrid=False,
@@ -605,6 +605,12 @@ app.clientside_callback(
                             gd._segreCover = cov;
                             jobs.push([{x: [X], y: [Y], text: [T], 'textfont.color': [C]}, [iL]]);
                         }
+                        // font grows with the squares: "188Re" fills about 3/4 of a square
+                        if (px >= %d) {
+                            var fs = Math.round(Math.min(28, Math.max(9, px * 0.24)));
+                            if ((gd.data[iL].textfont || {}).size !== fs)
+                                jobs.push([{'textfont.size': fs}, [iL]]);
+                        }
                     }
                     if (!jobs.length && relayoutHD === null) return;
                     gd._segreBusy = true;
@@ -637,7 +643,7 @@ app.clientside_callback(
         }, 150);
         return window.dash_clientside.no_update;
     }
-    """ % LABEL_PX,
+    """ % (LABEL_PX, LABEL_PX),
     Output("labels-dummy", "children"),
     Input("chart", "figure"),
 )
