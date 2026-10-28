@@ -48,6 +48,9 @@ import plotly.graph_objects as go
 PORT = 8054
 ACCENT, PALE, SIDE, LINE = "#f57d15", "#fff4ec", "#f9f9f9", "#dddddd"
 MAGIC = [8, 20, 28, 50, 82, 126]
+# overlay lines around the measured nuclides: (checklist value, table column, legend, colour, dash)
+LIMIT_LINES = [("mass_limit", "mass_measured", "Measured masses", "#e0242c", "solid"),
+               ("hl_limit", "hl_measured", "Measured half-lives", "#d633c4", "dash")]
 LABEL_PX = 30               # squares get A + symbol labels when at least this many pixels high
 ISOMER_LEVELS = [("m", "1st isomer (m)"), ("n", "2nd isomer (n)"), ("p", "p"), ("q", "q"),
                  ("r", "r"), ("x", "x")]
@@ -119,6 +122,12 @@ def load_table():
     d["name"] = np.where(d["state"] == "g", "", d["state"]) + d["A"].astype(str) + d["sym"]
     d["hl_s"] = [half_life_seconds(t, u) for t, u in zip(d["T"], d["T_unit"])]
     d["mode"] = [main_decay_mode(b, t) for b, t in zip(d["BR"], d["T"])]
+    # measured (not from systematics) mass excess; measured half-life = a plain
+    # number (no '#' estimate, no '<' / '>' / '~' limit) or stable
+    d["mass_measured"] = d["m.e."].notna() & ~d["m.e. sys?"].astype(bool)
+    t_str = d["T"].astype(str).str.strip()
+    d["hl_measured"] = (t_str.str.fullmatch(r"\d*\.?\d+(?:[Ee][+-]?\d+)?") & d["T_unit"].notna()) \
+        | t_str.str.startswith("stbl")
     isomers = (d[~d["state"].isin(["g", "i", "j"])].groupby(["Z", "N"])["state"]
                .apply(lambda s: ", ".join(s)))
     hover = []
@@ -378,6 +387,17 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0"):
         region_text = (f"{exp}: Z {s['z_lims'][0]}–{s['z_lims'][1]}, N {s['n_lims'][0]}–{s['n_lims'][1]}, "
                        f"below el1 {s['el1'][0]},{s['el1'][1]} – el2 {s['el2'][0]},{s['el2'][1]} "
                        f"(A,Z) · ★ {s['ref_name']} · {len(cells)} nuclides")
+    # limits of measured masses / half-lives: exact outline of the measured
+    # nuclides of the states shown (gaps inside get their own boxes)
+    for key, col, label, colour, dash in LIMIT_LINES:
+        if key not in overlays:
+            continue
+        sel = rows[rows[col]]
+        xs, ys = outline(set(zip(sel["Z"], sel["N"])))
+        fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name=label, hoverinfo="skip",
+                                 line=dict(color=colour, width=2.5, dash=dash), showlegend=True))
+        extra = f"{label}: {len(sel)} of {len(rows)}"
+        region_text = f"{region_text} · {extra}" if region_text else extra
     if mark:
         zz, nn = mark
         shapes.append(dict(type="rect", x0=nn - .5, x1=nn + .5, y0=zz - .5, y1=zz + .5,
@@ -387,6 +407,8 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0"):
     fig.update_layout(
         margin=dict(l=55, r=10, t=10, b=45), plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
         hovermode="closest", hoverdistance=1,
+        legend=dict(x=0.01, y=0.99, xanchor="left", yanchor="top", bgcolor="rgba(255,255,255,0.85)",
+                    bordercolor=LINE, borderwidth=1),
         shapes=cell_shapes + shapes, dragmode="pan", uirevision=uirev,
         xaxis=dict(title="N (neutrons)", range=xr or [-1, N_MAX + 1], showgrid=False,
                    zeroline=False, constrain="domain", ticks="outside"),
@@ -483,6 +505,8 @@ def serve_layout():
                                    options=levels, disabled=True)], className="grp"),
             html.Div(dcc.Checklist(id="overlays", value=["region", "magic"], className="chk", inline=True,
                                    options=[{"label": "Experiment region", "value": "region"},
+                                            {"label": "Measured masses", "value": "mass_limit"},
+                                            {"label": "Measured half-lives", "value": "hl_limit"},
                                             {"label": "Magic numbers", "value": "magic"}]),
                      className="grp"),
             html.Div([html.Label("Find", className="t"),
