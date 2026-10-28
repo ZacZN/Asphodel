@@ -320,7 +320,9 @@ def _text_colour(hexc):
 
 HALF = 0.47                  # half side of a square (cells are 1 wide: a thin white gap)
 STABLE_CORNER = 0.38         # Identified ions: side of the corner triangles (stable / isomer identified)
-ISOMER_CORNER_COLOUR = "#8e44ad"   # bottom-left corner: an isomer of this nuclide is identified
+ISOMER_CORNER_COLOUR = "#8e44ad"   # bottom-left corner: a NUBASE isomer of this nuclide is identified
+NEW_STAR_COLOUR = "#ffd21f"        # bottom-left star: a new isomer (not in NUBASE) is logged
+STAR_R = 0.2                       # outer radius of that star, in squares
 
 
 SELECT_COLOUR = "#e0242c"     # red circle around the square selected for editing
@@ -385,8 +387,9 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
             fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name="stable",
                                      marker=dict(symbol="triangle-ne", size=11, color="#000000"),
                                      hoverinfo="skip", showlegend=True))
-        # an isomer identified (any entry with isomer m, n, ...): bottom-left corner purple
-        iso_cells = [c for c, es in (id_cells or {}).items() if any(e.get("isomer", "g") != "g" for e in es)]
+        # a NUBASE isomer identified (any entry with isomer m, n, ...): bottom-left corner purple
+        iso_cells = [c for c, es in (id_cells or {}).items()
+                     if any(e.get("isomer", "g") not in ("g", NEW_ISOMER) for e in es)]
         path = "".join(f"M{n - HALF:g},{zz - HALF:g}H{n - HALF + k:g}L{n - HALF:g},{zz - HALF + k:g}Z"
                        for zz, n in iso_cells)
         if path:
@@ -394,6 +397,22 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
                                     line=dict(width=0), layer="below", xref="x", yref="y"))
             fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name="isomer identified",
                                      marker=dict(symbol="triangle-sw", size=11, color=ISOMER_CORNER_COLOUR),
+                                     hoverinfo="skip", showlegend=True))
+        # a new isomer (not in NUBASE) logged: yellow star in the bottom-left corner
+        # (a path shape in data units, so it zooms with the square; drawn over the purple corner)
+        new_cells = [c for c, es in (id_cells or {}).items() if any(e.get("isomer") == NEW_ISOMER for e in es)]
+        if new_cells:
+            ang = np.pi / 2 + np.arange(10) * np.pi / 5
+            rad = np.where(np.arange(10) % 2 == 0, STAR_R, STAR_R * 0.42)
+            sx, sy = rad * np.cos(ang), rad * np.sin(ang)
+            c0 = -HALF + STAR_R + 0.03
+            path = "".join("M" + "L".join(f"{n + c0 + x:.3f},{zz + c0 + y:.3f}" for x, y in zip(sx, sy)) + "Z"
+                           for zz, n in new_cells)
+            cell_shapes.append(dict(type="path", path=path, fillcolor=NEW_STAR_COLOUR,
+                                    line=dict(color="#000000", width=0.8), layer="below", xref="x", yref="y"))
+            fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name="new isomer",
+                                     marker=dict(symbol="star", size=13, color=NEW_STAR_COLOUR,
+                                                 line=dict(color="#000000", width=0.8)),
                                      hoverinfo="skip", showlegend=True))
     # hover: one invisible square marker per nuclide, coloured like its square
     # (the hover label takes that colour, as the heatmap's did).  WebGL: 3500
