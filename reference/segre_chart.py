@@ -525,6 +525,9 @@ def serve_layout():
                           "toImageButtonOptions": {"filename": "segre_chart", "scale": 3}}),
         html.Div(id="labels-dummy", style={"display": "none"}),
         dcc.Store(id="view", data={"rev": 0, "mark": None, "x": None, "y": None}),
+        # the view on screen (set by the page after every zoom / pan), so a
+        # redraw for another option keeps it
+        dcc.Store(id="cur-view", data=None),
     ], className="page")
 
 
@@ -565,12 +568,19 @@ def _set_view(_s, _r, _a, q, view):
     Output("chart", "figure"), Output("region-info", "children"),
     Input("by", "value"), Input("state", "value"), Input("level", "value"),
     Input("overlays", "value"), Input("view", "data"),
+    State("cur-view", "data"),
 )
-def _draw(by, state, level, overlays, view):
+def _draw(by, state, level, overlays, view, cur):
+    """Redraw for any option.  The view stays where it is (the ranges on
+    screen are put into the new figure), except after a search or a zoom
+    button, which set their own view."""
     st = "g" if state != "iso" else (level or "m")
     view = view or {}
     mark = tuple(view["mark"]) if view.get("mark") else None
-    fig, info = build_figure(by, st, overlays or [], mark=mark, view=view,
+    shown = view
+    if ctx.triggered_id != "view" and cur and cur.get("x") and cur.get("y"):
+        shown = dict(view, x=cur["x"], y=cur["y"])
+    fig, info = build_figure(by, st, overlays or [], mark=mark, view=shown,
                              uirev=str(view.get("rev", 0)))
     n = len(state_rows(st))
     what = "ground states" if st == "g" else f"isomers '{st}'"
@@ -635,6 +645,13 @@ app.clientside_callback(
                             if ((gd.data[iL].textfont || {}).size !== fs)
                                 jobs.push([{'textfont.size': fs}, [iL]]);
                         }
+                    }
+                    // remember the view for the next redraw (other colouring, state, overlays)
+                    var cv = {x: gd._fullLayout.xaxis.range.map(Number), y: r.map(Number)};
+                    var cvKey = JSON.stringify(cv);
+                    if (cvKey !== gd._segreView) {
+                        gd._segreView = cvKey;
+                        window.dash_clientside.set_props('cur-view', {data: cv});
                     }
                     if (!jobs.length && relayoutHD === null) return;
                     gd._segreBusy = true;
