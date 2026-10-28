@@ -98,7 +98,7 @@ from matplotlib.widgets import Button
 from scipy.optimize import curve_fit
 
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import paths
+from core import baseline, paths
 
 # Set by plot_spectrogram.py when it starts a fit: this file is created once
 # the fit window has been drawn, so the page can tell "window open" from a
@@ -216,6 +216,14 @@ def parse_args():
                              "data − fit for an unweighted fit. Single-window fits only.")
     parser.add_argument("--time-avg", type=int, metavar="N", default=None,
                         help="Average every N consecutive time frames before fitting")
+    parser.add_argument("--baseline", type=str, default=None, metavar="JSON",
+                        help="Remove a BrPLS baseline (pybaselines) from every frame first; "
+                             "JSON of its parameters, e.g. '{\"lam\": 1e5}' (missing = default). "
+                             "Needs --baseline-window.")
+    parser.add_argument("--baseline-window", type=float, nargs=2, default=None,
+                        metavar=("FMIN", "FMAX"),
+                        help="Frequency window (Hz) the baseline is fitted over (the spectrogram "
+                             "page's loaded crop); the fit windows must lie inside it")
     return parser.parse_args()
 
 
@@ -231,6 +239,18 @@ def load(path):
     power = data["power"]
     data.close()
     time = time - time[0]
+    return freq, time, power
+
+
+def load_data(args):
+    """load(args.file), with --baseline applied: frames restricted to
+    --baseline-window and each one's BrPLS baseline subtracted."""
+    freq, time, power = load(args.file)
+    if args.baseline is None:
+        return freq, time, power
+    lo, hi = args.baseline_window
+    freq, power = slice_freq(freq, power, lo, hi)
+    power = baseline.remove_cached(args.file, freq, power, (lo, hi), args.baseline_params)
     return freq, time, power
 
 
@@ -723,6 +743,9 @@ def _settings_of(args):
         "tmax_s":                 _num(args.tmax),
         "skip_bins":              [int(x) for x in args.skip],
         "time_avg":               args.time_avg,
+        "baseline":               ({"method": baseline.METHOD, "params": args.baseline_params,
+                                    "window_hz": [_num(x) for x in args.baseline_window]}
+                                   if args.baseline is not None else None),
         "gamma":                  _num(args.gamma),
         "bateman":                bool(args.bateman),
         "with_offset":            not args.no_offset,
@@ -1241,7 +1264,7 @@ def run_joint(args, halflife_isomer_lab, halflife_groundstate_lab):
     dmin, dmax = args.freq_min, args.freq_max
     n_avg = args.time_avg if (args.time_avg is not None and args.time_avg > 1) else 1
 
-    freq, time, power = load(args.file)
+    freq, time, power = load_data(args)
     tP_all, IP_all, nbP = _window_intensity(freq, power, time, pmin, pmax, n_avg, args.skip)
     tD_all, ID_all, nbD = _window_intensity(freq, power, time, dmin, dmax, n_avg, args.skip)
     print(f"Parent window   [{pmin:,.0f} – {pmax:,.0f} Hz]: {nbP} bins")
@@ -1413,6 +1436,17 @@ def main():
     if args.parent_window is not None:
         args.bateman = True          # joint mode is always a Bateman fit
 
+    args.baseline_params = None
+    if args.baseline is not None:
+        if args.baseline_window is None:
+            sys.exit("Error: --baseline needs --baseline-window FMIN FMAX.")
+        try:
+            args.baseline_params = baseline.parse_params(json.loads(args.baseline))
+        except (ValueError, TypeError) as exc:
+            sys.exit(f"Error: --baseline: {exc}")
+        print(f"Baseline: {baseline.describe(args.baseline_params)} over "
+              f"[{args.baseline_window[0]:,.0f} – {args.baseline_window[1]:,.0f} Hz]")
+
     if (args.halflife_isomer is not None or args.halflife_groundstate is not None):
         if not args.bateman:
             print("Warning: --halflife-isomer/--halflife-groundstate are only used with --bateman; ignoring.")
@@ -1441,7 +1475,7 @@ def main():
         run_joint(args, halflife_isomer_lab, halflife_groundstate_lab)
         return
 
-    freq, time, power = load(args.file)
+    freq, time, power = load_data(args)
     freq_s, power_s   = slice_freq(freq, power, args.freq_min, args.freq_max)
 
     print(

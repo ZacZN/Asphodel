@@ -92,7 +92,7 @@ def slice_freq(freq, power, freq_min, freq_max):
 
 _HERE       = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(1, os.path.dirname(_HERE))
-from core import browser, icon, paths, tabwatch
+from core import baseline, browser, icon, paths, tabwatch
 PREFS_PATH  = paths.settings_file("spectrogram_prefs.json")
 DECAY_PATH  = os.path.join(_HERE, "decay_fit.py")
 
@@ -521,6 +521,14 @@ SIM_CSS = """
   .full-toggle #fullArrow { color: #f97316; display: inline-block; width: 12px; }
   .opt-grp span#simStatus { font-size: 11px; margin-left: 4px; text-transform: none;
                             letter-spacing: normal; font-weight: 400; }
+  .opt-grp span#blStatus { font-size: 11px; margin-left: 4px; text-transform: none;
+                           letter-spacing: normal; font-weight: 400; }
+  .bl-grid { display: grid; grid-template-columns: max-content max-content; justify-content: start;
+             gap: 6px 14px; align-items: center; margin: 4px 0 6px 2px; }
+  .bl-grid label { font-size: 12px; color: #d1d5db; }
+  .bl-grid input[type=text] { width: 90px; background: #374151; border: 1px solid #4b5563;
+                              border-radius: 4px; color: #f3f4f6; padding: 2px 6px; font-size: 12px; }
+  .bl-grid input[type=text]:focus { outline: none; border-color: #f97316; }
 """
 
 
@@ -592,6 +600,82 @@ def sim_panel_html():
     </div>
    </div>
   </div>
+"""
+
+
+def baseline_prefs():
+    """Saved baseline settings: {"on": bool, **BrPLS parameters}."""
+    raw = read_prefs().get("baseline")
+    raw = raw if isinstance(raw, dict) else {}
+    try:
+        params = baseline.parse_params(raw)
+    except ValueError:
+        params = dict(baseline.DEFAULTS)
+    return {"on": bool(raw.get("on")), **params}
+
+
+def baseline_panel_html(info):
+    """Popup with the BrPLS baseline-removal settings. info: the loaded
+    page's baseline state {"on", "params", "error"}."""
+    import json
+    p = baseline_prefs()
+    esc = lambda v: str(v).replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
+    rows = "".join(
+        f'<label for="bl_{k}" title="{esc(tip)}">{esc(label)}</label>'
+        f'<input type="text" id="bl_{k}" value="{p[k]:g}" placeholder="{baseline.DEFAULTS[k]:g}" '
+        f'title="{esc(tip)}" onkeydown="if(event.key===\'Enter\') baselineApply()">'
+        for k, (label, tip) in baseline.FIELDS.items())
+    err = info.get("error")
+    status = (f'<span id="blStatus" style="color:#f87171;">✗ {esc(err)}</span>' if err else
+              f'<span id="blStatus" style="color:#4ade80;">✓ on: {esc(baseline.describe(info["params"]))}</span>'
+              if info.get("on") else '<span id="blStatus"></span>')
+    return f"""
+  <div id="blModal" class="sim-modal" onclick="if(event.target===this) modalClose('blModal')">
+   <div class="sim-dialog" role="dialog" aria-modal="true" aria-labelledby="blTitle">
+    <div class="sim-head">
+      <span id="blTitle">Baseline removal</span>
+      <button class="sim-x" onclick="modalClose('blModal')" title="Close (Esc)">×</button>
+    </div>
+    <div class="sim-body">
+    <div class="opt-grp">
+      <input type="checkbox" id="bl_on" {"checked" if p["on"] else ""}>
+      <label for="bl_on" title="Fit and subtract a baseline in every time frame (linear power), over the loaded frequency window">remove baseline (BrPLS) from every frame</label>
+    </div>
+    <div class="srch-hint">pybaselines BrPLS, fitted to each frame's linear power over the loaded
+      frequency window, before time averaging. Decay fits started from this page use the same
+      corrected frames. Empty = default.</div>
+    <div class="bl-grid">{rows}</div>
+    <div class="opt-grp">
+      <button onclick="baselineApply()">Apply</button>
+      <button onclick="baselineDefaults()" title="Fill in pybaselines' defaults">Defaults</button>
+      {status}
+    </div>
+    </div>
+   </div>
+  </div>
+  <script>
+  var BL_DEFAULTS = {json.dumps(baseline.DEFAULTS)};
+  function baselineDefaults() {{
+    Object.keys(BL_DEFAULTS).forEach(function(k) {{ document.getElementById('bl_' + k).value = BL_DEFAULTS[k]; }});
+  }}
+  async function baselineApply() {{
+    var st = document.getElementById('blStatus');
+    var body = {{on: document.getElementById('bl_on').checked}};
+    Object.keys(BL_DEFAULTS).forEach(function(k) {{ body[k] = document.getElementById('bl_' + k).value.trim(); }});
+    var nav = document.getElementById('nAvg'), db = document.getElementById('dbCheck');
+    body.nAvg = nav ? Math.max(1, Math.round(+nav.value || 1)) : 1;
+    body.linear = db ? !db.checked : false;
+    st.style.color = '#d1d5db';
+    st.textContent = body.on ? 'Removing the baseline from every frame…' : 'Reloading without baseline removal…';
+    try {{
+      var r = await fetch('/baseline', {{method: 'POST', headers: {{'Content-Type': 'application/json'}},
+                                         body: JSON.stringify(body)}});
+      var d = await r.json();
+      if (!r.ok) {{ st.style.color = '#f87171'; st.textContent = '✗ ' + (d.error || 'failed'); return; }}
+      window.location.replace('/spectrogram.html?t=' + Date.now());
+    }} catch (e) {{ st.style.color = '#f87171'; st.textContent = '✗ ' + e.message; }}
+  }}
+  </script>
 """
 
 
@@ -1262,7 +1346,7 @@ ldToggle(true);
 # ---------------------------------------------------------------------------
 
 def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None,
-               fmin_req=None, fmax_req=None, ion=None):
+               fmin_req=None, fmax_req=None, ion=None, bl_info=None):
     """Build the spectrogram page. Returns (html, state) for the server."""
     try:
         import plotly.graph_objects as go
@@ -1313,6 +1397,9 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
     _reg_init_js = json.dumps([float(v) for v in _rb]
                               if isinstance(_rb, list) and len(_rb) == 4 else None)
     _sim_panel = sim_panel_html()
+    _bl = bl_info or {}
+    _bl_panel = baseline_panel_html(_bl)
+    _bl_btn = "Baseline ✓…" if _bl.get("on") else "Baseline…"
     _full_open_js = "false" if _prefs.get("fullOpen") == "0" else "true"
 
     z_label = "Power (dB)" if log_scale else "Power (linear)"
@@ -1332,6 +1419,10 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
     f_ds   = freq[::f_step]
     # Raw linear power, downsampled, frequency-axis flipped (high→low for display)
     z_ds   = power[::t_step, ::f_step][:, ::-1]   # shape (T_ds, F_ds)
+    # dB of baseline-removed data: values ≤ 0 are drawn at this floor (1st
+    # percentile of the positive values) instead of at 10·log10(5e-324)
+    _pos = z_ds[z_ds > 0]
+    db_floor = float(np.percentile(_pos, 1)) if (_bl.get("on") and _pos.size) else 5e-324
     f_plot = f_ds[::-1]
 
     if t_step > 1 or f_step > 1:
@@ -1561,6 +1652,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
       <button onclick="modalOpen('generalModal', 'colorscaleSel')" title="Colour scheme, dB scale, 3-D style, 1-D overlay">General Settings…</button>
       <button onclick="modalOpen('fileModal', 'ldPath')" title="Load a file / change the frequency crop">File Settings…</button>
       <button onclick="simOpen()" title="Particle-identification settings: simulated ion lines">PID Settings…</button>
+      <button id="blBtn" onclick="modalOpen('blModal', 'bl_lam')" title="Remove a BrPLS baseline from every time frame">{_bl_btn}</button>
       <button onclick="modalOpen('searchModal', 'srchIon')" title="Find an ion's simulated lines and load a window around one">Search ions…</button>
       <button onclick="modalOpen('decayModal', 'batemanChk')" title="Decay-fit settings and Run">Decay fit…</button>
       <span id="stepBox" style="display:none;">
@@ -1761,6 +1853,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
    </div>
   </div>
 {_sim_panel}
+{_bl_panel}
 </div>
 <div id="regBanner" class="reg-banner">Drag a box on the 2-D plot to set the decay-fit region · Esc to cancel</div>
 <div id="plots">
@@ -1785,6 +1878,7 @@ const F_1D   = {f_1d_json};   // full-resolution freq array for the 1-D spectrum
 const DEFAULT_TITLE = {_default_title_js};
 var CUR_ION_LABEL = {json.dumps(ion or "")};   // Search ions label, e.g. "m186Hf72+, h213"
 var APPLIED_N = {n_avg_init};
+const DB_FLOOR = {db_floor!r};   // smallest power drawn in dB (raised when the baseline is removed)
 var LAST_CAMERA = {json.dumps(_camera)};
 
 var _heatReady = true;
@@ -1803,7 +1897,7 @@ function setColorscale(name) {{
 }}
 
 function toDb(Z) {{
-  var eps = 5e-324;
+  var eps = DB_FLOOR;
   return Z.map(function(row) {{ return row.map(function(v) {{ return 10 * Math.log10(Math.max(v, eps)); }}); }});
 }}
 
@@ -2371,7 +2465,7 @@ function fmt(v, dec) {{
 // Z is Z_RAW shape (T_ds, F_ds) with freq flipped (index 0 = highest freq).
 // F_PLOT is low-to-high, so freq for Z[i][j] = F_PLOT[F_ds - 1 - j].
 function windowMinMax(Z, t, tMin, tMax, fMin, fMax, useDb) {{
-  var eps = 5e-324;
+  var eps = DB_FLOOR;
   var F = Z.length > 0 ? Z[0].length : 0;
   var minVal = Infinity, maxVal = -Infinity;
   for (var i = 0; i < Z.length; i++) {{
@@ -2480,9 +2574,12 @@ if (document.getElementById('sim_show').checked) runSim();
 # Local server: serves the current page, loads files, runs decay fits
 # ---------------------------------------------------------------------------
 
-def load_dataset(path, fmin=None, fmax=None, linear=False, n_avg=1, ion=None):
+def load_dataset(path, fmin=None, fmax=None, linear=False, n_avg=1, ion=None, bl=None):
     """Load + crop a file and build its page. Returns (html, state).
 
+    bl: baseline settings {"on", **BrPLS parameters} to use; None = the saved
+    ones (and then a failing baseline fit loads the raw data with a warning
+    instead of failing the load).
     ion: label added to the title (set by Search ions, e.g. "m186Hf72+ h213").
     If not given, it is kept from the saved session when the same file and
     crop are reloaded (bare re-run, refresh), and dropped otherwise.
@@ -2501,9 +2598,26 @@ def load_dataset(path, fmin=None, fmax=None, linear=False, n_avg=1, ion=None):
     freq_s, power_s = slice_freq(freq, power, lo, hi)
     print(f"Loaded {os.path.basename(path)}: {power_s.shape[1]} freq bins × "
           f"{power_s.shape[0]} time bins  [{lo:,.0f} – {hi:,.0f} Hz]")
+    # optional BrPLS baseline removal from every frame, over this window
+    explicit = bl is not None
+    bl = bl if explicit else baseline_prefs()
+    bl_info = {"on": False}
+    if bl.get("on"):
+        params = baseline.parse_params(bl)
+        try:
+            power_s = baseline.remove_cached(path, freq_s, power_s, (lo, hi), params)
+            bl_info = {"on": True, "params": params, "window": [lo, hi]}
+        except Exception as exc:
+            if explicit:
+                raise
+            print(f"Baseline removal failed, showing the raw data: {exc}")
+            bl_info = {"on": False, "error": f"baseline removal failed: {exc}"}
     html, state = build_page(freq_s, time, power_s, make_title(path, lo, hi, linear, ion),
                              log_scale=not linear, n_avg=max(1, int(n_avg)),
-                             file_path=path, fmin_req=fmin, fmax_req=fmax, ion=ion)
+                             file_path=path, fmin_req=fmin, fmax_req=fmax, ion=ion,
+                             bl_info=bl_info)
+    state["baseline"] = bl_info if bl_info.get("on") else None
+    state["load_args"] = dict(path=path, fmin=fmin, fmax=fmax, ion=ion)
     # Whole (uncropped) file, summed over all frames: used for the simulated-
     # line reference and the whole-file 1-D plot
     state["file_freq"] = np.asarray(freq, dtype=float)
@@ -2708,6 +2822,26 @@ def serve(html, state):
                 except Exception as exc:
                     self._send(400, {"error": str(exc)})
 
+            elif self.path == "/baseline":
+                # save the baseline settings and reload the current file with them
+                try:
+                    b = self._body()
+                    la = STATE.get("load_args")
+                    if not la:
+                        raise ValueError("no file loaded")
+                    bl = {"on": bool(b.get("on")), **baseline.parse_params(b)}
+                    html_new, st = load_dataset(la["path"], la["fmin"], la["fmax"],
+                                                bool(b.get("linear")), int(b.get("nAvg") or 1),
+                                                ion=la["ion"], bl=bl)
+                    with _PREFS_LOCK:
+                        prefs = read_prefs()
+                        prefs["baseline"] = bl
+                        write_prefs(prefs)
+                    STATE.clear(); STATE.update(st); STATE["html"] = html_new
+                    self._send(200, {"status": "loaded"})
+                except Exception as exc:
+                    self._send(400, {"error": str(exc)})
+
             elif self.path == "/run-decay-fit":
                 try:
                     body = self._body()
@@ -2723,6 +2857,11 @@ def serve(html, state):
                         "--tmax",     str(body["tMax"]),
                         "--time-avg", str(int(body.get("nAvg", 1))),
                     ]
+                    if STATE.get("baseline"):
+                        # same corrected frames as the page: BrPLS over the loaded window
+                        blw = STATE["baseline"]["window"]
+                        cmd += ["--baseline", json.dumps(STATE["baseline"]["params"]),
+                                "--baseline-window", repr(float(blw[0])), repr(float(blw[1]))]
                     if body.get("gamma") is not None:
                         cmd += ["--gamma", str(body["gamma"])]
                     if body.get("noOffset"):

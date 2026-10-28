@@ -374,6 +374,10 @@ def fit_rerun_args(rec):
         args += ["--err-coeffs", *map(repr, st["err_coeffs"])]
     if st.get("unweighted"):
         args.append("--unweighted")
+    bl = st.get("baseline")
+    if bl and bl.get("params") and bl.get("window_hz"):
+        args += ["--baseline", json.dumps(bl["params"]),
+                 "--baseline-window", *map(repr, bl["window_hz"])]
     if st.get("title_full"):
         args += ["--title-full", st["title_full"]]
     elif st.get("title"):
