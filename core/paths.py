@@ -33,7 +33,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_ROOT = os.path.join(REPO_ROOT, "data")
 SUITE_SETTINGS = os.path.join(DATA_ROOT, "asphodel_settings.json")
 
-OUTPUT_KINDS = ("scans", "confirmed", "fits", "figures", "isocurve")
+OUTPUT_KINDS = ("scans", "confirmed", "fits", "figures", "isocurve", "identified")
 
 
 # --------------------------------------------------------------------------- experiments (profiles)

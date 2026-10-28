@@ -26,9 +26,13 @@ Usage
     python reference/segre_chart.py      (normally started from the home page)
 """
 
+import datetime
+import glob
+import json
 import logging
 import os
 import re
+import uuid
 import socket
 import sys
 import threading
@@ -42,7 +46,7 @@ from core.nubase_reader import get_base_dataframe
 from core.physics import build_hover_label, half_life_seconds
 
 import dash
-from dash import dcc, html, Input, Output, State, ctx
+from dash import dcc, html, Input, Output, State, ALL, Patch, ctx
 import plotly.graph_objects as go
 
 PORT = 8054
@@ -199,8 +203,15 @@ def _continuous_with_ends(colours, low, high, frac=0.04):
     return out + [[1 - frac, high], [1.0, high]]
 
 
-def colouring(rows, by):
+def colouring(rows, by, id_cells=None):
     """z values, colour scale, zmin/zmax and colour-bar settings."""
+    if by == "identified":
+        order = {name: i for i, (name, _) in enumerate(ID_COLOURS)}
+        z = np.array([order[cell_status((id_cells or {}).get((zz, nn), []))]
+                      for zz, nn in zip(rows["Z"], rows["N"])], dtype=float)
+        n = len(ID_COLOURS)
+        return z, _stepped([c for _, c in ID_COLOURS]), -0.5, n - 0.5, \
+            dict(title="Identified", tickvals=list(range(n)), ticktext=[m for m, _ in ID_COLOURS])
     if by == "halflife":
         frac = 0.04
         span = (HL_MAX - HL_MIN) / (1 - 2 * frac)
@@ -331,7 +342,18 @@ def _text_colour(hexc):
 HALF = 0.47                  # half side of a square (cells are 1 wide: a thin white gap)
 
 
-def build_figure(by, state, overlays, mark=None, view=None, uirev="0"):
+def selection_trace(sel):
+    """Thick dashed outline around the selected square (sel = [Z, N] or None)."""
+    xs, ys = [], []
+    if sel:
+        zz, nn = sel
+        xs = [nn - .5, nn + .5, nn + .5, nn - .5, nn - .5]
+        ys = [zz - .5, zz - .5, zz + .5, zz + .5, zz - .5]
+    return go.Scatter(x=xs, y=ys, mode="lines", name="selection", hoverinfo="skip", showlegend=False,
+                      line=dict(color="#000000", width=4, dash="4px,3px"))
+
+
+def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None):
     """The squares are SVG path shapes (one per colour), not a heatmap: a
     heatmap is a raster image that Plotly re-encodes after every zoom step,
     and the browser shows a blank frame while it decodes the new one (the
@@ -342,11 +364,19 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0"):
     around the view (copied by the page from the hidden "labels-all" trace),
     and a dummy trace that carries the colour bar."""
     rows = state_rows(state)
-    z, scale, zmin, zmax, cbar = colouring(rows, by)
+    id_cells = entries_by_cell(all_entries()) if by == "identified" else None
+    z, scale, zmin, zmax, cbar = colouring(rows, by, id_cells)
     cols = scale_colours(z, scale, zmin, zmax)
     n_arr, z_arr = rows["N"].to_numpy(), rows["Z"].to_numpy()
+    hover = rows["hover"].to_numpy()
+    if id_cells:
+        hover = np.array([h + "".join("<br>" + entry_hover_line(e) for e in id_cells.get((zz, nn), []))
+                          for h, zz, nn in zip(hover, z_arr, n_arr)], dtype=object)
 
     fig = go.Figure()
+    # trace 0: outline of the square selected for editing (Identified ions);
+    # kept first so the selection callback can patch data[0]
+    fig.add_trace(selection_trace(sel))
     by_colour = {}
     for n, zz, c in zip(n_arr, z_arr, cols):
         by_colour.setdefault(c, []).append((n, zz))
@@ -362,7 +392,7 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0"):
     fig.add_trace(go.Scattergl(
         x=n_arr, y=z_arr, mode="markers", name="hover",
         marker=dict(symbol="square", size=1, color=cols, opacity=0),
-        hovertext=rows["hover"].to_numpy(), hoverinfo="text", showlegend=False))
+        hovertext=hover, hoverinfo="text", showlegend=False))
     # A + symbol labels: all of them in a hidden trace (data for the page), and
     # the ones around the view, copied by the page into "labels" once the
     # squares are big enough (a few hundred text elements instead of 3500)
@@ -461,6 +491,145 @@ def find_nuclide(q):
 
 
 # ===========================================================================
+# Identified ions (Colour by -> Identified ions)
+# ===========================================================================
+# Your own marks, per experiment, in data/<exp>/outputs/identified/segre_identified.json:
+#   {"format": "asphodel-segre-identified", "version": 1,
+#    "entries": [{"id", "Z", "N", "A", "sym", "isomer": "g"/"m"/..., "charge",
+#                 "harmonic", "status": "confident"/"unsure", "notes", "updated"}],
+#    "confirmed_lists": ["confirmed_....csv", ...]}     <- Theia lists shown too
+# Marks belong to the nuclide's ground-state square; the isomer is a field of
+# the entry.  A square is green if any entry for it is confident, else orange.
+IDS_FILE = "segre_identified.json"
+ID_COLOURS = [("confident", "#2e9e4a"), ("unsure", "#f59a23"), ("not identified", "#ececec")]
+_CONF_CACHE = {}                      # path -> (mtime, entries)
+
+
+def ids_path():
+    return os.path.join(paths.outputs("identified"), IDS_FILE)
+
+
+def load_ids():
+    d = {"format": "asphodel-segre-identified", "version": 1, "entries": [], "confirmed_lists": []}
+    try:
+        with open(ids_path(), encoding="utf-8") as fh:
+            saved = json.load(fh)
+        if isinstance(saved, dict):
+            d["entries"] = [e for e in saved.get("entries", []) if isinstance(e, dict)]
+            d["confirmed_lists"] = [str(x) for x in saved.get("confirmed_lists", [])]
+    except (OSError, ValueError):
+        pass
+    return d
+
+
+def save_ids(d):
+    path = ids_path()
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(d, fh, indent=1, ensure_ascii=False)
+        fh.write("\n")
+    os.replace(tmp, path)
+
+
+def ion_name(e):
+    iso = "" if e.get("isomer", "g") == "g" else e["isomer"]
+    return f"{iso}{e['A']}{e['sym']}{e['charge']}+"
+
+
+def confirmed_files():
+    """Theia's confirmed lists of the experiment: [(name, label)], newest first."""
+    out = []
+    try:
+        files = sorted(glob.glob(os.path.join(paths.outputs("confirmed"), "*.csv")),
+                       key=os.path.getmtime, reverse=True)
+    except OSError:
+        return out
+    for f in files:
+        head = {}
+        try:
+            with open(f, encoding="utf-8") as fh:
+                for line in fh:
+                    if not line.startswith("# "):
+                        break
+                    k, _, v = line[2:].partition(": ")
+                    head[k.strip()] = v.strip()
+        except OSError:
+            continue
+        label = (f"{head.get('filter', '').replace('ions: ', '') or os.path.basename(f)}"
+                 f" · {head.get('saved', '')[:16].replace('T', ' ')}"
+                 f" · {head.get('accepted', '?')} accepted, {head.get('unsure', '?')} unsure")
+        out.append((os.path.basename(f), label))
+    return out
+
+
+def confirmed_entries(name):
+    """Entries from one Theia confirmed list: one per (ion, harmonic);
+    confident if any peak of it was accepted, unsure if only unsure ones
+    (rejected peaks are left out).  Read-only, cached by file time."""
+    path = os.path.join(paths.outputs("confirmed"), name)
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return []
+    hit = _CONF_CACHE.get(path)
+    if hit and hit[0] == mtime:
+        return hit[1]
+    out = []
+    try:
+        df = pd.read_csv(path, comment="#")
+        df = df[df["decision"].isin(["accepted", "unsure"])]
+        for (ion, harm), g in df.groupby(["ion", "harmonic"]):
+            m = re.match(r"([a-z]?)(\d+)([A-Za-z]+)(\d+)\+$", str(ion))
+            if not m:
+                continue
+            r0 = g.iloc[0]
+            out.append({"id": f"theia:{name}:{ion}:{int(harm)}", "Z": int(r0["Z"]), "N": int(r0["N"]),
+                        "A": int(m.group(2)), "sym": m.group(3), "isomer": m.group(1) or "g",
+                        "charge": int(m.group(4)), "harmonic": int(harm),
+                        "status": "confident" if (g["decision"] == "accepted").any() else "unsure",
+                        "notes": f"{(g['decision'] == 'accepted').sum()} accepted, "
+                                 f"{(g['decision'] == 'unsure').sum()} unsure peaks",
+                        "source": name})
+    except Exception as exc:                    # unreadable list: skip it, say so on the console
+        print(f"Segrè chart: can't read {name}: {exc}", flush=True)
+    _CONF_CACHE[path] = (mtime, out)
+    return out
+
+
+def all_entries(d=None):
+    """Own entries + those of the selected Theia lists."""
+    d = d or load_ids()
+    out = [dict(e, source=None) for e in d["entries"]]
+    for name in d["confirmed_lists"]:
+        out += confirmed_entries(name)
+    return out
+
+
+def entries_by_cell(entries):
+    cells = {}
+    for e in entries:
+        cells.setdefault((e["Z"], e["N"]), []).append(e)
+    for v in cells.values():
+        v.sort(key=lambda e: (e.get("isomer", "g") != "g", e.get("isomer", ""), -e["charge"], e["harmonic"]))
+    return cells
+
+
+def cell_status(es):
+    if any(e["status"] == "confident" for e in es):
+        return "confident"
+    return "unsure" if es else "not identified"
+
+
+def entry_hover_line(e):
+    mark = "✓" if e["status"] == "confident" else "?"
+    note = (e.get("notes") or "").strip().replace("<", "&lt;")
+    if len(note) > 60:
+        note = note[:57] + "…"
+    src = " [Theia list]" if e.get("source") else ""
+    return f"{mark} {ion_name(e)} h{e['harmonic']}{src}" + (f" – {note}" if note else "")
+
+
+# ===========================================================================
 # Page
 # ===========================================================================
 CSS = f"""
@@ -486,7 +655,36 @@ header .exp{{color:#777;font-family:monospace;font-size:12px}}
 .msg{{color:#8a4a10;font-size:12px}}
 .info{{flex:none;padding:4px 18px;font-size:12px;color:#8a4a10;background:{PALE};
   border-bottom:1px solid {LINE};min-height:24px}}
-.graph{{flex:1 1 auto;min-height:0}}
+.main{{flex:1 1 auto;min-height:0;display:flex}}
+.graph{{flex:1 1 auto;min-width:0;min-height:0}}
+/* Identified ions: editing panel on the right */
+.panel{{flex:none;width:370px;border-left:1px solid {LINE};background:{SIDE};padding:12px 14px;
+  overflow-y:auto;font-size:13px}}
+.panel h4{{margin:0 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:.7px;color:#555}}
+.panel h4 span{{color:#777;text-transform:none;letter-spacing:0;font-weight:400;margin-left:6px}}
+.panel .sub{{font-size:11px;text-transform:uppercase;letter-spacing:.7px;color:#777;font-weight:700;margin:14px 0 6px}}
+.panel .selt{{font-weight:700;font-size:15px;margin:10px 0 6px}} .panel .selt span{{font-weight:400;color:#777;font-size:12px}}
+.panel .hint{{color:#777;font-size:12px}}
+.panel details{{background:#fff;border:1px solid {LINE};border-radius:5px;padding:6px 8px}}
+.panel summary{{cursor:pointer;font-weight:600}}
+.panel .lists label{{display:block;margin:4px 0;font-size:12px;word-break:break-all}}
+.panel .lists input{{accent-color:{ACCENT};margin-right:5px}}
+.entry{{background:#fff;border:1px solid {LINE};border-left:5px solid #ccc;border-radius:4px;padding:6px 8px;margin:6px 0}}
+.entry.confident{{border-left-color:{ID_COLOURS[0][1]}}} .entry.unsure{{border-left-color:{ID_COLOURS[1][1]}}}
+.entry .ion{{font-weight:700;font-family:monospace;font-size:13px}} .entry .st{{color:#555;margin-left:6px}}
+.entry .notes{{white-space:pre-wrap;margin-top:3px;color:#333}} .entry .src{{color:#777;font-size:11px;margin-top:3px;word-break:break-all}}
+.entry .btns{{margin-top:5px;display:flex;gap:6px}}
+.form{{background:#fff;border:1px solid {LINE};border-radius:5px;padding:8px 10px;margin-top:8px}}
+.form .row{{display:flex;gap:10px}} .form .row>div{{flex:1}}
+.form label.f{{display:block;font-size:11px;color:#777;margin:6px 0 2px;text-transform:uppercase;letter-spacing:.5px}}
+.form input[type=text]{{width:100%;padding:4px 6px;border:1px solid {LINE};border-radius:4px;font-size:13px}}
+.form textarea{{width:100%;min-height:70px;padding:4px 6px;border:1px solid {LINE};border-radius:4px;font-size:13px;font-family:inherit}}
+.form .radio label{{margin-right:12px}} .form .radio input{{accent-color:{ACCENT};margin-right:3px}}
+.form .btns{{margin-top:8px;display:flex;gap:8px;align-items:center}}
+.btn.primary{{background:{ACCENT};border-color:{ACCENT};color:#fff}} .btn.primary:hover{{color:#fff;opacity:.9}}
+.btn.danger:hover{{border-color:#c62828;color:#c62828}}
+.alllist{{max-height:260px;overflow-y:auto}}
+.alllist button{{display:block;width:100%;text-align:left;margin:3px 0;font-family:monospace;font-size:12px}}
 """
 
 app = dash.Dash(__name__, title="Segrè chart", suppress_callback_exceptions=True)
@@ -494,6 +692,53 @@ app.index_string = app.index_string.replace("</head>", f"<style>{CSS}</style></h
 app.index_string = app.index_string.replace(
     "{%scripts%}", "{%scripts%}\n<script>" + tabwatch.watch_js("Segrè chart") + "</script>")
 icon.use_in_dash(app, "segre")       # core/icons/segre.png, else asphodel.png
+
+
+def id_panel():
+    """Right-hand panel of the Identified ions colouring."""
+    d = load_ids()
+    files = confirmed_files()
+    have = {n for n, _ in files}
+    lbl = lambda t: html.Label(t, className="f")
+    return html.Div([
+        html.H4(["Identified ions", html.Span(id="id-count")]),
+        html.Details([
+            html.Summary("Theia confirmed lists"),
+            html.Div("Lists whose ions are shown as identified too (read-only; "
+                     "accepted → confident, only unsure → unsure).", className="hint"),
+            dcc.Checklist(id="id-lists", className="lists",
+                          options=[{"label": lab, "value": n} for n, lab in files],
+                          value=[n for n in d["confirmed_lists"] if n in have]),
+            html.Div("No confirmed lists in outputs/confirmed." if not files else "", className="hint"),
+            html.Button("Apply", id="id-lists-apply", className="btn small", n_clicks=0),
+        ]),
+        html.Div(id="id-sel-title", className="selt"),
+        html.Div(id="id-entries"),
+        html.Div([
+            lbl("Isomer"),
+            dcc.Dropdown(id="id-iso", clearable=False, value="g",
+                         options=[{"label": "ground state", "value": "g"}]),
+            html.Div([html.Div([lbl("Charge state q *"),
+                                dcc.Input(id="id-charge", type="text", inputMode="numeric", debounce=False,
+                                          placeholder="e.g. 72", autoComplete="off")]),
+                      html.Div([lbl("Harmonic *"),
+                                dcc.Input(id="id-harm", type="text", inputMode="numeric", debounce=False,
+                                          placeholder="e.g. 213", autoComplete="off")])],
+                     className="row"),
+            lbl("Status"),
+            dcc.RadioItems(id="id-status", value="confident", className="radio", inline=True,
+                           options=[{"label": "Confident", "value": "confident"},
+                                    {"label": "Unsure", "value": "unsure"}]),
+            lbl("Notes"),
+            dcc.Textarea(id="id-notes", value=""),
+            html.Div([html.Button("Add", id="id-save", className="btn primary", n_clicks=0),
+                      html.Button("Cancel edit", id="id-cancel", className="btn", n_clicks=0,
+                                  style={"display": "none"})], className="btns"),
+            html.Div(id="id-msg", className="msg"),
+        ], id="id-form", className="form", style={"display": "none"}),
+        html.Div("All identified", className="sub"),
+        html.Div(id="id-all", className="alllist"),
+    ], id="id-panel", className="panel", style={"display": "none"})
 
 
 def serve_layout():
@@ -508,7 +753,8 @@ def serve_layout():
                                    options=[{"label": "Half-life", "value": "halflife"},
                                             {"label": "Main decay mode", "value": "mode"},
                                             {"label": "Mass: measured / #", "value": "mass"},
-                                            {"label": "Mass-excess uncertainty", "value": "massunc"}])],
+                                            {"label": "Mass-excess uncertainty", "value": "massunc"},
+                                            {"label": "Identified ions", "value": "identified"}])],
                      className="grp"),
             html.Div([html.Label("State", className="t"),
                       dcc.RadioItems(id="state", value="g", className="radio", inline=True,
@@ -533,9 +779,15 @@ def serve_layout():
                      className="grp"),
         ], className="bar"),
         html.Div(id="region-info", className="info"),
-        dcc.Graph(id="chart", className="graph", style={"height": "100%"},
-                  config={"scrollZoom": True, "displaylogo": False,
-                          "toImageButtonOptions": {"filename": "segre_chart", "scale": 3}}),
+        html.Div([
+            dcc.Graph(id="chart", className="graph", style={"height": "100%"}, responsive=True,
+                      config={"scrollZoom": True, "displaylogo": False,
+                              "toImageButtonOptions": {"filename": "segre_chart", "scale": 3}}),
+            id_panel(),
+        ], className="main"),
+        dcc.Store(id="id-sel", data=None),          # [Z, N] of the square being edited
+        dcc.Store(id="id-editing", data=None),      # id of the entry loaded into the form
+        dcc.Store(id="id-ver", data=0),             # bumped after every change -> redraw
         html.Div(id="labels-dummy", style={"display": "none"}),
         dcc.Store(id="view", data={"rev": 0, "mark": None, "x": None, "y": None}),
         # the view on screen (set by the page after every zoom / pan), so a
@@ -580,24 +832,227 @@ def _set_view(_s, _r, _a, q, view):
 @app.callback(
     Output("chart", "figure"), Output("region-info", "children"),
     Input("by", "value"), Input("state", "value"), Input("level", "value"),
-    Input("overlays", "value"), Input("view", "data"),
-    State("cur-view", "data"),
+    Input("overlays", "value"), Input("view", "data"), Input("id-ver", "data"),
+    State("cur-view", "data"), State("id-sel", "data"),
 )
-def _draw(by, state, level, overlays, view, cur):
+def _draw(by, state, level, overlays, view, _ver, cur, sel):
     """Redraw for any option.  The view stays where it is (the ranges on
     screen are put into the new figure), except after a search or a zoom
     button, which set their own view."""
     st = "g" if state != "iso" else (level or "m")
+    if by == "identified":
+        st = "g"                       # identifications are marked on the ground-state squares
     view = view or {}
     mark = tuple(view["mark"]) if view.get("mark") else None
     shown = view
     if ctx.triggered_id != "view" and cur and cur.get("x") and cur.get("y"):
         shown = dict(view, x=cur["x"], y=cur["y"])
     fig, info = build_figure(by, st, overlays or [], mark=mark, view=shown,
-                             uirev=str(view.get("rev", 0)))
+                             uirev=str(view.get("rev", 0)),
+                             sel=sel if by == "identified" else None)
     n = len(state_rows(st))
     what = "ground states" if st == "g" else f"isomers '{st}'"
-    return fig, (info + " · " if info else "") + f"{n} {what} shown"
+    text = (info + " · " if info else "") + f"{n} {what} shown"
+    if by == "identified":
+        text += " · identified ions are marked on the ground-state squares: click a square to edit"
+    return fig, text
+
+
+# ---------------------------------------------------------------- Identified ions
+
+@app.callback(Output("id-panel", "style"), Input("by", "value"))
+def _id_panel_shown(by):
+    return {} if by == "identified" else {"display": "none"}
+
+
+@app.callback(
+    Output("id-sel", "data"),
+    Input("chart", "clickData"), Input({"type": "idgo", "z": ALL, "n": ALL}, "n_clicks"),
+    State("by", "value"),
+    prevent_initial_call=True,
+)
+def _id_select(click, _go, by):
+    """Click a square (Identified ions only), or a nuclide in the 'All identified' list."""
+    t = ctx.triggered_id
+    if isinstance(t, dict) and t.get("type") == "idgo":
+        if not (ctx.triggered and ctx.triggered[0]["value"]):
+            return dash.no_update
+        return [t["z"], t["n"]]
+    if by != "identified" or not click or not click.get("points"):
+        return dash.no_update
+    pt = click["points"][0]
+    try:
+        nn, zz = int(round(pt["x"])), int(round(pt["y"]))
+    except (KeyError, TypeError, ValueError):
+        return dash.no_update
+    if TABLE[(TABLE["Z"] == zz) & (TABLE["N"] == nn) & (TABLE["state"] == "g")].empty:
+        return dash.no_update
+    return [zz, nn]
+
+
+@app.callback(Output("chart", "figure", allow_duplicate=True), Input("id-sel", "data"),
+              State("by", "value"), prevent_initial_call=True)
+def _id_outline(sel, by):
+    """Move the selection outline (trace 0) without redrawing the chart."""
+    t = selection_trace(sel if by == "identified" else None)
+    p = Patch()
+    p["data"][0]["x"] = list(t.x or [])
+    p["data"][0]["y"] = list(t.y or [])
+    return p
+
+
+def _gs_row(zz, nn):
+    r = TABLE[(TABLE["Z"] == zz) & (TABLE["N"] == nn) & (TABLE["state"] == "g")]
+    return None if r.empty else r.iloc[0]
+
+
+def _entry_card(e):
+    st = "confident" if e["status"] == "confident" else "unsure"
+    body = [html.Span(ion_name(e), className="ion"),
+            html.Span(f"h = {e['harmonic']} · {st}", className="st")]
+    out = [html.Div(body)]
+    if (e.get("notes") or "").strip():
+        out.append(html.Div(e["notes"], className="notes"))
+    if e.get("source"):
+        out.append(html.Div(f"Theia list: {e['source']}", className="src"))
+    else:
+        if e.get("updated"):
+            out.append(html.Div(f"updated {e['updated'][:16].replace('T', ' ')}", className="src"))
+        out.append(html.Div([
+            html.Button("Edit", id={"type": "idedit", "id": e["id"]}, className="btn", n_clicks=0),
+            dcc.ConfirmDialogProvider(
+                html.Button("Delete", className="btn danger"), id={"type": "iddel", "id": e["id"]},
+                message=f"Delete the identification {ion_name(e)} h{e['harmonic']}?"),
+        ], className="btns"))
+    return html.Div(out, className=f"entry {st}")
+
+
+@app.callback(
+    Output("id-sel-title", "children"), Output("id-entries", "children"),
+    Output("id-form", "style"), Output("id-iso", "options"),
+    Output("id-all", "children"), Output("id-count", "children"),
+    Input("id-sel", "data"), Input("id-ver", "data"),
+)
+def _id_panel(sel, _ver):
+    entries = all_entries()
+    cells = entries_by_cell(entries)
+    own = sum(1 for e in entries if not e.get("source"))
+    count = f"{len(cells)} nuclides · {own} own + {len(entries) - own} from Theia lists"
+    # the list of all identified nuclides (click = select)
+    allrows = []
+    for (zz, nn) in sorted(cells):
+        es = cells[(zz, nn)]
+        r = _gs_row(zz, nn)
+        nm = r["name"] if r is not None else f"Z{zz} N{nn}"
+        txt = f"{'✓' if cell_status(es) == 'confident' else '?'} {nm}: " + \
+            ", ".join(f"{ion_name(e)} h{e['harmonic']}" for e in es)
+        allrows.append(html.Button(txt, id={"type": "idgo", "z": zz, "n": nn}, className="btn", n_clicks=0))
+    if not allrows:
+        allrows = [html.Div("Nothing identified yet.", className="hint")]
+    if not sel:
+        return ([html.Span("Click a square to select a nuclide", className="hint")], [],
+                {"display": "none"}, [{"label": "ground state", "value": "g"}], allrows, count)
+    zz, nn = sel
+    r = _gs_row(zz, nn)
+    title = [r["name"] if r is not None else f"Z = {zz}, N = {nn}",
+             html.Span(f"  Z = {zz}, N = {nn}")]
+    isos = [{"label": "ground state", "value": "g"}] + [
+        {"label": f"{st} (E_x {x} keV)" if str(x) not in ("", "nan") else st, "value": st}
+        for st, x in TABLE[(TABLE["Z"] == zz) & (TABLE["N"] == nn) & ~TABLE["state"].isin(["g", "i", "j"])]
+        [["state", "E_x"]].itertuples(index=False)]
+    es = cells.get((zz, nn), [])
+    cards = [_entry_card(e) for e in es] or [html.Div("Not identified yet – add it below.", className="hint")]
+    return title, cards, {}, isos, allrows, count
+
+
+@app.callback(
+    Output("id-ver", "data"), Output("id-editing", "data"),
+    Output("id-iso", "value"), Output("id-charge", "value"), Output("id-harm", "value"),
+    Output("id-status", "value"), Output("id-notes", "value"),
+    Output("id-msg", "children"), Output("id-save", "children"), Output("id-cancel", "style"),
+    Input("id-save", "n_clicks"), Input("id-cancel", "n_clicks"),
+    Input({"type": "idedit", "id": ALL}, "n_clicks"),
+    Input({"type": "iddel", "id": ALL}, "submit_n_clicks"),
+    Input("id-sel", "data"),
+    State("id-iso", "value"), State("id-charge", "value"), State("id-harm", "value"),
+    State("id-status", "value"), State("id-notes", "value"),
+    State("id-editing", "data"), State("id-ver", "data"),
+    prevent_initial_call=True,
+)
+def _id_edit(_save, _cancel, _edit, _del, sel, iso, charge, harm, status, notes, editing, ver):
+    """Add / save / edit / delete an identification of the selected nuclide."""
+    nu = dash.no_update
+    t = ctx.triggered_id
+    ver = ver or 0
+    hide, show = {"display": "none"}, {}
+    # new selection: empty form (the harmonic and status are kept: often the same)
+    if t == "id-sel" or t == "id-cancel":
+        return nu, None, "g", "", nu, nu, "", "", "Add", hide
+    if isinstance(t, dict):
+        if not (ctx.triggered and ctx.triggered[0]["value"]):
+            return (nu,) * 10
+        d = load_ids()
+        e = next((x for x in d["entries"] if x.get("id") == t["id"]), None)
+        if e is None:
+            return (nu,) * 7 + ("⚠ that entry no longer exists", nu, nu)
+        if t["type"] == "iddel":
+            d["entries"] = [x for x in d["entries"] if x.get("id") != t["id"]]
+            save_ids(d)
+            return (ver + 1, None, "g", "", nu, nu, "", f"Deleted {ion_name(e)} h{e['harmonic']}.",
+                    "Add", hide)
+        return (nu, e["id"], e.get("isomer", "g"), str(e["charge"]), str(e["harmonic"]), e["status"],
+                e.get("notes", ""), f"Editing {ion_name(e)} h{e['harmonic']}", "Save changes", show)
+    # Add / Save changes
+    if not sel:
+        return (nu,) * 7 + ("Select a nuclide first (click its square).", nu, nu)
+    zz, nn = sel
+    r = _gs_row(zz, nn)
+    try:
+        q = int(str(charge).strip())
+        if not 1 <= q <= zz:
+            raise ValueError
+    except (TypeError, ValueError):
+        return (nu,) * 7 + (f"⚠ Charge state q is required: a whole number from 1 to {zz}.", nu, nu)
+    try:
+        h = int(str(harm).strip())
+        if h < 1:
+            raise ValueError
+    except (TypeError, ValueError):
+        return (nu,) * 7 + ("⚠ Harmonic is required: a whole number ≥ 1.", nu, nu)
+    iso = iso or "g"
+    d = load_ids()
+    clash = next((x for x in d["entries"] if x.get("id") != editing and x["Z"] == zz and x["N"] == nn
+                  and x.get("isomer", "g") == iso and x["charge"] == q and x["harmonic"] == h), None)
+    if clash:
+        return (nu,) * 7 + (f"⚠ {ion_name(clash)} h{h} is already in the list – edit that one.", nu, nu)
+    now = datetime.datetime.now().isoformat(timespec="seconds")
+    new = {"Z": zz, "N": nn, "A": zz + nn, "sym": r["sym"] if r is not None else SYMBOLS.get(zz, "?"),
+           "isomer": iso, "charge": q, "harmonic": h,
+           "status": "unsure" if status == "unsure" else "confident",
+           "notes": (notes or "").strip(), "updated": now}
+    old = next((x for x in d["entries"] if x.get("id") == editing), None) if editing else None
+    if old is not None:
+        old.update(new)
+        msg = f"Saved {ion_name(old)} h{h}."
+    else:
+        new["id"] = uuid.uuid4().hex[:10]
+        d["entries"].append(new)
+        msg = f"Added {ion_name(new)} h{h}."
+    save_ids(d)
+    return ver + 1, None, "g", "", nu, nu, "", msg, "Add", hide
+
+
+@app.callback(
+    Output("id-ver", "data", allow_duplicate=True), Output("id-msg", "children", allow_duplicate=True),
+    Input("id-lists-apply", "n_clicks"), State("id-lists", "value"), State("id-ver", "data"),
+    prevent_initial_call=True,
+)
+def _id_lists(_n, chosen, ver):
+    d = load_ids()
+    d["confirmed_lists"] = list(chosen or [])
+    save_ids(d)
+    n = sum(len(confirmed_entries(x)) for x in d["confirmed_lists"])
+    return (ver or 0) + 1, f"{len(d['confirmed_lists'])} Theia list(s) shown ({n} ion/harmonic entries)."
 
 
 # A + symbol in the squares once they are big enough on screen to read
