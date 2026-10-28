@@ -531,6 +531,32 @@ def save_ids(d):
     os.replace(tmp, path)
 
 
+def parse_int_list(text, lo, hi):
+    """'72', '70, 71 72', '70-72', '212, 214-215' -> (sorted unique ints, None)
+    or ([], error text).  Required: an empty field is an error."""
+    t = str(text or "").strip()
+    if not t:
+        return [], "required"
+    out = set()
+    for part in re.split(r"[,;\s]+", t):
+        if not part:
+            continue
+        m = re.fullmatch(r"(\d+)(?:-(\d+))?", part)
+        if not m:
+            return [], f"can't read '{part}'"
+        a = int(m.group(1))
+        b = int(m.group(2)) if m.group(2) else a
+        if b < a:
+            a, b = b, a
+        if b - a > 50:
+            return [], f"range '{part}' is too long"
+        for v in range(a, b + 1):
+            if v < lo or (hi is not None and v > hi):
+                return [], f"{v} is out of range"
+            out.add(v)
+    return sorted(out), None
+
+
 def ion_name(e):
     iso = "" if e.get("isomer", "g") == "g" else e["isomer"]
     return f"{iso}{e['A']}{e['sym']}{e['charge']}+"
@@ -718,13 +744,15 @@ def id_panel():
             lbl("Isomer"),
             dcc.Dropdown(id="id-iso", clearable=False, value="g",
                          options=[{"label": "ground state", "value": "g"}]),
-            html.Div([html.Div([lbl("Charge state q *"),
+            html.Div([html.Div([lbl("Charge state(s) q *"),
                                 dcc.Input(id="id-charge", type="text", inputMode="numeric", debounce=False,
-                                          placeholder="e.g. 72", autoComplete="off")]),
-                      html.Div([lbl("Harmonic *"),
+                                          placeholder="72 or 70-72", autoComplete="off")]),
+                      html.Div([lbl("Harmonic(s) *"),
                                 dcc.Input(id="id-harm", type="text", inputMode="numeric", debounce=False,
-                                          placeholder="e.g. 213", autoComplete="off")])],
+                                          placeholder="213 or 212, 214", autoComplete="off")])],
                      className="row"),
+            html.Div("Several values (commas, spaces or ranges like 212-214) add one entry per "
+                     "charge state × harmonic, with the same status and notes.", className="hint"),
             lbl("Status"),
             dcc.RadioItems(id="id-status", value="confident", className="radio", inline=True,
                            options=[{"label": "Confident", "value": "confident"},
@@ -1007,37 +1035,50 @@ def _id_edit(_save, _cancel, _edit, _del, sel, iso, charge, harm, status, notes,
         return (nu,) * 7 + ("Select a nuclide first (click its square).", nu, nu)
     zz, nn = sel
     r = _gs_row(zz, nn)
-    try:
-        q = int(str(charge).strip())
-        if not 1 <= q <= zz:
-            raise ValueError
-    except (TypeError, ValueError):
-        return (nu,) * 7 + (f"⚠ Charge state q is required: a whole number from 1 to {zz}.", nu, nu)
-    try:
-        h = int(str(harm).strip())
-        if h < 1:
-            raise ValueError
-    except (TypeError, ValueError):
-        return (nu,) * 7 + ("⚠ Harmonic is required: a whole number ≥ 1.", nu, nu)
+    qs, err = parse_int_list(charge, 1, zz)
+    if err:
+        return (nu,) * 7 + (f"⚠ Charge state q: {err} (whole numbers from 1 to {zz}).", nu, nu)
+    hs, err = parse_int_list(harm, 1, None)
+    if err:
+        return (nu,) * 7 + (f"⚠ Harmonic: {err} (whole numbers ≥ 1).", nu, nu)
+    if editing and (len(qs) > 1 or len(hs) > 1):
+        return (nu,) * 7 + ("⚠ An edited entry has one charge state and one harmonic – "
+                            "add the others as new entries.", nu, nu)
     iso = iso or "g"
     d = load_ids()
-    clash = next((x for x in d["entries"] if x.get("id") != editing and x["Z"] == zz and x["N"] == nn
-                  and x.get("isomer", "g") == iso and x["charge"] == q and x["harmonic"] == h), None)
-    if clash:
-        return (nu,) * 7 + (f"⚠ {ion_name(clash)} h{h} is already in the list – edit that one.", nu, nu)
     now = datetime.datetime.now().isoformat(timespec="seconds")
-    new = {"Z": zz, "N": nn, "A": zz + nn, "sym": r["sym"] if r is not None else SYMBOLS.get(zz, "?"),
-           "isomer": iso, "charge": q, "harmonic": h,
-           "status": "unsure" if status == "unsure" else "confident",
-           "notes": (notes or "").strip(), "updated": now}
+    base = {"Z": zz, "N": nn, "A": zz + nn, "sym": r["sym"] if r is not None else SYMBOLS.get(zz, "?"),
+            "isomer": iso, "status": "unsure" if status == "unsure" else "confident",
+            "notes": (notes or "").strip(), "updated": now}
+
+    def clash(q, h):
+        return next((x for x in d["entries"] if x.get("id") != editing and x["Z"] == zz and x["N"] == nn
+                     and x.get("isomer", "g") == iso and x["charge"] == q and x["harmonic"] == h), None)
+
     old = next((x for x in d["entries"] if x.get("id") == editing), None) if editing else None
     if old is not None:
-        old.update(new)
+        q, h = qs[0], hs[0]
+        c = clash(q, h)
+        if c:
+            return (nu,) * 7 + (f"⚠ {ion_name(c)} h{h} is already in the list – edit that one.", nu, nu)
+        old.update(base, charge=q, harmonic=h)
         msg = f"Saved {ion_name(old)} h{h}."
     else:
-        new["id"] = uuid.uuid4().hex[:10]
-        d["entries"].append(new)
-        msg = f"Added {ion_name(new)} h{h}."
+        # one entry per (charge state, harmonic) combination; existing ones are skipped
+        added, skipped = [], []
+        for q in qs:
+            for h in hs:
+                e = dict(base, charge=q, harmonic=h)
+                if clash(q, h):
+                    skipped.append(f"{ion_name(e)} h{h}")
+                    continue
+                e["id"] = uuid.uuid4().hex[:10]
+                d["entries"].append(e)
+                added.append(f"{ion_name(e)} h{h}")
+        if not added:
+            return (nu,) * 7 + ("⚠ Already in the list: " + ", ".join(skipped) + " – edit those.", nu, nu)
+        msg = f"Added {len(added)}: " + ", ".join(added) + "." + \
+            (f" Skipped (already in the list): {', '.join(skipped)}." if skipped else "")
     save_ids(d)
     return ver + 1, None, "g", "", nu, nu, "", msg, "Add", hide
 
