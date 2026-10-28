@@ -340,6 +340,7 @@ def _text_colour(hexc):
 
 
 HALF = 0.47                  # half side of a square (cells are 1 wide: a thin white gap)
+STABLE_CORNER = 0.38         # Identified ions: side of the black corner triangle on stable squares
 
 
 def selection_trace(sel):
@@ -386,6 +387,18 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
                        for n, zz in cells)
         cell_shapes.append(dict(type="path", path=path, fillcolor=c, line=dict(width=0),
                                 layer="below", xref="x", yref="y"))
+    if by == "identified":
+        # stable nuclides: the top-right corner of the square filled in black
+        st_rows = rows[np.isinf(rows["hl_s"].to_numpy(dtype=float))]
+        k = STABLE_CORNER
+        path = "".join(f"M{n + HALF:g},{zz + HALF:g}H{n + HALF - k:g}L{n + HALF:g},{zz + HALF - k:g}Z"
+                       for n, zz in zip(st_rows["N"], st_rows["Z"]))
+        if path:
+            cell_shapes.append(dict(type="path", path=path, fillcolor="#000000", line=dict(width=0),
+                                    layer="below", xref="x", yref="y"))
+            fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name="stable",
+                                     marker=dict(symbol="triangle-ne", size=11, color="#000000"),
+                                     hoverinfo="skip", showlegend=True))
     # hover: one invisible square marker per nuclide, coloured like its square
     # (the hover label takes that colour, as the heatmap's did).  WebGL: 3500
     # SVG markers made every zoom step slow to redraw; WebGL ones cost nothing.
