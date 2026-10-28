@@ -75,7 +75,12 @@ TOOLS = {
 }
 SECTIONS = ["Theia", "Spectrogram", "Tartarus", "Elysium"]
 # sections shown side by side on one row (each takes as many columns as it has cards)
-SECTION_ROWS = [["Theia", "Spectrogram", "Elysium"], ["Tartarus"]]
+SECTION_ROWS = [["Theia", "Spectrogram", "Elysium"], ["Tartarus", "Reference"]]
+
+# NUBASE2020 paper and its page index (core/build_nubase_index.py)
+NUBASE_PDF = os.path.join(REPO, "core", "nubase2020.pdf")
+NUBASE_PAGES = os.path.join(REPO, "core", "nubase2020_pages.json")
+NUBASE_URL = "/nubase2020.pdf"
 
 _PROCS = {}                 # key -> list of (Popen, experiment)
 _PROCS_LOCK = threading.Lock()
@@ -482,6 +487,38 @@ def tool_forms():
     }
 
 
+def nubase_card():
+    """'View NUBASE': open the NUBASE2020 paper in a tab, or at a nuclide's page."""
+    pages = _read_json(NUBASE_PAGES) or {}
+    have_pdf = os.path.isfile(NUBASE_PDF)
+    if not have_pdf:
+        body = [html.Div("core/nubase2020.pdf not found", className="note")]
+    else:
+        body = [
+            html.Div(html.A("Open NUBASE", href=NUBASE_URL, target="_blank",
+                            className="btn primary small",
+                            title="NUBASE2020 (Kondev et al., Chin. Phys. C 45, 030001) in a new tab"),
+                     className="btns"),
+            html.Div([
+                html.Label("Go to a nuclide (e.g. 198Ir, Ir198, Ir-198)", className="flabel"),
+                dcc.Input(id="nub-q", type="text", list="nub-names", debounce=False,
+                          className="wide", placeholder="198Ir", autoComplete="off", n_submit=0),
+                html.Datalist(id="nub-names", children=[html.Option(value=k) for k in pages]),
+                html.Div([html.A("Open at page", id="nub-go", href=NUBASE_URL, target="asphodel-nubase",
+                                 className="btn small"),
+                          html.Span(id="nub-msg", className="note")], className="below"),
+            ], className="form"),
+            dcc.Store(id="nub-index", data=pages),
+        ]
+    return html.Div([
+        html.Div("View NUBASE", className="name"),
+        html.Div("core/nubase2020.pdf", className="from"),
+        html.P("The NUBASE2020 evaluation: table of nuclides, isomers, half-lives, "
+               "spins and decay modes."),
+        *body,
+    ], className="tool")
+
+
 def tools_section():
     forms = tool_forms()
     rows = []
@@ -496,6 +533,8 @@ def tools_section():
                 if key in forms:
                     card.children.append(forms[key])
                 cards.append(card)
+            if sec == "Reference":
+                cards.append(nubase_card())
             n = max(len(cards), 1)
             ncols += n
             blocks.append(html.Div([html.H3(sec, className="sec"),
@@ -852,6 +891,7 @@ tbody tr:nth-child(even) td{{background:var(--pale)}}
 .pull-list label{{display:flex;align-items:center;gap:6px;font-family:monospace;font-size:12px;padding:2px 0}}
 .pbar{{height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin:4px 0}}
 .pbar div{{height:100%;background:var(--accent)}}
+a.btn{{text-decoration:none}}
 .btn.quit{{color:#c62828;border-color:#c62828}} .btn.quit:hover{{background:#c62828;color:#fff}}
 """
 
@@ -1175,6 +1215,49 @@ def _home_tab_closed():
 
 _TABS = tabwatch.TabTracker(on_last_closed=_home_tab_closed, name="Asphodel home page")
 tabwatch.install_flask(app.server, _TABS)
+
+
+@app.server.route(NUBASE_URL)
+def _nubase_pdf():
+    """The NUBASE2020 paper, shown by the browser's PDF viewer (#page=N works)."""
+    from flask import send_file
+    return send_file(NUBASE_PDF, mimetype="application/pdf")
+
+
+# View NUBASE: the link follows the search box ("198Ir" -> page 140); Enter
+# opens it in one reused tab ("asphodel-nubase"); ?p= makes that tab reload
+# when only the page changes.
+app.clientside_callback(
+    r"""
+    function(q, nsub, idx) {
+        var base = '%s';
+        // "198Ir", "ir198", "Ir-198", "198Ir77+", "m186Hf", "186Hfm" -> "198Ir"
+        var s = (q || '').replace(/[\s\-]+/g, '').replace(/\d+\+$/, '');
+        if (!s) return [base, ''];
+        var key = null, m = /^[a-z]?(\d{1,3})([a-zA-Z]{1,3})$/.exec(s)
+                         || /^([a-zA-Z]{1,2})(\d{1,3})[a-z]?$/.exec(s);
+        if (m) {
+            var A = /^\d/.test(m[1]) ? m[1] : m[2], el = /^\d/.test(m[1]) ? m[2] : m[1];
+            for (var n = Math.min(2, el.length); n >= 1 && !key; n--) {
+                var k = A + el.charAt(0).toUpperCase() + el.slice(1, n).toLowerCase();
+                if (k in idx) key = k;
+            }
+            if (!key && el.toLowerCase() === 'n' && (A + 'n') in idx) key = A + 'n';   // free neutron
+        }
+        if (!key) return [base, '✗ ' + q.trim() + ' is not in NUBASE2020'];
+        var url = base + '?p=' + idx[key] + '#page=' + idx[key];
+        var trig = window.dash_clientside.callback_context.triggered.map(function(t) { return t.prop_id; });
+        if (trig.indexOf('nub-q.n_submit') >= 0) window.open(url, 'asphodel-nubase');
+        return [url, key + ' → page ' + idx[key] + (trig.indexOf('nub-q.n_submit') >= 0 ? '' : ' (Enter to open)')];
+    }
+    """ % NUBASE_URL,
+    Output("nub-go", "href"),
+    Output("nub-msg", "children"),
+    Input("nub-q", "value"),
+    Input("nub-q", "n_submit"),
+    State("nub-index", "data"),
+    prevent_initial_call=True,
+)
 
 
 @app.server.route("/_asphodel_quit", methods=["POST"])
