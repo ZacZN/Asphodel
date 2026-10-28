@@ -323,15 +323,21 @@ STABLE_CORNER = 0.38         # Identified ions: side of the corner triangles (st
 ISOMER_CORNER_COLOUR = "#8e44ad"   # bottom-left corner: an isomer of this nuclide is identified
 
 
+SELECT_COLOUR = "#e0242c"     # red circle around the square selected for editing
+SELECT_RADIUS = 0.72          # in squares: just outside the corners (half-diagonal 0.66)
+
+
 def selection_trace(sel):
-    """Thick dashed outline around the selected square (sel = [Z, N] or None)."""
+    """Red circle around the selected square (sel = [Z, N] or None).  Drawn
+    in data units (the axes have equal scales), so it zooms with the chart."""
     xs, ys = [], []
     if sel:
         zz, nn = sel
-        xs = [nn - .5, nn + .5, nn + .5, nn - .5, nn - .5]
-        ys = [zz - .5, zz - .5, zz + .5, zz + .5, zz - .5]
+        t = np.linspace(0, 2 * np.pi, 49)
+        xs = (nn + SELECT_RADIUS * np.cos(t)).round(4).tolist()
+        ys = (zz + SELECT_RADIUS * np.sin(t)).round(4).tolist()
     return go.Scatter(x=xs, y=ys, mode="lines", name="selection", hoverinfo="skip", showlegend=False,
-                      line=dict(color="#000000", width=4, dash="4px,3px"))
+                      line=dict(color=SELECT_COLOUR, width=3.5))
 
 
 def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None):
@@ -922,7 +928,7 @@ def _id_select(click, _go, by):
 @app.callback(Output("chart", "figure", allow_duplicate=True), Input("id-sel", "data"),
               State("by", "value"), prevent_initial_call=True)
 def _id_outline(sel, by):
-    """Move the selection outline (trace 0) without redrawing the chart."""
+    """Move the selection circle (trace 0) without redrawing the chart."""
     t = selection_trace(sel if by == "identified" else None)
     p = Patch()
     p["data"][0]["x"] = list(t.x or [])
