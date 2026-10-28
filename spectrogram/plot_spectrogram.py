@@ -816,6 +816,7 @@ async function _harmInit() {
   if (!m) return;
   var ion = m[1].trim(), h = parseInt(m[2], 10), p = _parseIon(ion);
   grp.style.display = 'inline-flex';
+  document.getElementById('stepBox').style.display = 'inline-flex';
   document.getElementById('harmCur').textContent = 'h' + h;
   // what each button loads: [key, button id, target ion, harmonic, tooltip name]
   var steps = [['h-1', 'harmDn', ion, h - 1], ['h1', 'harmUp', ion, h + 1]];
@@ -1486,6 +1487,8 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
                      color: #111827; font-size: 12px; font-weight: 700;
                      padding: 4px 12px; cursor: pointer; }}
   .opt-grp button:hover {{ background: #fb923c; }}
+  #stepBox {{ align-items: center; gap: 10px; padding: 3px 8px;
+              border: 1px solid #4b5563; border-radius: 6px; }}
   .opt-grp input:disabled {{ opacity: .35; cursor: not-allowed; }}
   .opt-grp input:disabled + label {{ opacity: .35; }}
   .opt-grp button:disabled {{ opacity: .35; cursor: not-allowed; }}
@@ -1559,6 +1562,8 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
       <button onclick="modalOpen('fileModal', 'ldPath')" title="Load a file / change the frequency crop">File Settings…</button>
       <button onclick="simOpen()" title="Particle-identification settings: simulated ion lines">PID Settings…</button>
       <button onclick="modalOpen('searchModal', 'srchIon')" title="Find an ion's simulated lines and load a window around one">Search ions…</button>
+      <button onclick="modalOpen('decayModal', 'batemanChk')" title="Decay-fit settings and Run">Decay fit…</button>
+      <span id="stepBox" style="display:none;">
       <span id="harmGrp" style="display:none; align-items:center; gap:6px;">
         <button id="harmDn" onclick="harmStep(-1)" disabled>h−1</button>
         <span id="harmCur" title="Harmonic of the ion loaded by Search ions"></span>
@@ -1574,8 +1579,8 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
         <span id="aCur" title="Isotope of the ion loaded by Search ions (A±1 goes to the ground state)"></span>
         <button id="aUp" onclick="ionStep('A', 1)" disabled>A+1</button>
       </span>
+      </span>
       <span id="harmStatus" style="text-transform:none; font-weight:400;"></span>
-      <button onclick="modalOpen('decayModal', 'batemanChk')" title="Decay-fit settings and Run">Decay fit…</button>
     </div>
     <div class="title-row">
       <label for="plotTitle">Title</label>
