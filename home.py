@@ -49,6 +49,7 @@ REPO = paths.REPO_ROOT
 ACCENT, PALE, SIDE, LINE = "#f57d15", "#fff4ec", "#f9f9f9", "#dddddd"
 HOME_PORT = 8050
 THEIA_PORT = 8052
+SEGRE_PORT = 8054             # reference/segre_chart.py
 
 # ===========================================================================
 # Tools
@@ -72,6 +73,9 @@ TOOLS = {
                         "Linear fit of σ vs intensity from a spreadsheet.", False),
     "levelschemer":    ("Elysium", "LevelSchemer", "elysium/levelschemer.py",
                         "Draw nuclear level schemes (Tk window).", False),
+    "segre":           ("Reference", "Segrè chart", "reference/segre_chart.py",
+                        "Chart of nuclides from NUBASE2020: colour by half-life, decay mode or "
+                        "mass; ground states or isomers; hover for the data.", True),
 }
 SECTIONS = ["Theia", "Spectrogram", "Tartarus", "Elysium"]
 # sections shown side by side on one row (each takes as many columns as it has cards)
@@ -109,6 +113,9 @@ def start_tool(key, args=()):
     if key == "theia" and _port_open(THEIA_PORT):
         browser.open_url(f"http://127.0.0.1:{THEIA_PORT}/")
         return f"Theia is already running – opened it in the browser."
+    if key == "segre" and _port_open(SEGRE_PORT):
+        browser.open_url(f"http://127.0.0.1:{SEGRE_PORT}/")
+        return "The Segrè chart is already running – opened it in the browser."
     if single and running(key):
         return f"{name} is already running."
     exp = paths.experiment()
@@ -437,6 +444,9 @@ def tool_card(key):
         "levelschemer": [act("start", "levelschemer", "Open", "btn primary small",
                              title="Reopens the last scheme"),
                          act("stop", "levelschemer", "Stop all")],
+        "segre": [act("start", "segre", "Open", "btn primary small",
+                      title="Opens the chart in a new tab"),
+                  act("stop", "segre", "Stop")],
     }.get(key, [])
     return html.Div([
         html.Div(name, className="name"),
