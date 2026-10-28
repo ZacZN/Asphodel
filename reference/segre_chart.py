@@ -49,8 +49,23 @@ PORT = 8054
 ACCENT, PALE, SIDE, LINE = "#f57d15", "#fff4ec", "#f9f9f9", "#dddddd"
 MAGIC = [8, 20, 28, 50, 82, 126]
 # overlay lines around the measured nuclides: (checklist value, table column, legend, colour, dash)
-LIMIT_LINES = [("mass_limit", "mass_measured", "Measured masses", "#e0242c", "solid"),
-               ("hl_limit", "hl_measured", "Measured half-lives", "#d633c4", "dash")]
+LIMIT_LINES = [("mass_limit", "mass_measured", "Measured masses", "#000000", "solid"),
+               ("hl_limit", "hl_measured", "Measured half-lives", "#000000", "6px,4px")]
+# Overlay lines are drawn over a wider "casing" line of the opposite lightness,
+# so they stand out on every square colour (the red / blue / yellow decay
+# modes, viridis, the black stable squares): the limit lines black on white,
+# the experiment region orange on black.
+LIMIT_CASING = "#ffffff"
+REGION_CASING = "#000000"
+
+
+def add_cased_line(fig, xs, ys, colour, casing, width=2.5, dash="solid", name=None):
+    """A line with a solid casing underneath (casing width = line width + 3 px)."""
+    fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", hoverinfo="skip", showlegend=False,
+                             line=dict(color=casing, width=width + 3)))
+    fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", hoverinfo="skip", name=name,
+                             showlegend=name is not None,
+                             line=dict(color=colour, width=width, dash=dash)))
 LABEL_PX = 30               # squares get A + symbol labels when at least this many pixels high
 ISOMER_LEVELS = [("m", "1st isomer (m)"), ("n", "2nd isomer (n)"), ("p", "p"), ("q", "q"),
                  ("r", "r"), ("x", "x")]
@@ -377,8 +392,7 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0"):
             region_text = f"⚠ experiment region not shown: {exc}"
     if "region" in overlays and s is not None:
         xs, ys = outline(cells)
-        fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", line=dict(color=ACCENT, width=2.5),
-                                 hoverinfo="skip", showlegend=False))
+        add_cased_line(fig, xs, ys, ACCENT, REGION_CASING, width=3, name="Experiment region")
         if ref_zn:
             fig.add_trace(go.Scatter(x=[ref_zn[1]], y=[ref_zn[0]], mode="markers",
                                      marker=dict(symbol="star", size=13, color=ACCENT,
@@ -394,8 +408,7 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0"):
             continue
         sel = rows[rows[col]]
         xs, ys = outline(set(zip(sel["Z"], sel["N"])))
-        fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name=label, hoverinfo="skip",
-                                 line=dict(color=colour, width=2.5, dash=dash), showlegend=True))
+        add_cased_line(fig, xs, ys, colour, LIMIT_CASING, width=2.5, dash=dash, name=label)
         extra = f"{label}: {len(sel)} of {len(rows)}"
         region_text = f"{region_text} · {extra}" if region_text else extra
     if mark:
