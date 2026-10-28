@@ -489,23 +489,57 @@ def _draw(by, state, level, overlays, view):
 
 
 # A + symbol in the squares once they are big enough on screen to read
-# (done in the browser: it knows the size of a square in pixels)
+# (done in the browser: it knows the size of a square in pixels).
+# Only when the view is still, as for Theia's isochronicity labels: a
+# scroll-wheel zoom is a preview that Plotly commits later, and a restyle in
+# between throws the preview away (the zoom pulses and the squares flicker).
+# So the labels are switched 0.4 s after the last wheel step / view change,
+# and never while a mouse button is held (drag-zoom / pan).
 app.clientside_callback(
     r"""
-    function(_rl, _fig) {
+    function(_fig) {
         setTimeout(function() {
             var gd = document.querySelector('#chart .js-plotly-plot');
-            if (!gd || !gd._fullLayout || !gd._fullLayout.yaxis || !gd.data || !gd.data.length) return;
-            var ya = gd._fullLayout.yaxis, r = ya.range;
-            var px = ya._length / Math.abs(r[1] - r[0]);
-            var want = px >= %d ? '%%{text}' : '';
-            if (gd.data[0].texttemplate !== want) Plotly.restyle(gd, {texttemplate: want}, [0]);
-        }, 50);
+            if (!gd) return;
+            if (!gd._segreHook) {
+                gd._segreHook = true;
+                var timer = null, lastWheel = 0, mouseDown = false, QUIET = 400;
+                var update = function() {
+                    if (!gd._fullLayout || !gd._fullLayout.yaxis || !gd.data || !gd.data.length) return;
+                    var ya = gd._fullLayout.yaxis, r = ya.range;
+                    var px = ya._length / Math.abs(r[1] - r[0]);
+                    var want = px >= %d ? '%%{text}' : '';
+                    if ((gd.data[0].texttemplate || '') !== want) {
+                        gd._segreBusy = true;
+                        Plotly.restyle(gd, {texttemplate: want}, [0]).then(
+                            function() { gd._segreBusy = false; }, function() { gd._segreBusy = false; });
+                    }
+                };
+                var soon = function() {
+                    clearTimeout(timer);
+                    timer = setTimeout(function run() {
+                        if (mouseDown || Date.now() - lastWheel < QUIET) {
+                            timer = setTimeout(run, QUIET);
+                            return;
+                        }
+                        update();
+                    }, QUIET);
+                };
+                gd.addEventListener('wheel', function() { lastWheel = Date.now(); soon(); },
+                                    {capture: true, passive: true});
+                gd.addEventListener('mousedown', function() { mouseDown = true; }, true);
+                window.addEventListener('mouseup', function() { if (mouseDown) { mouseDown = false; soon(); } });
+                gd.on('plotly_relayout', function() { if (!gd._segreBusy) soon(); });
+                window.addEventListener('resize', soon);
+                gd._segreSoon = soon;
+            }
+            gd._segreSoon();
+        }, 150);
         return window.dash_clientside.no_update;
     }
     """ % LABEL_PX,
     Output("labels-dummy", "children"),
-    Input("chart", "relayoutData"), Input("chart", "figure"),
+    Input("chart", "figure"),
 )
 
 
