@@ -89,6 +89,9 @@ CONFIG_PATH = paths.settings_file("scanner_config.json")
 CONFIRMED_DIR = paths.outputs("confirmed")
 VIEWER_CONFIG_PATH = paths.settings_file("viewer_config.json")
 ACCENT      = "#f57d15"
+# h±1 / q±1 / A±1 step buttons: each pair is "−1  value  +1"
+STEP_PAIR_STYLE = {"display": "inline-flex", "alignItems": "center", "gap": "6px"}
+STEP_CUR_STYLE = {"fontSize": "13px", "fontWeight": "600"}
 ACCENT_PALE = "#fff4ec"
 # outline of the boxes (plots, panels, pop-ups); dark mode greys it via .theia-box
 BOX_BORDER = "1px solid black"
@@ -1821,22 +1824,28 @@ align_fit_tab = html.Div([
                         style={"marginRight": "8px"}),
             # h−1 / h+1, q−1 / q+1 (charge state) and A−1 / A+1 (isotope) for
             # the ion chosen in Search ions
+            # each pair has the current value between its buttons (as in the
+            # spectrogram page), all three pairs inside one border
             html.Span([
-                html.Button("h−1", id="btn-harm-dn", className="btn btn-outline-secondary btn-sm",
-                            disabled=True),
-                html.Span(id="harm-cur", style={"fontSize": "13px", "fontWeight": "600",
-                                                "margin": "0 6px"}),
-                html.Button("h+1", id="btn-harm-up", className="btn btn-outline-secondary btn-sm",
-                            disabled=True, style={"marginRight": "8px"}),
-                html.Button("q−1", id="btn-q-dn", className="btn btn-outline-secondary btn-sm",
-                            disabled=True),
-                html.Button("q+1", id="btn-q-up", className="btn btn-outline-secondary btn-sm",
-                            disabled=True, style={"marginRight": "8px"}),
-                html.Button("A−1", id="btn-a-dn", className="btn btn-outline-secondary btn-sm",
-                            disabled=True),
-                html.Button("A+1", id="btn-a-up", className="btn btn-outline-secondary btn-sm",
-                            disabled=True),
-            ], id="harm-grp", style={"display": "none", "alignItems": "center"}),
+                html.Span([
+                    html.Button("h−1", id="btn-harm-dn", className="btn btn-outline-secondary btn-sm", disabled=True),
+                    html.Span(id="harm-cur", style=STEP_CUR_STYLE),
+                    html.Button("h+1", id="btn-harm-up", className="btn btn-outline-secondary btn-sm", disabled=True),
+                ], style=STEP_PAIR_STYLE),
+                html.Span([
+                    html.Button("q−1", id="btn-q-dn", className="btn btn-outline-secondary btn-sm", disabled=True),
+                    html.Span(id="q-cur", style=STEP_CUR_STYLE,
+                              title="Charge state of the ion chosen in Search ions"),
+                    html.Button("q+1", id="btn-q-up", className="btn btn-outline-secondary btn-sm", disabled=True),
+                ], style=STEP_PAIR_STYLE),
+                html.Span([
+                    html.Button("A−1", id="btn-a-dn", className="btn btn-outline-secondary btn-sm", disabled=True),
+                    html.Span(id="a-cur", style=STEP_CUR_STYLE,
+                              title="Isotope of the ion chosen in Search ions "
+                                    "(A±1 goes to the ground state)"),
+                    html.Button("A+1", id="btn-a-up", className="btn btn-outline-secondary btn-sm", disabled=True),
+                ], style=STEP_PAIR_STYLE),
+            ], id="harm-grp", style={"display": "none"}),
         ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap", "rowGap": "6px",
                   "marginBottom": "6px"}),
         # spinner on the status line only, so fit updates of the plot do not
@@ -5688,10 +5697,22 @@ def _srch_neighbour(key, cur, step, kind="h"):
             "excluded": bool(r["excluded"]) if "excluded" in m.columns else False}
 
 
+def _step_labels(ion, h):
+    """Labels between the step buttons: ('h212', '77+', '198Ir') for
+    '198Ir77+', h212; q and A are '' if the ion name can't be parsed."""
+    m = re.match(r"^([a-z]?)(\d+)([A-Z][a-z]?)(\d+)\+$", str(ion).strip())
+    if not m:
+        return f"h{int(h)}", "", ""
+    iso, a, sym, q = m.groups()
+    return f"h{int(h)}", f"{q}+", f"{iso}{a}{sym}"
+
+
 @app.callback(
     Output("srch-zoom", "data"),
     Output("srch-current", "data"),
     Output("harm-cur", "children"),
+    Output("q-cur", "children"),
+    Output("a-cur", "children"),
     Input({"type": "srch-line", "i": ALL}, "n_clicks"),
     *[Input(b, "n_clicks") for b in SRCH_STEP_BTNS.values()],
     State("srch-hits", "data"),
@@ -5722,7 +5743,7 @@ def search_pick(_rows, *args):
     hw = _srch_half_width_hz(width)
     zoom = {"x": [line["f"] - hw, line["f"] + hw], "from_list": from_list, "t": time.time()}
     # the label is set here, in the same reply as the zoom, so it never lags
-    return zoom, {"ion": line["ion"], "h": int(line["h"])}, f"{line['ion']} h{int(line['h'])}"
+    return zoom, {"ion": line["ion"], "h": int(line["h"])}, *_step_labels(line["ion"], line["h"])
 
 
 @app.callback(
@@ -5749,8 +5770,10 @@ def show_harmonic_step(cur, key, width):
             out += [False, f"Zoom to {l['ion']}, h{l['h']}: {l['f'] - hw:,.0f} – "
                            f"{l['f'] + hw:,.0f} Hz"
                            + ("  (below the half-life cut)" if l["excluded"] else "")]
-    return ({"display": "inline-flex", "alignItems": "center", "marginRight": "8px"},
-            "Ion and harmonic chosen in Search ions", *out)
+    return ({"display": "inline-flex", "alignItems": "center", "gap": "10px",
+             "padding": "3px 8px", "border": "1px solid #adb5bd", "borderRadius": "6px",
+             "marginRight": "8px"},
+            "Harmonic of the ion chosen in Search ions", *out)
 
 
 # Zoom the summed plot to the chosen window; y fitted to the data inside it
