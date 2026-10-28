@@ -8,7 +8,7 @@ core/nubase_4.mas20 as a square at (N, Z).  Started from the home page
 after its tab is closed, or with Stop on the home page.
 
   * Colour by: half-life (log scale; stable black, unknown grey), main decay
-    mode, mass measured vs. from systematics (#), or mass-excess uncertainty.
+    mode, or identified ions (your own marks, with an editing panel).
   * State: ground states, or one isomer level (m, n, p, ...) – each square
     is then that isomer of the nuclide.
   * Hover a square: its NUBASE data, in the same label as a simulated line
@@ -229,28 +229,7 @@ def colouring(rows, by, id_cells=None):
         n = len(MODES)
         return z, _stepped([c for _, c in MODES]), -0.5, n - 0.5, \
             dict(title="Main decay", tickvals=list(range(n)), ticktext=[m for m, _ in MODES])
-    if by == "mass":
-        known = rows["m.e."].notna().to_numpy()
-        sys_ = rows["m.e. sys?"].astype(bool).to_numpy()
-        z = np.where(~known, 2, np.where(sys_, 1, 0)).astype(float)
-        labels = ["measured", "systematics (#)", "no value"]
-        return z, _stepped([ACCENT, "#c8c8c8", "#f2f2f2"]), -0.5, 2.5, \
-            dict(title="Mass excess", tickvals=[0, 1, 2], ticktext=labels)
-    # mass-excess uncertainty, log10(keV); systematics values hatched by a grey end band
-    unc = rows["m.e._unc"].to_numpy(dtype=float)
-    lu = np.log10(np.where(unc > 0, unc, 1e-6))
-    lo_v, hi_v = -6.0, 3.0
-    frac = 0.04
-    span = (hi_v - lo_v) / (1 - 2 * frac)
-    lo, hi = lo_v - frac * span, hi_v + frac * span
-    z = np.clip(lu, lo_v, hi_v)
-    z[rows["m.e. sys?"].astype(bool).to_numpy()] = hi - frac * span / 2
-    z[~np.isfinite(unc)] = lo + frac * span / 2
-    ticks = ([(lo + frac * span / 2, "no value")]
-             + [(v, f"{10.0 ** v:g} keV") for v in range(-5, 3)]
-             + [(hi - frac * span / 2, "systematics (#)")])
-    return z, _continuous_with_ends(VIRIDIS[::-1], "#f2f2f2", "#c8c8c8", frac), lo, hi, \
-        dict(title="δ(m.e.)", tickvals=[t for t, _ in ticks], ticktext=[s for _, s in ticks])
+    raise ValueError(f"unknown colouring {by!r}")
 
 
 # ===========================================================================
@@ -793,8 +772,6 @@ def serve_layout():
                       dcc.Dropdown(id="by", clearable=False, className="dd", value="halflife",
                                    options=[{"label": "Half-life", "value": "halflife"},
                                             {"label": "Main decay mode", "value": "mode"},
-                                            {"label": "Mass: measured / #", "value": "mass"},
-                                            {"label": "Mass-excess uncertainty", "value": "massunc"},
                                             {"label": "Identified ions", "value": "identified"}])],
                      className="grp"),
             html.Div([html.Label("State", className="t"),
