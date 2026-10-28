@@ -276,23 +276,79 @@ def magic_shapes(rows):
     return shapes
 
 
+def _hex(c):
+    c = c.lstrip("#")
+    return [int(c[i:i + 2], 16) for i in (0, 2, 4)]
+
+
+def scale_colours(z, scale, zmin, zmax):
+    """Hex colour of each z on a plotly-style colour scale [[pos, '#rrggbb'], ...]
+    (a step where two entries share a position, as in _stepped)."""
+    pos = np.array([p for p, _ in scale], dtype=float)
+    rgb = np.array([_hex(c) for _, c in scale], dtype=float)
+    t = np.clip((np.asarray(z, dtype=float) - zmin) / (zmax - zmin), 0, 1)
+    t = np.round(t * 80) / 80      # 81 shades at most: fewer traces to draw, no visible steps
+    out = []
+    for v in t:
+        j = int(np.searchsorted(pos, v, side="right"))
+        j = min(max(j, 1), len(pos) - 1)
+        p0, p1 = pos[j - 1], pos[j]
+        f = 0.0 if p1 <= p0 else (v - p0) / (p1 - p0)
+        r, g, b = rgb[j - 1] + f * (rgb[j] - rgb[j - 1])
+        out.append(f"#{int(round(r)):02x}{int(round(g)):02x}{int(round(b)):02x}")
+    return out
+
+
+def _text_colour(hexc):
+    r, g, b = _hex(hexc)
+    return "#000000" if 0.299 * r + 0.587 * g + 0.114 * b > 150 else "#ffffff"
+
+
+HALF = 0.47                  # half side of a square (cells are 1 wide: a thin white gap)
+
+
 def build_figure(by, state, overlays, mark=None, view=None, uirev="0"):
+    """The squares are filled SVG paths (one trace per colour), not a heatmap:
+    a heatmap is a raster image that Plotly re-encodes after every zoom step,
+    and the browser shows a blank frame while it decodes the new one (the
+    flicker).  Paths are vectors, so a zoom just redraws them.  On top: an
+    invisible marker per nuclide for the hover label (sized to the square by
+    the page after each zoom), a text trace for the A + symbol labels, and a
+    dummy trace that carries the colour bar."""
     rows = state_rows(state)
     z, scale, zmin, zmax, cbar = colouring(rows, by)
-    grid = np.full((Z_MAX + 1, N_MAX + 1), np.nan)
-    hov = np.full(grid.shape, "", dtype=object)
-    txt = np.full(grid.shape, "", dtype=object)
-    zi, ni = rows["Z"].to_numpy(), rows["N"].to_numpy()
-    grid[zi, ni] = z
-    hov[zi, ni] = rows["hover"].to_numpy()
-    txt[zi, ni] = (rows["A"].astype(str) + rows["sym"]).to_numpy()
+    cols = scale_colours(z, scale, zmin, zmax)
+    n_arr, z_arr = rows["N"].to_numpy(), rows["Z"].to_numpy()
 
-    fig = go.Figure(go.Heatmap(
-        z=grid, x=np.arange(N_MAX + 1), y=np.arange(Z_MAX + 1),
-        colorscale=scale, zmin=zmin, zmax=zmax, xgap=1, ygap=1,
-        hovertext=hov, hoverinfo="text", hoverongaps=False,
-        text=txt, texttemplate="", textfont=dict(size=9),
-        colorbar=dict(thickness=14, len=0.9, **cbar)))
+    fig = go.Figure()
+    by_colour = {}
+    for n, zz, c in zip(n_arr, z_arr, cols):
+        by_colour.setdefault(c, []).append((n, zz))
+    for c, cells in by_colour.items():
+        xs, ys = [], []
+        for n, zz in cells:
+            xs += [n - HALF, n + HALF, n + HALF, n - HALF, n - HALF, None]
+            ys += [zz - HALF, zz - HALF, zz + HALF, zz + HALF, zz - HALF, None]
+        fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", fill="toself", fillcolor=c,
+                                 line=dict(width=0, color=c), hoverinfo="skip",
+                                 showlegend=False, name="cells"))
+    # hover: one invisible square marker per nuclide, coloured like its square
+    # (the hover label takes that colour, as the heatmap's did)
+    fig.add_trace(go.Scatter(
+        x=n_arr, y=z_arr, mode="markers", name="hover",
+        marker=dict(symbol="square", size=6, color=cols, opacity=0),
+        hovertext=rows["hover"].to_numpy(), hoverinfo="text", showlegend=False))
+    # A + symbol labels, switched on by the page when the squares are big enough
+    fig.add_trace(go.Scatter(
+        x=n_arr, y=z_arr, mode="text", name="labels", visible=False,
+        text=(rows["A"].astype(str) + rows["sym"]).to_numpy(),
+        textfont=dict(size=9, color=[_text_colour(c) for c in cols]),
+        hoverinfo="skip", showlegend=False))
+    # colour bar
+    fig.add_trace(go.Scatter(
+        x=[None], y=[None], mode="markers", name="colourbar", hoverinfo="skip", showlegend=False,
+        marker=dict(color=[zmin], colorscale=scale, cmin=zmin, cmax=zmax, showscale=True,
+                    colorbar=dict(thickness=14, len=0.9, **cbar))))
 
     shapes = magic_shapes(TABLE[TABLE["state"] == "g"]) if "magic" in overlays else []
     region_text = ""
@@ -322,6 +378,7 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0"):
     xr, yr = (view or {}).get("x"), (view or {}).get("y")
     fig.update_layout(
         margin=dict(l=55, r=10, t=10, b=45), plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
+        hovermode="closest", hoverdistance=1,
         shapes=shapes, dragmode="zoom", uirevision=uirev,
         xaxis=dict(title="N (neutrons)", range=xr or [-1, N_MAX + 1], showgrid=False,
                    zeroline=False, constrain="domain", ticks="outside"),
@@ -507,13 +564,25 @@ app.clientside_callback(
                 var update = function() {
                     if (!gd._fullLayout || !gd._fullLayout.yaxis || !gd.data || !gd.data.length) return;
                     var ya = gd._fullLayout.yaxis, r = ya.range;
-                    var px = ya._length / Math.abs(r[1] - r[0]);
-                    var want = px >= %d ? '%%{text}' : '';
-                    if ((gd.data[0].texttemplate || '') !== want) {
-                        gd._segreBusy = true;
-                        Plotly.restyle(gd, {texttemplate: want}, [0]).then(
-                            function() { gd._segreBusy = false; }, function() { gd._segreBusy = false; });
-                    }
+                    var px = ya._length / Math.abs(r[1] - r[0]);       // one square, in pixels
+                    var iH = -1, iL = -1;
+                    gd.data.forEach(function(t, i) {
+                        if (t.name === 'hover') iH = i;
+                        if (t.name === 'labels') iL = i;
+                    });
+                    var jobs = [];
+                    // hover markers as big as the squares: the label shows anywhere on a square
+                    var size = Math.max(2, Math.round(px * 0.92));
+                    if (iH >= 0 && gd.data[iH].marker.size !== size)
+                        jobs.push([{'marker.size': size}, [iH]]);
+                    var show = px >= %d;
+                    if (iL >= 0 && (gd.data[iL].visible === true) !== show)
+                        jobs.push([{visible: show}, [iL]]);
+                    if (!jobs.length) return;
+                    gd._segreBusy = true;
+                    var p = Promise.resolve();
+                    jobs.forEach(function(j) { p = p.then(function() { return Plotly.restyle(gd, j[0], j[1]); }); });
+                    p.then(function() { gd._segreBusy = false; }, function() { gd._segreBusy = false; });
                 };
                 var soon = function() {
                     clearTimeout(timer);
