@@ -170,31 +170,187 @@ def notes_file(exp=None):
     return os.path.join(experiment_dir(exp), "notes.md")
 
 
+# --------------------------------------------------------------------------- connected folders
+#
+# The folders the tools read from and write to are "connected" on the home
+# page, per experiment, in <experiment>/settings/folders.json:
+#
+#   {"data":   [{"path": "...", "kind": "spectra_1d", "name": "1-D spectra"}, ...],
+#    "output": [{"path": "...", "kind": "scans", "name": "Scan runs"}, ...]}
+#
+# Each folder has a kind; a tool that needs e.g. the 1-D spectra uses the first
+# connected data folder of kind "spectra_1d" (spectra_1d() below), and its
+# folder choosers list all connected folders.  Without folders.json (or with no
+# folder of a kind) the experiment's standard sub-folders are used, as before,
+# so existing paths keep working.
+
+DATA_KINDS = {"spectra_1d": "1-D spectra", "spectrograms": "Spectrograms", "summed_1d": "Summed 1-D",
+              "levelschemes": "Level schemes", "rionid": "RionID tables", "other": "Other data"}
+OUTPUT_KIND_NAMES = {"scans": "Scan runs", "confirmed": "Confirmed IDs", "fits": "Decay fits",
+                     "figures": "Figures", "isocurve": "Isochronicity curve",
+                     "identified": "Identified ions", "other": "Other output"}
+FOLDER_GROUPS = {"data": DATA_KINDS, "output": OUTPUT_KIND_NAMES}
+FOLDERS_FILE = "folders.json"
+
+
+def default_folder(group, kind, exp=None):
+    """The standard sub-folder of the experiment for a kind (the pre-existing layout)."""
+    base = experiment_dir(exp)
+    if group == "data":
+        return os.path.join(base, kind) if kind != "other" else base
+    return os.path.join(base, "outputs", kind) if kind != "other" else os.path.join(base, "outputs")
+
+
+def _default_folders(exp=None):
+    return {"data": [{"path": default_folder("data", k, exp), "kind": k, "name": n}
+                     for k, n in DATA_KINDS.items() if k != "other"],
+            "output": [{"path": default_folder("output", k, exp), "kind": k, "name": n}
+                       for k, n in OUTPUT_KIND_NAMES.items() if k != "other"]}
+
+
+def _folders_path(exp=None):
+    return os.path.join(experiment_dir(exp), "settings", FOLDERS_FILE)
+
+
+def load_folders(exp=None):
+    """{"data": [...], "output": [...]}: the connected folders of the experiment
+    (the standard sub-folders until anything is connected or removed)."""
+    try:
+        with open(_folders_path(exp), encoding="utf-8") as fh:
+            d = json.load(fh)
+    except (OSError, ValueError):
+        return _default_folders(exp)
+    out = {}
+    for g, kinds in FOLDER_GROUPS.items():
+        lst = []
+        for f in (d.get(g) or []) if isinstance(d, dict) else []:
+            if isinstance(f, dict) and f.get("path"):
+                kind = f.get("kind") if f.get("kind") in kinds else "other"
+                lst.append({"path": os.path.abspath(os.path.expanduser(f["path"])), "kind": kind,
+                            "name": (f.get("name") or "").strip() or os.path.basename(f["path"].rstrip("/"))})
+        out[g] = lst
+    return out
+
+
+def save_folders(d, exp=None):
+    path = _folders_path(exp)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(d, fh, indent=2)
+    os.replace(tmp, path)
+
+
+def guess_kind(group, path):
+    """A kind for a newly connected folder, from its name and contents."""
+    name = os.path.basename(os.path.abspath(path).rstrip("/")).lower()
+    for k in FOLDER_GROUPS[group]:
+        if k != "other" and k in name.replace("-", "_").replace(" ", "_"):
+            return k
+    if group == "data":
+        try:
+            files = os.listdir(path)
+        except OSError:
+            files = []
+        if any(f.lower().endswith((".xlsx", ".xls")) for f in files):
+            return "rionid"
+        if any(f.lower().endswith(".npz") for f in files):
+            return "spectra_1d"
+    return "other"
+
+
+def connect_folder(group, path, kind=None, name=None, exp=None):
+    """Add a folder to the experiment's connected folders (or update its kind /
+    name if it is already there). Returns the folder entry."""
+    if group not in FOLDER_GROUPS:
+        raise ValueError(f"Unknown folder group {group!r}")
+    p = os.path.abspath(os.path.expanduser((path or "").strip()))
+    if not (path or "").strip() or not os.path.isdir(p):
+        raise ValueError(f"Not a folder: {path}")
+    kind = kind if kind in FOLDER_GROUPS[group] else guess_kind(group, p)
+    d = load_folders(exp)
+    entry = next((f for f in d[group] if f["path"] == p), None)
+    if entry is None:
+        entry = {"path": p, "kind": kind, "name": (name or "").strip() or os.path.basename(p.rstrip("/"))}
+        d[group].append(entry)
+    else:
+        entry["kind"] = kind
+        if (name or "").strip():
+            entry["name"] = name.strip()
+    save_folders(d, exp)
+    return entry
+
+
+def disconnect_folder(group, path, exp=None):
+    d = load_folders(exp)
+    d[group] = [f for f in d[group] if f["path"] != path]
+    save_folders(d, exp)
+
+
+def update_folder(group, path, exp=None, **changes):
+    """Change a connected folder's kind or name."""
+    d = load_folders(exp)
+    for f in d[group]:
+        if f["path"] == path:
+            if changes.get("kind") in FOLDER_GROUPS[group]:
+                f["kind"] = changes["kind"]
+            if (changes.get("name") or "").strip():
+                f["name"] = changes["name"].strip()
+    save_folders(d, exp)
+
+
+def make_default(group, path, exp=None):
+    """Move a folder in front of the others of its kind: the tools use it."""
+    d = load_folders(exp)
+    f = next((x for x in d[group] if x["path"] == path), None)
+    if f is not None:
+        d[group].remove(f)
+        d[group].insert(0, f)
+        save_folders(d, exp)
+
+
+def connected(group, kind=None, exp=None):
+    """Connected folders of a group ("data" or "output"), optionally of one kind,
+    defaults first: [{"path", "kind", "name"}]."""
+    lst = load_folders(exp)[group]
+    return [f for f in lst if kind is None or f["kind"] == kind]
+
+
+def folder_for(group, kind, exp=None):
+    """The folder a tool uses for a kind: the first connected folder of that kind
+    that exists, else the standard sub-folder of the experiment."""
+    for f in connected(group, kind, exp):
+        if os.path.isdir(f["path"]):
+            return f["path"]
+    return default_folder(group, kind, exp)
+
+
 def spectra_1d(exp=None):
-    return os.path.join(experiment_dir(exp), "spectra_1d")
+    return folder_for("data", "spectra_1d", exp)
 
 
 def spectrograms(exp=None):
-    return os.path.join(experiment_dir(exp), "spectrograms")
+    return folder_for("data", "spectrograms", exp)
 
 
 def summed_1d(exp=None):
-    return os.path.join(experiment_dir(exp), "summed_1d")
+    return folder_for("data", "summed_1d", exp)
 
 
 def levelschemes(exp=None):
-    return os.path.join(experiment_dir(exp), "levelschemes")
+    return folder_for("data", "levelschemes", exp)
 
 
 def rionid(exp=None):
-    return os.path.join(experiment_dir(exp), "rionid")
+    return folder_for("data", "rionid", exp)
 
 
 def outputs(kind, exp=None):
-    """outputs/<kind> folder (scans, confirmed, fits, figures or isocurve), created if missing."""
+    """Output folder of a kind (scans, confirmed, fits, figures, isocurve,
+    identified): the connected one, else outputs/<kind>; created if missing."""
     if kind not in OUTPUT_KINDS:
         raise ValueError(f"Unknown output kind {kind!r}; expected one of {OUTPUT_KINDS}")
-    d = os.path.join(experiment_dir(exp), "outputs", kind)
+    d = folder_for("output", kind, exp)
     os.makedirs(d, exist_ok=True)
     return d
 

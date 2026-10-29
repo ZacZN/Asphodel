@@ -10,8 +10,9 @@ The suite's launcher and overview, as a Dash app (http://127.0.0.1:8050/):
     stop and status.  Every tool is its own program; the home page starts it
     as a separate process with the experiment fixed (ASPHODEL_EXPERIMENT), so
     a running tool stays on its experiment if the home page switches.
-  * data files of the experiment, with "open with" buttons
-  * outputs: scan runs, confirmed identifications, decay fits, figures
+  * folders: the data and output folders the tools use, connected per
+    experiment ("Connect data folder…" / "Connect output folder…", each with a
+    kind; core/paths.py keeps them in <experiment>/settings/folders.json)
   * the shared physics settings (physics.json) and the overrides of each tool
   * notes per experiment
   * "Sync with APPC256": sends new confirmed lists to APPC256 and pulls the
@@ -40,7 +41,7 @@ import time
 import webbrowser
 
 sys.path.insert(1, os.path.dirname(os.path.abspath(__file__)))
-from core import browser, icon, paths, physics, sync, tabwatch, version
+from core import browser, folderpick, icon, paths, physics, sync, tabwatch, version
 
 import dash
 from dash import dcc, html, Input, Output, State, ALL, ctx
@@ -279,121 +280,6 @@ def folder_summary(d, pattern="*.npz", subfolders=False):
     return len(files), total
 
 
-def data_rows():
-    """Rows of the data-file table: the 1-D spectra folder as one row, every
-    spectrogram and summed 1-D file on its own."""
-    rows = []
-    d1 = paths.spectra_1d()
-    n, total = folder_summary(d1)
-    rows.append(dict(name=f"spectra_1d/  ({n} files)", kind="1-D folder", size=total,
-                     mtime=_mtime(d1), path=d1))
-    for kind, d in (("spectrogram", paths.spectrograms()), ("summed 1-D", paths.summed_1d())):
-        files = sorted(glob.glob(os.path.join(d, "*.npz")))
-        if kind == "spectrogram":          # also one subfolder down (as synced from APPC256)
-            files += sorted(glob.glob(os.path.join(d, "*", "*.npz")))
-        for f in files:
-            rows.append(dict(name=os.path.relpath(f, d), kind=kind, size=os.path.getsize(f),
-                             mtime=_mtime(f), path=f))
-    return rows
-
-
-def scan_runs():
-    path = os.path.join(paths.outputs("scans"), "index.csv")
-    try:
-        import csv
-        with open(path, newline="") as fh:
-            rows = list(csv.DictReader(fh))
-    except OSError:
-        return []
-    return rows[::-1]                                  # newest first
-
-
-def confirmed_files():
-    out = []
-    for f in sorted(glob.glob(os.path.join(paths.outputs("confirmed"), "*.csv")),
-                    key=os.path.getmtime, reverse=True):
-        head = {}
-        try:
-            with open(f, encoding="utf-8") as fh:
-                for line in fh:
-                    if not line.startswith("# "):
-                        break
-                    k, _, v = line[2:].partition(": ")
-                    head[k.strip()] = v.strip()
-        except OSError:
-            continue
-        out.append(dict(path=f, name=os.path.basename(f), saved=head.get("saved", ""),
-                        accepted=head.get("accepted", ""), unsure=head.get("unsure", ""),
-                        filter=head.get("filter", ""),
-                        scan=os.path.basename(head.get("database", ""))))
-    return out
-
-
-def fit_records():
-    out = []
-    for f in sorted(glob.glob(os.path.join(paths.outputs("fits"), "*.json")), reverse=True):
-        d = _read_json(f)
-        if d.get("format") != "asphodel-decay-fit":
-            continue
-        d["_path"] = f
-        out.append(d)
-    return out
-
-
-def figure_files():
-    d = paths.outputs("figures")
-    return [f for f in sorted(glob.glob(os.path.join(d, "*")), key=os.path.getmtime, reverse=True)
-            if os.path.isfile(f)]
-
-
-def fmt_time(s, err=None):
-    """Seconds -> value ± error in a readable unit."""
-    if s is None:
-        return "–"
-    for unit, f in (("y", 3.15576e7), ("d", 86400), ("h", 3600), ("min", 60), ("s", 1),
-                    ("ms", 1e-3), ("µs", 1e-6)):
-        if abs(s) >= f or unit == "µs":
-            v = s / f
-            e = (err / f) if err is not None else None
-            return f"{v:.4g} ± {e:.2g} {unit}" if e is not None else f"{v:.4g} {unit}"
-
-
-def fit_rerun_args(rec):
-    """decay_fit.py command-line arguments that redo a saved fit."""
-    st = rec.get("settings") or {}
-    w = st.get("freq_window_hz") or [None, None]
-    args = [rec["file"], repr(w[0]), repr(w[1])]
-    if st.get("parent_window_hz"):
-        args += ["--parent-window", *map(repr, st["parent_window_hz"])]
-    elif st.get("bateman"):
-        args.append("--bateman")
-    if st.get("with_offset") is False and not st.get("bateman"):
-        args.append("--no-offset")
-    for key, opt in (("tmin_s", "--tmin"), ("tmax_s", "--tmax"), ("gamma", "--gamma"),
-                     ("halflife_isomer_com_s", "--halflife-isomer"),
-                     ("halflife_groundstate_com_s", "--halflife-groundstate"),
-                     ("time_avg", "--time-avg")):
-        if st.get(key) is not None:
-            args += [opt, repr(st[key])]
-    if st.get("skip_bins") and any(st["skip_bins"]):
-        args += ["--skip", *map(str, st["skip_bins"])]
-    if st.get("err_coeffs"):
-        args += ["--err-coeffs", *map(repr, st["err_coeffs"])]
-    if st.get("unweighted"):
-        args.append("--unweighted")
-    bl = st.get("baseline")
-    if bl and bl.get("params") and bl.get("window_hz"):
-        args += ["--baseline", json.dumps(bl["params"]),
-                 "--baseline-window", *map(repr, bl["window_hz"])]
-    if st.get("title_full"):
-        args += ["--title-full", st["title_full"]]
-    elif st.get("title"):
-        args += ["--title", st["title"]]
-    elif rec.get("label"):                     # records saved before title/title_full were stored
-        args += ["--title", rec["label"]]
-    return args
-
-
 def open_in_system(path):
     """Open a file with the desktop's default program (figures, PDFs)."""
     subprocess.Popen(["xdg-open", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -462,40 +348,70 @@ def _opts(files, base=None):
             for f in files]
 
 
+def _folder_opts(group, kind=None):
+    """Dropdown options: the connected folders of a group (of one kind first)."""
+    fs = paths.connected(group)
+    if kind:
+        fs = [f for f in fs if f["kind"] == kind] + [f for f in fs if f["kind"] != kind]
+    return [{"label": f"{f['name']}  ·  {f['path']}", "value": f["path"]} for f in fs]
+
+
+def _files_in(group, kinds, patterns):
+    """Files matching the patterns in the connected folders of the given kinds
+    (labelled 'folder name / file'), the default folder's first."""
+    out, seen = [], set()
+    for f in paths.connected(group):
+        if kinds and f["kind"] not in kinds:
+            continue
+        for pat in patterns:
+            for fp in sorted(glob.glob(os.path.join(f["path"], pat))):
+                if fp not in seen:
+                    seen.add(fp)
+                    out.append({"label": f"{f['name']} / {os.path.basename(fp)}", "value": fp})
+    return out
+
+
 def tool_forms():
-    """Small forms for the command-line tools."""
+    """Small forms for the command-line tools.  Folders and files come from the
+    connected folders (Folders section below)."""
     exp_dir = paths.experiment_dir()
-    xlsx = sorted(glob.glob(os.path.join(paths.rionid(), "*.xls*")))
-    sheets = sorted(f for ext in ("*.ods", "*.xlsx", "*.xls", "*.csv")
-                    for f in glob.glob(os.path.join(exp_dir, ext)))
-    schemes = sorted(glob.glob(os.path.join(paths.levelschemes(), "*.json")))
+    xlsx = _files_in("data", ["rionid"], ["*.xls*"])
+    sheets = ([{"label": os.path.basename(f), "value": f} for ext in ("*.ods", "*.xlsx", "*.xls", "*.csv")
+               for f in sorted(glob.glob(os.path.join(exp_dir, ext)))]
+              + _files_in("data", ["other"], ["*.ods", "*.xlsx", "*.xls", "*.csv"]))
+    schemes = _files_in("data", ["levelschemes"], ["*.json"])
     ods_default = os.path.join(exp_dir, "Schottky_Uncertainties.ods")
+    sheet_vals = [o["value"] for o in sheets]
     lbl = lambda t: html.Label(t, className="flabel")
     return {
         "sum_spectra": html.Div([
-            lbl("Input folder"), dcc.Input(id="ss-in", type="text", value=paths.spectra_1d(), className="wide"),
-            lbl("Output folder"), dcc.Input(id="ss-out", type="text", value=paths.summed_1d(), className="wide"),
+            lbl("Input folder"),
+            dcc.Dropdown(id="ss-in", options=_folder_opts("data", "spectra_1d"), clearable=False,
+                         value=paths.spectra_1d()),
+            lbl("Output folder"),
+            dcc.Dropdown(id="ss-out", options=_folder_opts("data", "summed_1d"), clearable=False,
+                         value=paths.summed_1d()),
             html.Button("Run", id="ss-run", className="btn primary small", n_clicks=0),
         ], className="form"),
         "correction_plot": html.Div([
             lbl("RionID table"),
-            dcc.Dropdown(id="cp-file", options=_opts(xlsx), clearable=False,
-                         value=xlsx[0] if xlsx else None),
+            dcc.Dropdown(id="cp-file", options=xlsx, clearable=False,
+                         value=xlsx[0]["value"] if xlsx else None),
             lbl("Sheet"), dcc.Input(id="cp-sheet", type="text", value="New2ndOrderCorrection", className="wide"),
             html.Button("Run", id="cp-run", className="btn primary small", n_clicks=0),
         ], className="form"),
         "intensity_fit": html.Div([
             lbl("Spreadsheet"),
-            dcc.Dropdown(id="if-file", options=_opts(sheets), clearable=False,
-                         value=ods_default if ods_default in sheets else (sheets[0] if sheets else None)),
+            dcc.Dropdown(id="if-file", options=sheets, clearable=False,
+                         value=ods_default if ods_default in sheet_vals else (sheet_vals[0] if sheet_vals else None)),
             lbl("Exclude ions (space separated, optional)"),
             dcc.Input(id="if-exclude", type="text", className="wide", placeholder="e.g. 206Pb79+ 208Pb80+"),
             html.Button("Run", id="if-run", className="btn primary small", n_clicks=0),
         ], className="form"),
         "levelschemer": html.Div([
             lbl("Open a scheme"),
-            dcc.Dropdown(id="ls-file", options=_opts(schemes), clearable=False,
-                         value=schemes[0] if schemes else None),
+            dcc.Dropdown(id="ls-file", options=schemes, clearable=False,
+                         value=schemes[0]["value"] if schemes else None),
             html.Button("Open scheme", id="ls-run", className="btn small", n_clicks=0),
         ], className="form"),
     }
@@ -567,72 +483,6 @@ def tools_section():
     return section("Tools", *rows)
 
 
-def data_section():
-    rows = []
-    for r in data_rows():
-        if r["kind"] == "1-D folder":
-            btns = [act("viewer_dir", r["path"], "Viewer"), act("scan_dir", r["path"], "Scan in Theia")]
-        elif r["kind"] == "spectrogram":
-            btns = [act("spectrogram_file", r["path"], "Spectrogram")]
-        else:
-            btns = [act("viewer_file", r["path"], "Viewer")]
-        rows.append([html.Span(r["name"], className="mono"), r["kind"], _size(r["size"]),
-                     r["mtime"], html.Span(btns)])
-    return fold_section("Data files",
-                   html.Div(paths.experiment_dir(), className="note mono"),
-                   table(["File", "Type", "Size", "Modified", "Open with"], rows))
-
-
-def outputs_section():
-    # scan runs
-    runs = scan_runs()
-    keys = [k for k in ("file", "created", "label", "status", "n_files", "n_spectra_done",
-                        "n_identifications", "settings_hash") if runs and k in runs[0]]
-    scans = table(keys, [[r.get(k, "") for k in keys] for r in runs]) if runs else \
-        html.P("No scan runs yet.", className="note")
-    # confirmed
-    conf = confirmed_files()
-    confirmed = table(["File", "Saved", "Accepted", "Unsure", "Filter", "From scan"],
-                      [[html.Span(c["name"], className="mono"), c["saved"], c["accepted"], c["unsure"],
-                        c["filter"], c["scan"]] for c in conf]) if conf else \
-        html.P("No confirmed identifications yet.", className="note")
-    # fits
-    recs = fit_records()
-    fit_rows = []
-    for r in recs:
-        res = r.get("result") or {}
-        hls = res.get("half_lives") or {}
-        hl = hls.get("decay") or hls.get("A") or {}
-        st = r.get("settings") or {}
-        w = st.get("freq_window_hz") or [None, None]
-        chi = res.get("chi2_ndf")
-        fit_rows.append([
-            (r.get("saved") or "").replace("T", " "), r.get("label") or "–", r.get("mode", ""),
-            fmt_time(hl.get("lab_s"), hl.get("lab_err_s")),
-            fmt_time(hl.get("com_s"), hl.get("com_err_s")) if "com_s" in hl else "–",
-            html.Span(os.path.basename(r.get("file", "")), className="mono"),
-            f"{w[0]:,.0f} – {w[1]:,.0f} Hz" if None not in w else "",
-            f"{chi:.3g}" if chi is not None else "–",
-            html.Span([act("rerun_fit", r["_path"], "Re-run"),
-                       act("fit_spectrogram", r["_path"], "Spectrogram")])])
-    fits = table(["Saved", "Label", "Model", "T½ (lab)", "T½ (c.o.m.)", "File", "Window", "χ²/ndf", ""],
-                 fit_rows) if fit_rows else \
-        html.P("No saved fits yet – use “Save fit parameters” in a decay-fit window.", className="note")
-    # figures
-    figs = figure_files()
-    figures = table(["Figure", "Modified", ""],
-                    [[html.Span(os.path.basename(f), className="mono"), _mtime(f),
-                      act("open_file", f, "Open")] for f in figs]) if figs else \
-        html.P("No figures yet.", className="note")
-    return fold_section("Outputs", dcc.Tabs([
-        dcc.Tab(label=f"Scan runs ({len(runs)})", children=[scans,
-                html.Div(act("start", "theia", "Open Theia (Scan Results)"), className="below")]),
-        dcc.Tab(label=f"Confirmed IDs ({len(conf)})", children=[confirmed]),
-        dcc.Tab(label=f"Decay fits ({len(recs)})", children=[fits]),
-        dcc.Tab(label=f"Figures ({len(figs)})", children=[figures]),
-    ], className="otabs"))
-
-
 # --------------------------------------------------------------------------- sidebar
 
 PHYS_LABELS = {
@@ -696,18 +546,11 @@ def changelog_panel(n=20):
 
 
 def sidebar():
-    srcs = []
-    for title, d in (("1-D spectra", paths.spectra_1d()), ("Spectrograms", paths.spectrograms()),
-                     ("Summed 1-D", paths.summed_1d())):
-        n, total = folder_summary(d, subfolders=(title == "Spectrograms"))
-        srcs.append(html.Div([html.B(title), html.Code(os.path.relpath(d, paths.experiment_dir())),
-                              html.Div(f"{n} .npz · {_size(total)}")], className="src"))
     nub = os.path.join(paths.REPO_ROOT, "core", "nubase_4.mas20")
     return html.Aside([
         html.Div([
-            html.H3("Data sources"), *srcs,
             html.Details([html.Summary("Shared physics"), physics_panel()],
-                         open=False, className="fold"),
+                         open=False, className="fold first"),
             html.H3("Reference data"),
             html.Div([html.B("NUBASE"), html.Code("core/nubase_4.mas20"),
                       html.Div(_mtime(nub))], className="src"),
@@ -720,6 +563,92 @@ def sidebar():
             changelog_panel(),
         ], className="brand"),
     ])
+
+
+# ===========================================================================
+# Folders (connected data / output folders, core/paths.py)
+# ===========================================================================
+
+def _folder_rows(group):
+    kinds = paths.FOLDER_GROUPS[group]
+    fs = paths.connected(group)
+    first_of_kind = {}
+    for f in fs:
+        first_of_kind.setdefault(f["kind"], f["path"])
+    rows = []
+    for f in fs:
+        ok = os.path.isdir(f["path"])
+        if ok:
+            n, total = folder_summary(f["path"], "*")
+            contents = f"{n} item{'s' if n != 1 else ''}"
+        else:
+            contents = html.Span("✗ missing", className="bad")
+        is_default = first_of_kind.get(f["kind"]) == f["path"]
+        fid = {"g": group, "p": f["path"]}
+        rows.append(html.Tr([
+            html.Td(html.B(f["name"])),
+            html.Td(dcc.Dropdown(id={"type": "fold-kind", **fid}, value=f["kind"], clearable=False,
+                                 options=[{"label": v, "value": k} for k, v in kinds.items()],
+                                 className="kind-dd")),
+            html.Td(html.Span(f["path"], className="mono"), className="fpath"),
+            html.Td(contents),
+            html.Td([
+                html.Span("in use", className="inuse",
+                          title=f"Tools use this folder for '{kinds[f['kind']]}'")
+                if is_default and f["kind"] != "other" else
+                (html.Button("Use", id={"type": "fold-act", "a": "default", **fid}, className="btn small",
+                             n_clicks=0, title=f"Make the tools use this folder for '{kinds[f['kind']]}'")
+                 if f["kind"] != "other" else ""),
+                html.Button("Open", id={"type": "fold-act", "a": "open", **fid}, className="btn small",
+                            n_clicks=0, title="Open in the file manager"),
+                dcc.ConfirmDialogProvider(
+                    html.Button("Disconnect", className="btn small"),
+                    id={"type": "fold-act", "a": "disconnect", **fid},
+                    message=f"Disconnect {f['path']}?\n\nThe folder and its files are not touched; "
+                            "it is only removed from the list."),
+            ], className="factions"),
+        ]))
+    if not rows:
+        return html.P("No folders connected.", className="note")
+    return html.Table([html.Thead(html.Tr([html.Th(h) for h in
+                                           ("Name", "Kind", "Folder", "Contents", "")])),
+                       html.Tbody(rows)], className="ftable")
+
+
+def _folder_group(group, title, button):
+    kinds = paths.FOLDER_GROUPS[group]
+    return html.Div([
+        html.Div([
+            html.H3(title),
+            html.Button(button, id={"type": "fold-pick", "g": group}, className="btn primary small",
+                        n_clicks=0, title="Choose a folder with the desktop's folder dialog"),
+        ], className="fhead"),
+        html.Div([
+            dcc.Input(id={"type": "fold-path", "g": group}, type="text", className="wide",
+                      placeholder="… or paste a folder path", debounce=False, n_submit=0),
+            dcc.Dropdown(id={"type": "fold-newkind", "g": group}, value="auto", clearable=False,
+                         options=[{"label": "kind: guess", "value": "auto"}] +
+                                 [{"label": v, "value": k} for k, v in kinds.items()],
+                         className="kind-dd"),
+            html.Button("Add", id={"type": "fold-add", "g": group}, className="btn small", n_clicks=0),
+        ], className="fadd"),
+        html.Div(_folder_rows(group), id={"type": "fold-list", "g": group}),
+    ], className="fgroup")
+
+
+def folders_section():
+    return section(
+        "Folders",
+        html.P(["Where the tools read their data and save their output, for this experiment. "
+                "Each folder has a kind; a tool uses the folder marked ", html.I("in use"),
+                " for the kind it needs, and its folder and file choosers list all connected folders. "
+                "Without a folder of a kind, the experiment's standard sub-folder is used."],
+               className="note"),
+        html.Div([_folder_group("data", "Data folders", "Connect data folder…"),
+                  _folder_group("output", "Output folders", "Connect output folder…")],
+                 className="fgrid"),
+        dcc.Store(id="fold-ver", data=0),
+    )
 
 
 def notes_section():
@@ -815,7 +744,7 @@ def serve_layout():
         html.Div(id="msg", className="banner", children="Ready."),
         html.Div([
             sidebar(),
-            html.Main([tools_section(), data_section(), outputs_section(), notes_section()]),
+            html.Main([tools_section(), folders_section(), notes_section()]),
         ], className="wrap"),
         new_experiment_modal(),
         sync_modal(),
@@ -890,6 +819,23 @@ section{{margin-bottom:24px}}
 /* the card's last block (its buttons, or the form ending in its Run button) sits at the
    bottom of the card, so the buttons of the cards in a row line up at the bottom left */
 .tool>:last-child{{margin-top:auto}}
+/* Folders section */
+.fgrid{{display:grid;grid-template-columns:1fr;gap:16px}}
+.fgroup{{border:1px solid var(--line);border-radius:6px;padding:12px;border-top:3px solid var(--accent);min-width:0}}
+.fhead{{display:flex;align-items:center;justify-content:space-between;gap:10px}}
+.fhead h3{{margin:0;font-size:15px}}
+.fadd{{display:flex;gap:6px;align-items:center;margin:10px 0 8px}}
+.fadd .wide{{flex:1}} .fadd .btn{{margin:0}}
+.kind-dd{{width:170px;font-size:12px}}
+.ftable{{width:100%;border-collapse:collapse;font-size:12px}}
+.ftable th{{text-align:left;padding:4px 6px}}
+.ftable td{{border-bottom:1px solid var(--line);padding:4px;vertical-align:middle}}
+.ftable .fpath{{word-break:break-all;width:55%}}
+.ftable .factions{{white-space:nowrap;min-width:230px}} .ftable .factions .btn{{margin:0 4px 0 0}}
+.inuse{{display:inline-block;font-size:11px;color:var(--ok);font-weight:700;margin-right:6px}}
+.bad{{color:#c62828}}
+details.fold.first{{margin-top:0}}
+
 .tool .form+.btns{{padding-top:10px}}
 .tool .name{{font-weight:700;font-size:15px}} .tool .from{{font-size:11px;color:var(--muted);font-family:monospace}}
 .tool p{{font-size:12px;color:#555;margin:6px 0 8px}}
@@ -936,7 +882,7 @@ app.layout = serve_layout
     prevent_initial_call=True,
 )
 def actions(clicks):
-    """Every button made with act(): start/stop tools and the 'open with' buttons."""
+    """Every button made with act(): start/stop tools, open a folder."""
     tid = ctx.triggered_id
     if not tid or not any(clicks) or not (ctx.triggered and ctx.triggered[0]["value"]):
         return dash.no_update
@@ -946,34 +892,104 @@ def actions(clicks):
             return start_tool(p)
         if a == "stop":
             return stop_tool(p)
-        if a == "spectrogram_file":
-            return start_tool("spectrogram", [p])
-        if a in ("viewer_file", "viewer_dir"):
-            d, name = (os.path.dirname(p), os.path.basename(p)) if a == "viewer_file" else (p, None)
-            changes = {"file_path": os.path.join(d, "")}
-            if name:
-                changes["spectrum_name"] = name
-            _update_json(paths.settings_file("viewer_config.json"), changes)
-            return start_tool("theia") + " Viewer set to " + (name or os.path.basename(d.rstrip("/"))) + \
-                (" – reload the Theia page if it was already open." if _port_open(THEIA_PORT) else "")
-        if a == "scan_dir":
-            _update_json(paths.settings_file("scanner_config.json"), {"spectra_dir": os.path.join(p, "")})
-            return start_tool("theia") + " Scan folder set to " + os.path.basename(p.rstrip("/")) + \
-                " (Scan tab; reload the page if Theia was already open)."
-        if a == "rerun_fit":
-            return start_tool("decay_fit", fit_rerun_args(_read_json(p)))
-        if a == "fit_spectrogram":
-            rec = _read_json(p)
-            w = (rec.get("settings") or {}).get("freq_window_hz") or []
-            pad = (w[1] - w[0]) * 2 if len(w) == 2 else 0
-            args = [rec["file"]] + ([repr(w[0] - pad), repr(w[1] + pad)] if pad else [])
-            return start_tool("spectrogram", args)
         if a == "open_file":
             open_in_system(p)
             return f"Opened {os.path.basename(p)}."
     except Exception as exc:
         return f"⚠ {exc}"
     return dash.no_update
+
+
+@app.callback(
+    Output("msg", "children", allow_duplicate=True), Output("fold-ver", "data"),
+    Output({"type": "fold-path", "g": ALL}, "value"),
+    Input({"type": "fold-pick", "g": ALL}, "n_clicks"),
+    Input({"type": "fold-add", "g": ALL}, "n_clicks"),
+    Input({"type": "fold-path", "g": ALL}, "n_submit"),
+    State({"type": "fold-path", "g": ALL}, "value"),
+    State({"type": "fold-newkind", "g": ALL}, "value"),
+    State("fold-ver", "data"),
+    prevent_initial_call=True,
+)
+def connect_folders(_pick, _add, _sub, typed, newkinds, ver):
+    """'Connect … folder' (desktop folder dialog) and 'Add' (a pasted path)."""
+    t = ctx.triggered_id
+    nu = dash.no_update
+    groups = [x["id"]["g"] for x in ctx.inputs_list[0]]
+    keep = [nu] * len(groups)
+    if not t or not (ctx.triggered and ctx.triggered[0]["value"]):
+        return nu, nu, keep
+    g = t["g"]
+    i = groups.index(g)
+    kind = None if newkinds[i] == "auto" else newkinds[i]
+    word = "data" if g == "data" else "output"
+    try:
+        if t["type"] == "fold-pick":
+            start = next((f["path"] for f in paths.connected(g) if os.path.isdir(f["path"])),
+                         paths.experiment_dir())
+            path = folderpick.pick_folder(f"Connect {word} folder ({paths.experiment()})", start)
+            if not path:
+                return "Nothing connected (dialog cancelled).", nu, keep
+        else:
+            path = (typed[i] or "").strip()
+            if not path:
+                return "⚠ Paste a folder path first.", nu, keep
+        f = paths.connect_folder(g, path, kind)
+    except Exception as exc:
+        return f"⚠ {exc}", nu, keep
+    cleared = list(keep)
+    cleared[i] = ""
+    return (f"Connected {word} folder {f['path']} as '{paths.FOLDER_GROUPS[g][f['kind']]}'.",
+            (ver or 0) + 1, cleared)
+
+
+@app.callback(
+    Output("msg", "children", allow_duplicate=True), Output("fold-ver", "data", allow_duplicate=True),
+    Input({"type": "fold-act", "a": ALL, "g": ALL, "p": ALL}, "n_clicks"),
+    Input({"type": "fold-act", "a": ALL, "g": ALL, "p": ALL}, "submit_n_clicks"),
+    Input({"type": "fold-kind", "g": ALL, "p": ALL}, "value"),
+    State("fold-ver", "data"),
+    prevent_initial_call=True,
+)
+def folder_actions(_c, _s, _kinds, ver):
+    """Use / Open / Disconnect a connected folder, or change its kind."""
+    t = ctx.triggered_id
+    nu = dash.no_update
+    if not t or not ctx.triggered:
+        return nu, nu
+    g, p = t["g"], t["p"]
+    val = ctx.triggered[0]["value"]
+    try:
+        if t["type"] == "fold-kind":
+            cur = next((f for f in paths.connected(g) if f["path"] == p), None)
+            if cur is None or cur["kind"] == val:       # (re)drawn, not changed
+                return nu, nu
+            paths.update_folder(g, p, kind=val)
+            return f"{p}: kind set to '{paths.FOLDER_GROUPS[g][val]}'.", (ver or 0) + 1
+        if not val:
+            return nu, nu
+        if t["a"] == "open":
+            open_in_system(p)
+            return f"Opened {p}.", nu
+        if t["a"] == "default":
+            paths.make_default(g, p)
+            return f"Tools now use {p}.", (ver or 0) + 1
+        if t["a"] == "disconnect":
+            paths.disconnect_folder(g, p)
+            return f"Disconnected {p} (its files are untouched).", (ver or 0) + 1
+    except Exception as exc:
+        return f"⚠ {exc}", nu
+    return nu, nu
+
+
+@app.callback(
+    Output({"type": "fold-list", "g": ALL}, "children"),
+    Input("fold-ver", "data"),
+    State({"type": "fold-list", "g": ALL}, "id"),
+    prevent_initial_call=True,
+)
+def redraw_folders(_ver, ids):
+    return [_folder_rows(i["g"]) for i in ids]
 
 
 @app.callback(
@@ -997,16 +1013,16 @@ def run_forms(_s, _c, _i, _l, ss_in, ss_out,
             return start_tool("sum_spectra", [os.path.expanduser(ss_in), os.path.expanduser(ss_out)])
         if t == "cp-run":
             if not cp_file:
-                return "⚠ No RionID table in rionid/."
+                return "⚠ No RionID table in the connected RionID folders (Folders below)."
             return start_tool("correction_plot", [cp_file, cp_sheet or "New2ndOrderCorrection"])
         if t == "if-run":
             if not if_file:
-                return "⚠ No spreadsheet in the experiment folder."
+                return "⚠ No spreadsheet in the experiment folder or the connected 'Other data' folders."
             ex = shlex.split(if_ex or "")
             return start_tool("intensity_fit", [if_file] + (["--exclude", *ex] if ex else []))
         if t == "ls-run":
             if not ls_file:
-                return "⚠ No scheme files in levelschemes/."
+                return "⚠ No scheme files in the connected level-scheme folders (Folders below)."
             return start_tool("levelschemer", [ls_file])
     except Exception as exc:
         return f"⚠ {exc}"

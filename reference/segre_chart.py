@@ -633,14 +633,31 @@ def ion_name(e):
     return f"{iso}{e['A']}{e['sym']}{e['charge']}+"
 
 
+def _confirmed_dirs():
+    """Folders with Theia's confirmed lists: the one in use first, then the other
+    connected output folders of kind 'Confirmed IDs' (home page → Folders)."""
+    first = paths.outputs("confirmed")
+    dirs = [first] + [f["path"] for f in paths.connected("output", "confirmed")
+                      if os.path.isdir(f["path"]) and f["path"] != first]
+    return first, dirs
+
+
+def _confirmed_path(name):
+    """A list is stored by its file name if it is in the folder in use, else by its full path."""
+    return name if os.path.isabs(name) else os.path.join(paths.outputs("confirmed"), name)
+
+
 def confirmed_files():
-    """Theia's confirmed lists of the experiment: [(name, label)], newest first."""
+    """Theia's confirmed lists of the experiment: [(value, label)], newest first."""
     out = []
-    try:
-        files = sorted(glob.glob(os.path.join(paths.outputs("confirmed"), "*.csv")),
-                       key=os.path.getmtime, reverse=True)
-    except OSError:
-        return out
+    first, dirs = _confirmed_dirs()
+    files = []
+    for d in dirs:
+        try:
+            files += glob.glob(os.path.join(d, "*.csv"))
+        except OSError:
+            pass
+    files.sort(key=lambda f: os.path.getmtime(f) if os.path.exists(f) else 0, reverse=True)
     for f in files:
         head = {}
         try:
@@ -655,7 +672,10 @@ def confirmed_files():
         label = (f"{head.get('filter', '').replace('ions: ', '') or os.path.basename(f)}"
                  f" · {head.get('saved', '')[:16].replace('T', ' ')}"
                  f" · {head.get('accepted', '?')} accepted, {head.get('unsure', '?')} unsure")
-        out.append((os.path.basename(f), label))
+        in_use = os.path.dirname(f) == first
+        if not in_use:
+            label += f" · {os.path.basename(os.path.dirname(f))}/"
+        out.append((os.path.basename(f) if in_use else f, label))
     return out
 
 
@@ -663,7 +683,7 @@ def confirmed_entries(name):
     """Entries from one Theia confirmed list: one per (ion, harmonic);
     confident if any peak of it was accepted, unsure if only unsure ones
     (rejected peaks are left out).  Read-only, cached by file time."""
-    path = os.path.join(paths.outputs("confirmed"), name)
+    path = _confirmed_path(name)
     try:
         mtime = os.path.getmtime(path)
     except OSError:
@@ -1050,7 +1070,7 @@ def _entry_card(e):
     if (e.get("notes") or "").strip():
         out.append(html.Div(e["notes"], className="notes"))
     if e.get("source"):
-        out.append(html.Div(f"Theia list: {e['source']}", className="src"))
+        out.append(html.Div(f"Theia list: {os.path.basename(e['source'])}", className="src"))
     else:
         if e.get("updated"):
             out.append(html.Div(f"updated {e['updated'][:16].replace('T', ' ')}", className="src"))

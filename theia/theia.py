@@ -1057,6 +1057,9 @@ folder_browser = html.Div([
                       style={"flex": "1", "fontSize": "13px", "fontFamily": "monospace"}),
         ], style={"display": "flex", "alignItems": "center", "marginBottom": "6px"}),
         html.Div(id="fb-info", style={"fontSize": "12px", "color": "#666", "marginBottom": "6px"}),
+        # the experiment's connected data folders (home page → Folders), one click away
+        html.Div(id="fb-conn", style={"display": "flex", "flexWrap": "wrap", "gap": "6px",
+                                      "marginBottom": "6px"}),
         html.Div(id="fb-list", style={"height": "340px", "overflowY": "auto",
                                       "border": "1px solid #dddddd", "borderRadius": "4px",
                                       "padding": "4px"}),
@@ -3079,9 +3082,11 @@ def _fb_listing(path):
     Output("fb-list", "children"),
     Output("fb-path-input", "value"),
     Output("fb-info", "children"),
+    Output("fb-conn", "children"),
     *[Output(f, "value", allow_duplicate=True) for f in BROWSE_TARGETS.values()],
     *[Input(b, "n_clicks") for b in BROWSE_TARGETS],
     Input({"type": "fb-dir", "index": ALL}, "n_clicks"),
+    Input({"type": "fb-conn", "index": ALL}, "n_clicks"),
     Input("fb-up", "n_clicks"),
     Input("fb-home", "n_clicks"),
     Input("fb-path-input", "value"),
@@ -3103,24 +3108,29 @@ def folder_browser_cb(*args):
     keep = (nu,) * nf
     trig = dash.callback_context.triggered[0] if dash.callback_context.triggered else None
     if trig is None:
-        return (nu,) * 6 + keep
+        return (nu,) * 7 + keep
     pid, val = trig["prop_id"], trig["value"]
 
     def show(p, tgt):
         rows, info = _fb_listing(p)
-        return (FB_SHOWN, p, tgt, rows, p, info) + keep
+        return (FB_SHOWN, p, tgt, rows, p, info, _fb_connected(p)) + keep
 
     for btn, field in BROWSE_TARGETS.items():
         if pid.startswith(btn + "."):
             return show(_fb_start_dir(current[field]), field)
     if pid.startswith("fb-cancel"):
-        return (FB_HIDDEN, nu, None, nu, nu, nu) + keep
+        return (FB_HIDDEN, nu, None, nu, nu, nu, nu) + keep
     if pid.startswith("fb-select"):
         chosen = os.path.join(path, "") if path else None      # with trailing '/'
-        return (FB_HIDDEN, nu, None, nu, nu, nu) + tuple(
+        return (FB_HIDDEN, nu, None, nu, nu, nu, nu) + tuple(
             chosen if target == f and chosen else nu for f in fields)
+    if '"fb-conn"' in pid and val:                    # a connected folder was clicked
+        p = json.loads(pid.rsplit(".", 1)[0])["index"]
+        if os.path.isdir(p):
+            return show(p, target)
+        return (nu,) * 5 + (html.Span("Missing folder: " + p, style={"color": "#c0392b"}), nu) + keep
     if not path:
-        return (nu,) * 6 + keep
+        return (nu,) * 7 + keep
     if pid.startswith("fb-up"):
         return show(os.path.dirname(path.rstrip("/")) or "/", target)
     if pid.startswith("fb-home"):
@@ -3130,11 +3140,36 @@ def folder_browser_cb(*args):
         if os.path.isdir(p):
             return show(os.path.abspath(p), target)
         return (nu, nu, nu, nu, nu, html.Span("Not a folder: " + (val or ""),
-                                              style={"color": "#c0392b"})) + keep
+                                              style={"color": "#c0392b"}), nu) + keep
     if '"fb-dir"' in pid and val:                     # a sub-folder was clicked
         name = json.loads(pid.rsplit(".", 1)[0])["index"]
         return show(os.path.join(path, name), target)
-    return (nu,) * 6 + keep
+    return (nu,) * 7 + keep
+
+
+def _fb_connected(current):
+    """Buttons for the experiment's connected data folders (home page → Folders)."""
+    out = []
+    try:
+        folders = paths.connected("data")
+    except Exception:
+        folders = []
+    cur = os.path.abspath(current or "").rstrip("/")
+    for f in folders:
+        here = f["path"].rstrip("/") == cur
+        out.append(html.Button(
+            f["name"] if f["name"] == paths.DATA_KINDS.get(f["kind"])
+            else f"{f['name']} · {paths.DATA_KINDS.get(f['kind'], f['kind'])}",
+            id={"type": "fb-conn", "index": f["path"]}, n_clicks=0, title=f["path"],
+            className="btn btn-sm",
+            style={"fontSize": "12px", "padding": "2px 8px", "borderRadius": "12px",
+                   "border": f"1px solid {ACCENT}",
+                   "background": ACCENT if here else "white", "color": "white" if here else "#333",
+                   "opacity": 1 if os.path.isdir(f["path"]) else 0.5}))
+    if out:
+        out.insert(0, html.Span("Connected folders:", style={"fontSize": "12px", "color": "#666",
+                                                              "alignSelf": "center"}))
+    return out
 
 
 @app.callback(

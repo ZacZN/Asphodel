@@ -324,6 +324,12 @@ LOADER_CSS = """
   #ldPanel .item.dir .nm { color: #fbbf24; }
   #ldPanel .item .meta { color: #9ca3af; font-size: 11px; width: 150px; text-align: right; }
   #ldPanel .empty { padding: 8px 12px; color: #9ca3af; }
+  #ldPanel .conn { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 10px;
+                   border-bottom: 1px solid #374151; color: #9ca3af; font-size: 12px; }
+  #ldPanel .conn .chip { background: #1f2937; color: #e5e7eb; border: 1px solid #f97316; border-radius: 12px;
+                         padding: 2px 9px; font-size: 12px; cursor: pointer; font-weight: 500; }
+  #ldPanel .conn .chip.here { background: #f97316; color: #111827; }
+  #ldPanel .conn .chip:disabled { opacity: .45; cursor: default; }
 """
 
 LOADER_HTML = """
@@ -380,6 +386,21 @@ async function ldList(dir) {
     var inp = document.createElement('input'); inp.value = d.path; inp.title = 'Type a folder and press Enter';
     inp.onkeydown = function(e) { if (e.key === 'Enter') ldList(inp.value); };
     hdr.appendChild(up); hdr.appendChild(inp); p.appendChild(hdr);
+    // the experiment's connected data folders (home page → Folders), one click away
+    if (d.connected && d.connected.length) {
+      var cn = document.createElement('div'); cn.className = 'conn';
+      var lb = document.createElement('span'); lb.textContent = 'Connected folders:'; cn.appendChild(lb);
+      d.connected.forEach(function(f) {
+        var b = document.createElement('button');
+        b.textContent = f.name === f.kind ? f.name : (f.name + ' · ' + f.kind);
+        b.title = f.path + (f.ok ? '' : '  (missing)');
+        b.className = 'chip' + (f.path.replace(/\\/$/, '') === d.path.replace(/\\/$/, '') ? ' here' : '');
+        if (!f.ok) b.disabled = true;
+        b.onclick = function() { ldList(f.path); };
+        cn.appendChild(b);
+      });
+      p.appendChild(cn);
+    }
     var cur = document.getElementById('ldPath').value;
     d.dirs.forEach(function(name) {
       var it = document.createElement('div'); it.className = 'item dir';
@@ -2799,8 +2820,14 @@ def serve(html, state):
                                 "size":  st.st_size,
                                 "mtime": datetime.datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M"),
                             })
+                    try:     # the experiment's connected data folders (home page → Folders)
+                        conn = [{"name": f["name"], "path": f["path"],
+                                 "kind": paths.DATA_KINDS.get(f["kind"], f["kind"]),
+                                 "ok": os.path.isdir(f["path"])} for f in paths.connected("data")]
+                    except Exception:
+                        conn = []
                     self._send(200, {"path": d, "parent": os.path.dirname(d),
-                                     "dirs": dirs, "files": files})
+                                     "dirs": dirs, "files": files, "connected": conn})
                 except Exception as exc:
                     self._send(400, {"error": str(exc)})
             else:
