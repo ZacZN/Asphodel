@@ -70,8 +70,6 @@ TOOLS = {
                         "Sum all 1-D spectra of a folder (raw and drift-aligned).", False),
     "correction_plot": ("Tartarus", "2nd-order correction", "tartarus/new_2nd_order_correction_plot.py",
                         "f_diff vs f_sim from a RionID table and the 2nd-order polynomial fit.", False),
-    "intensity_fit":   ("Tartarus", "Intensity variation fit", "tartarus/intensity_variation_fit.py",
-                        "Linear fit of σ vs intensity from a spreadsheet.", False),
     "levelschemer":    ("Elysium", "LevelSchemer", "elysium/levelschemer.py",
                         "Draw nuclear level schemes (Tk window).", False),
     "segre":           ("Reference", "Segrè chart", "reference/segre_chart.py",
@@ -374,14 +372,8 @@ def _files_in(group, kinds, patterns):
 def tool_forms():
     """Small forms for the command-line tools.  Folders and files come from the
     connected folders (Folders section below)."""
-    exp_dir = paths.experiment_dir()
     xlsx = _files_in("data", ["rionid"], ["*.xls*"])
-    sheets = ([{"label": os.path.basename(f), "value": f} for ext in ("*.ods", "*.xlsx", "*.xls", "*.csv")
-               for f in sorted(glob.glob(os.path.join(exp_dir, ext)))]
-              + _files_in("data", ["other"], ["*.ods", "*.xlsx", "*.xls", "*.csv"]))
     schemes = _files_in("data", ["levelschemes"], ["*.json"])
-    ods_default = os.path.join(exp_dir, "Schottky_Uncertainties.ods")
-    sheet_vals = [o["value"] for o in sheets]
     lbl = lambda t: html.Label(t, className="flabel")
     return {
         "sum_spectra": html.Div([
@@ -399,14 +391,6 @@ def tool_forms():
                          value=xlsx[0]["value"] if xlsx else None),
             lbl("Sheet"), dcc.Input(id="cp-sheet", type="text", value="New2ndOrderCorrection", className="wide"),
             html.Button("Run", id="cp-run", className="btn primary small", n_clicks=0),
-        ], className="form"),
-        "intensity_fit": html.Div([
-            lbl("Spreadsheet"),
-            dcc.Dropdown(id="if-file", options=sheets, clearable=False,
-                         value=ods_default if ods_default in sheet_vals else (sheet_vals[0] if sheet_vals else None)),
-            lbl("Exclude ions (space separated, optional)"),
-            dcc.Input(id="if-exclude", type="text", className="wide", placeholder="e.g. 206Pb79+ 208Pb80+"),
-            html.Button("Run", id="if-run", className="btn primary small", n_clicks=0),
         ], className="form"),
         "levelschemer": html.Div([
             lbl("Open a scheme"),
@@ -995,15 +979,13 @@ def redraw_folders(_ver, ids):
 @app.callback(
     Output("msg", "children", allow_duplicate=True),
     Input("ss-run", "n_clicks"), Input("cp-run", "n_clicks"),
-    Input("if-run", "n_clicks"), Input("ls-run", "n_clicks"),
+    Input("ls-run", "n_clicks"),
     State("ss-in", "value"), State("ss-out", "value"),
     State("cp-file", "value"), State("cp-sheet", "value"),
-    State("if-file", "value"), State("if-exclude", "value"),
     State("ls-file", "value"),
     prevent_initial_call=True,
 )
-def run_forms(_s, _c, _i, _l, ss_in, ss_out,
-              cp_file, cp_sheet, if_file, if_ex, ls_file):
+def run_forms(_s, _c, _l, ss_in, ss_out, cp_file, cp_sheet, ls_file):
     """The 'Run' buttons of the tool forms."""
     t = ctx.triggered_id
     try:
@@ -1015,11 +997,6 @@ def run_forms(_s, _c, _i, _l, ss_in, ss_out,
             if not cp_file:
                 return "⚠ No RionID table in the connected RionID folders (Folders below)."
             return start_tool("correction_plot", [cp_file, cp_sheet or "New2ndOrderCorrection"])
-        if t == "if-run":
-            if not if_file:
-                return "⚠ No spreadsheet in the experiment folder or the connected 'Other data' folders."
-            ex = shlex.split(if_ex or "")
-            return start_tool("intensity_fit", [if_file] + (["--exclude", *ex] if ex else []))
         if t == "ls-run":
             if not ls_file:
                 return "⚠ No scheme files in the connected level-scheme folders (Folders below)."
