@@ -322,7 +322,9 @@ HALF = 0.47                  # half side of a square (cells are 1 wide: a thin w
 STABLE_CORNER = 0.38         # Identified ions: side of the corner triangles (stable / isomer identified)
 ISOMER_CORNER_COLOUR = "#8e44ad"   # bottom-left corner: a NUBASE isomer of this nuclide is identified
 NEW_STAR_COLOUR = "#ffd21f"        # bottom-left star: a new isomer (not in NUBASE) is logged
-STAR_R = 0.2                       # outer radius of that star, in squares
+STAR_R = 0.15                      # outer radius of that star, in squares
+SEARCHED_COLOUR = "#d62728"        # bottom-right corner: searched for but not identified
+LABEL_INSET = 0.05                 # A + symbol label: distance from the square's top-left corner
 
 
 SELECT_COLOUR = "#e0242c"     # red circle around the square selected for editing
@@ -358,8 +360,10 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
     cols = scale_colours(z, scale, zmin, zmax)
     n_arr, z_arr = rows["N"].to_numpy(), rows["Z"].to_numpy()
     hover = rows["hover"].to_numpy()
-    if id_cells:
-        hover = np.array([h + "".join("<br>" + entry_hover_line(e) for e in id_cells.get((zz, nn), []))
+    srch = searched_cells() if by == "identified" else set()
+    if id_cells or srch:
+        hover = np.array([h + "".join("<br>" + entry_hover_line(e) for e in (id_cells or {}).get((zz, nn), []))
+                          + ("<br>✗ searched, not identified" if (zz, nn) in srch else "")
                           for h, zz, nn in zip(hover, z_arr, n_arr)], dtype=object)
 
     fig = go.Figure()
@@ -398,6 +402,15 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
             fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name="isomer identified",
                                      marker=dict(symbol="triangle-sw", size=11, color=ISOMER_CORNER_COLOUR),
                                      hoverinfo="skip", showlegend=True))
+        # searched for but not identified: bottom-right corner red
+        path = "".join(f"M{n + HALF:g},{zz - HALF:g}H{n + HALF - k:g}L{n + HALF:g},{zz - HALF + k:g}Z"
+                       for zz, n in sorted(srch))
+        if path:
+            cell_shapes.append(dict(type="path", path=path, fillcolor=SEARCHED_COLOUR,
+                                    line=dict(width=0), layer="below", xref="x", yref="y"))
+            fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name="searched, not identified",
+                                     marker=dict(symbol="triangle-se", size=11, color=SEARCHED_COLOUR),
+                                     hoverinfo="skip", showlegend=True))
         # a new isomer (not in NUBASE) logged: yellow star in the bottom-left corner
         # (a path shape in data units, so it zooms with the square; drawn over the purple corner)
         new_cells = [c for c, es in (id_cells or {}).items() if any(e.get("isomer") == NEW_ISOMER for e in es)]
@@ -427,12 +440,14 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
     fig.add_trace(go.Scatter(
         # plain lists: numpy arrays reach the page base64-encoded, which the
         # page's own code can't read
-        x=n_arr.tolist(), y=z_arr.tolist(), mode="text", name="labels-all", visible=False,
+        # anchored at the square's top-left corner (data units, so it stays there when zooming)
+        x=(n_arr - HALF + LABEL_INSET).round(3).tolist(), y=(z_arr + HALF - LABEL_INSET).round(3).tolist(),
+        mode="text", name="labels-all", visible=False, textposition="bottom right",
         text=(rows["A"].astype(str) + rows["sym"]).tolist(),
         textfont=dict(size=9, color=[_text_colour(c) for c in cols]),
         hoverinfo="skip", showlegend=False))
     fig.add_trace(go.Scatter(
-        x=[], y=[], text=[], mode="text", name="labels", textfont=dict(size=9),
+        x=[], y=[], text=[], mode="text", name="labels", textfont=dict(size=9), textposition="bottom right",
         hoverinfo="skip", showlegend=False))
     # colour bar
     fig.add_trace(go.Scatter(
@@ -538,13 +553,15 @@ def ids_path():
 
 
 def load_ids():
-    d = {"format": "asphodel-segre-identified", "version": 1, "entries": [], "confirmed_lists": []}
+    d = {"format": "asphodel-segre-identified", "version": 1, "entries": [], "confirmed_lists": [],
+         "searched": []}          # [{"Z", "N", "updated"}]: searched for, not identified
     try:
         with open(ids_path(), encoding="utf-8") as fh:
             saved = json.load(fh)
         if isinstance(saved, dict):
             d["entries"] = [e for e in saved.get("entries", []) if isinstance(e, dict)]
             d["confirmed_lists"] = [str(x) for x in saved.get("confirmed_lists", [])]
+            d["searched"] = [x for x in saved.get("searched", []) if isinstance(x, dict) and "Z" in x and "N" in x]
     except (OSError, ValueError):
         pass
     return d
@@ -676,6 +693,11 @@ def confirmed_entries(name):
     return out
 
 
+def searched_cells(d=None):
+    d = d or load_ids()
+    return {(int(x["Z"]), int(x["N"])) for x in d.get("searched", [])}
+
+
 def all_entries(d=None):
     """Own entries + those of the selected Theia lists."""
     d = d or load_ids()
@@ -753,6 +775,8 @@ header .exp{{color:#777;font-family:monospace;font-size:12px}}
 .panel .lists input{{accent-color:{ACCENT};margin-right:5px}}
 .entry{{background:#fff;border:1px solid {LINE};border-left:5px solid #ccc;border-radius:4px;padding:6px 8px;margin:6px 0}}
 .entry.confident{{border-left-color:{ID_COLOURS[0][1]}}} .entry.unsure{{border-left-color:{ID_COLOURS[1][1]}}}
+.panel .searched label{{font-weight:600;color:{SEARCHED_COLOUR}}}
+.panel .searched input{{accent-color:{SEARCHED_COLOUR}}}
 .entry .newiso{{color:{ISOMER_CORNER_COLOUR};font-weight:600;margin-top:3px}}
 .entry .ion{{font-weight:700;font-family:monospace;font-size:13px}} .entry .st{{color:#555;margin-left:6px}}
 .entry .notes{{white-space:pre-wrap;margin-top:3px;color:#333}} .entry .src{{color:#777;font-size:11px;margin-top:3px;word-break:break-all}}
@@ -797,6 +821,9 @@ def id_panel():
             html.Button("Apply", id="id-lists-apply", className="btn small", n_clicks=0),
         ]),
         html.Div(id="id-sel-title", className="selt"),
+        html.Div(dcc.Checklist(id="id-searched", value=[], className="lists",
+                               options=[{"label": "Searched but not identified", "value": "yes"}]),
+                 id="id-searched-box", className="searched", style={"display": "none"}),
         html.Div(id="id-entries"),
         html.Div([
             lbl("Energy State"),
@@ -1040,27 +1067,35 @@ def _entry_card(e):
     Output("id-sel-title", "children"), Output("id-entries", "children"),
     Output("id-form", "style"), Output("id-iso", "options"),
     Output("id-all", "children"), Output("id-count", "children"),
+    Output("id-searched", "value"), Output("id-searched-box", "style"),
     Input("id-sel", "data"), Input("id-ver", "data"),
 )
 def _id_panel(sel, _ver):
     entries = all_entries()
     cells = entries_by_cell(entries)
     own = sum(1 for e in entries if not e.get("source"))
-    count = f"{len(cells)} nuclides · {own} own + {len(entries) - own} from Theia lists"
-    # the list of all identified nuclides (click = select)
+    srch = searched_cells()
+    count = (f"{len(cells)} nuclides · {own} own + {len(entries) - own} from Theia lists"
+             + (f" · {len(srch)} searched, not identified" if srch else ""))
+    # the list of all identified / searched nuclides (click = select)
     allrows = []
-    for (zz, nn) in sorted(cells):
-        es = cells[(zz, nn)]
+    for (zz, nn) in sorted(set(cells) | srch):
+        es = cells.get((zz, nn), [])
         r = _gs_row(zz, nn)
         nm = r["name"] if r is not None else f"Z{zz} N{nn}"
-        txt = f"{'✓' if cell_status(es) == 'confident' else '?'} {nm}: " + \
-            ", ".join(f"{ion_name(e)} h{e['harmonic']}" for e in es)
+        if es:
+            txt = f"{'✓' if cell_status(es) == 'confident' else '?'} {nm}: " + \
+                ", ".join(f"{ion_name(e)} h{e['harmonic']}" for e in es) + \
+                ("  (also marked searched)" if (zz, nn) in srch else "")
+        else:
+            txt = f"✗ {nm}: searched, not identified"
         allrows.append(html.Button(txt, id={"type": "idgo", "z": zz, "n": nn}, className="btn", n_clicks=0))
     if not allrows:
         allrows = [html.Div("Nothing identified yet.", className="hint")]
     if not sel:
         return ([html.Span("Click a square to select a nuclide", className="hint")], [],
-                {"display": "none"}, [{"label": "ground state", "value": "g"}], allrows, count)
+                {"display": "none"}, [{"label": "ground state", "value": "g"}], allrows, count,
+                [], {"display": "none"})
     zz, nn = sel
     r = _gs_row(zz, nn)
     title = [r["name"] if r is not None else f"Z = {zz}, N = {nn}",
@@ -1072,7 +1107,35 @@ def _id_panel(sel, _ver):
     isos.append({"label": "New isomer (not in NUBASE)", "value": NEW_ISOMER})
     es = cells.get((zz, nn), [])
     cards = [_entry_card(e) for e in es] or [html.Div("Not identified yet – add it below.", className="hint")]
-    return title, cards, {}, isos, allrows, count
+    return title, cards, {}, isos, allrows, count, (["yes"] if (zz, nn) in srch else []), {}
+
+
+@app.callback(
+    Output("id-ver", "data", allow_duplicate=True), Output("id-msg", "children", allow_duplicate=True),
+    Input("id-searched", "value"), State("id-sel", "data"), State("id-ver", "data"),
+    prevent_initial_call=True,
+)
+def _id_searched(value, sel, ver):
+    """'Searched but not identified' box of the selected nuclide: saved at once.
+    (Setting the box when a nuclide is selected changes nothing, so nothing is saved.)"""
+    if not sel:
+        return dash.no_update, dash.no_update
+    zz, nn = int(sel[0]), int(sel[1])
+    want = bool(value)
+    d = load_ids()
+    have = (zz, nn) in searched_cells(d)
+    if want == have:
+        return dash.no_update, dash.no_update
+    r = _gs_row(zz, nn)
+    nm = r["name"] if r is not None else f"Z{zz} N{nn}"
+    if want:
+        d["searched"].append({"Z": zz, "N": nn, "updated": datetime.datetime.now().isoformat(timespec="seconds")})
+        msg = f"{nm} marked as searched but not identified."
+    else:
+        d["searched"] = [x for x in d["searched"] if (int(x["Z"]), int(x["N"])) != (zz, nn)]
+        msg = f"{nm}: 'searched but not identified' removed."
+    save_ids(d)
+    return (ver or 0) + 1, msg
 
 
 @app.callback(Output("id-new-box", "style"), Input("id-iso", "value"))
@@ -1291,7 +1354,7 @@ app.clientside_callback(
                         }
                         // font grows with the squares: "188Re" fills about 3/4 of a square
                         if (px >= %d) {
-                            var fs = Math.round(Math.min(28, Math.max(9, px * 0.24)));
+                            var fs = Math.round(Math.min(26, Math.max(9, px * 0.22)));
                             if ((gd.data[iL].textfont || {}).size !== fs)
                                 jobs.push([{'textfont.size': fs}, [iL]]);
                         }
