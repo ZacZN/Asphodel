@@ -793,10 +793,10 @@ def active_alts(e):
 
 
 def alt_links(entries):
-    """Curved-line data for the page: {"Z,N": [[N1, Z1, N2, Z2], ...]} for both ends
-    of every (uncertain entry -> alternative) pair, and the hover lines of the
-    alternatives' squares: {(Z, N): ["↔ possible alternative for …"]}."""
-    links, back = {}, {}
+    """Curved-line data for the page: {"Z,N": [[N1, Z1, N2, Z2, [alternative ions]], ...]}
+    for both ends of every (uncertain nuclide -> alternative nuclide) pair, and the
+    hover lines of the alternatives' squares: {(Z, N): ["↔ possible alternative for …"]}."""
+    pairs, back = {}, {}
     for e in entries:
         for a in active_alts(e):
             src, dst = (e["Z"], e["N"]), (a["Z"], a["N"])
@@ -804,11 +804,14 @@ def alt_links(entries):
                 f"↔ {alt_text(a, e)}: possible alternative for {ion_name(e)} h{e['harmonic']}")
             if src == dst:
                 continue
-            seg = [e["N"], e["Z"], a["N"], a["Z"]]
-            for c in (src, dst):
-                lst = links.setdefault(f"{c[0]},{c[1]}", [])
-                if seg not in lst:
-                    lst.append(seg)
+            names = pairs.setdefault((src, dst), [])
+            if alt_text(a, e) not in names:
+                names.append(alt_text(a, e))
+    links = {}
+    for (src, dst), names in pairs.items():
+        seg = [src[1], src[0], dst[1], dst[0], names]
+        for c in (src, dst):
+            links.setdefault(f"{c[0]},{c[1]}", []).append(seg)
     return links, back
 
 
@@ -1550,6 +1553,41 @@ app.clientside_callback(
                     if (parent) parent.appendChild(el);
                     return el;
                 };
+                // rectangles (overlay px) that the lines and their labels keep clear of:
+                // Plotly's hover labels
+                var avoidRects = function(origin) {
+                    var out = [], hl = L0().hoverlayer;
+                    if (!hl) return out;
+                    hl.querySelectorAll('g.hovertext').forEach(function(g) {
+                        var r = g.getBoundingClientRect();
+                        if (r.width) out.push([r.left - origin.left - 6, r.top - origin.top - 6,
+                                               r.right - origin.left + 6, r.bottom - origin.top + 6]);
+                    });
+                    return out;
+                };
+                var L0 = function() {
+                    var L = gd._fullLayout;
+                    return {hoverlayer: L && L._hoverlayer && L._hoverlayer.node()};
+                };
+                var inRects = function(x, y, rects) {
+                    for (var i = 0; i < rects.length; i++) {
+                        var r = rects[i];
+                        if (x > r[0] && x < r[2] && y > r[1] && y < r[3]) return true;
+                    }
+                    return false;
+                };
+                var boxHits = function(b, rects) {
+                    for (var i = 0; i < rects.length; i++) {
+                        var r = rects[i];
+                        if (b[0] < r[2] && b[2] > r[0] && b[1] < r[3] && b[3] > r[1]) return true;
+                    }
+                    return false;
+                };
+                var bez = function(p0, c1, c2, p1, t) {
+                    var u = 1 - t;
+                    return [u*u*u*p0[0] + 3*u*u*t*c1[0] + 3*u*t*t*c2[0] + t*t*t*p1[0],
+                            u*u*u*p0[1] + 3*u*u*t*c1[1] + 3*u*t*t*c2[1] + t*t*t*p1[1]];
+                };
                 var drawAlt = function(ev) {
                     clearAlt();
                     var meta = (gd.layout && gd.layout.meta) || {}, links = meta.altlinks || {};
@@ -1569,6 +1607,8 @@ app.clientside_callback(
                         else host.appendChild(altSvg);
                     }
                     altSvg.setAttribute('width', L.width); altSvg.setAttribute('height', L.height);
+                    var origin = altSvg.getBoundingClientRect();
+                    var avoid = avoidRects(origin);
                     var defs = mk('defs', {}, altSvg);
                     var m = mk('marker', {id: 'segreArrow', viewBox: '0 0 10 10', refX: '8', refY: '5',
                                           markerWidth: '5', markerHeight: '5',
@@ -1576,19 +1616,70 @@ app.clientside_callback(
                     mk('path', {d: 'M0,0 L10,5 L0,10 z', fill: '%s', stroke: '#ffffff', 'stroke-width': '1'}, m);
                     var sq = ya._length / Math.abs(ya.range[1] - ya.range[0]);     // one square in px
                     var px = function(n, z) { return [xa._offset + xa.d2p(n), ya._offset + ya.d2p(z)]; };
+                    var hovered = px(pt.x, pt.y);
                     segs.forEach(function(sg) {
-                        var a = px(sg[0], sg[1]), b = px(sg[2], sg[3]);
-                        var dx = b[0] - a[0], dy = b[1] - a[1], len = Math.sqrt(dx * dx + dy * dy);
+                        // always from the hovered square to the other end
+                        var p0 = hovered, far = (Math.round(sg[0]) === Math.round(pt.x) &&
+                                                 Math.round(sg[1]) === Math.round(pt.y)) ? px(sg[2], sg[3]) : px(sg[0], sg[1]);
+                        var dx = far[0] - p0[0], dy = far[1] - p0[1], len = Math.sqrt(dx * dx + dy * dy);
                         if (len < 1) return;
-                        var ux = dx / len, uy = dy / len, cut = Math.min(0.3 * sq, len / 4);
-                        a = [a[0] + ux * cut, a[1] + uy * cut]; b = [b[0] - ux * cut, b[1] - uy * cut];
-                        var bulge = 0.22 * len;                       // control point off the straight line
-                        var c = [(a[0] + b[0]) / 2 - uy * bulge, (a[1] + b[1]) / 2 + ux * bulge];
-                        var d = 'M' + a[0] + ',' + a[1] + ' Q' + c[0] + ',' + c[1] + ' ' + b[0] + ',' + b[1];
+                        var cut = Math.min(0.3 * sq, len / 4);
+                        // try leaving the square in several directions; keep the shortest curve
+                        // that stays clear of the hover labels
+                        var dirs = [[dx / len, dy / len], [0, -1], [0, 1], [-1, 0], [1, 0],
+                                    [-0.7, -0.7], [0.7, -0.7], [-0.7, 0.7], [0.7, 0.7]];
+                        var best = null;
+                        dirs.forEach(function(dv, k) {
+                            var a = [p0[0] + dv[0] * cut, p0[1] + dv[1] * cut];
+                            var ux = (far[0] - a[0]), uy = (far[1] - a[1]), l2 = Math.sqrt(ux * ux + uy * uy) || 1;
+                            var b = [far[0] - ux / l2 * cut, far[1] - uy / l2 * cut];
+                            var reach = Math.max(0.35 * l2, 2.2 * sq);
+                            var c1 = [a[0] + dv[0] * reach, a[1] + dv[1] * reach];
+                            var bend = k === 0 ? 0.22 * l2 : 0;              // first try: the gentle arc
+                            var c2 = [b[0] - ux / l2 * 0.3 * l2 - uy / l2 * bend, b[1] - uy / l2 * 0.3 * l2 + ux / l2 * bend];
+                            if (k === 0) c1 = [a[0] + ux * 0.3 - uy / l2 * bend, a[1] + uy * 0.3 + ux / l2 * bend];
+                            var hits = 0, length = 0, prev = a;
+                            for (var i = 1; i <= 40; i++) {
+                                var q = bez(a, c1, c2, b, i / 40);
+                                if (inRects(q[0], q[1], avoid)) hits++;
+                                length += Math.hypot(q[0] - prev[0], q[1] - prev[1]); prev = q;
+                            }
+                            var score = hits * 1e6 + length;
+                            if (!best || score < best.score) best = {score: score, a: a, c1: c1, c2: c2, b: b};
+                        });
+                        var d = 'M' + best.a[0] + ',' + best.a[1] + ' C' + best.c1[0] + ',' + best.c1[1] + ' ' +
+                                best.c2[0] + ',' + best.c2[1] + ' ' + best.b[0] + ',' + best.b[1];
                         mk('path', {d: d, fill: 'none', stroke: '#ffffff', 'stroke-width': '6',
                                     'stroke-linecap': 'round'}, altSvg);
                         mk('path', {d: d, fill: 'none', stroke: '%s', 'stroke-width': '2.5',
                                     'marker-start': 'url(#segreArrow)', 'marker-end': 'url(#segreArrow)'}, altSvg);
+                        // the line's label: on the curve, at the first spot clear of the hover labels
+                        var text = 'Alternative Identification: ' + (sg[4] || []).join(', ');
+                        var g = mk('g', {}, altSvg);
+                        var t = mk('text', {'font-size': '12', 'font-family': 'sans-serif', 'font-weight': '600',
+                                            fill: '%s'}, g);
+                        t.textContent = text;
+                        var w = t.getComputedTextLength ? t.getComputedTextLength() : text.length * 6.5, h = 16;
+                        var spots = [0.5, 0.65, 0.35, 0.8, 0.2, 0.9];
+                        var placed = null;
+                        for (var j = 0; j < spots.length && !placed; j++) {
+                            var q = bez(best.a, best.c1, best.c2, best.b, spots[j]);
+                            [[8, -h - 4], [8, 6], [-w - 16, -h - 4], [-w - 16, 6]].forEach(function(o) {
+                                if (placed) return;
+                                var box = [q[0] + o[0], q[1] + o[1], q[0] + o[0] + w + 8, q[1] + o[1] + h];
+                                if (box[0] < 0 || box[2] > L.width || box[1] < 0 || box[3] > L.height) return;
+                                if (!boxHits(box, avoid)) placed = box;
+                            });
+                        }
+                        if (!placed) {
+                            var qm = bez(best.a, best.c1, best.c2, best.b, 0.5);
+                            placed = [qm[0] + 8, qm[1] - h - 4, qm[0] + 16 + w, qm[1] - 4];
+                        }
+                        avoid.push(placed);                  // a second line's label goes elsewhere
+                        mk('rect', {x: placed[0], y: placed[1], width: w + 8, height: h, rx: 3,
+                                    fill: 'rgba(255,255,255,0.92)', stroke: '%s', 'stroke-width': '1'}, g)
+                            .parentNode.insertBefore(g.lastChild, t);
+                        t.setAttribute('x', placed[0] + 4); t.setAttribute('y', placed[1] + 12);
                     });
                 };
                 gd.on('plotly_hover', drawAlt);
@@ -1601,7 +1692,7 @@ app.clientside_callback(
         }, 150);
         return window.dash_clientside.no_update;
     }
-    """ % (LABEL_PX, LABEL_PX, ALT_COLOUR, ALT_COLOUR),
+    """ % (LABEL_PX, LABEL_PX, ALT_COLOUR, ALT_COLOUR, ALT_COLOUR, ALT_COLOUR),
     Output("labels-dummy", "children"),
     Input("chart", "figure"),
 )
