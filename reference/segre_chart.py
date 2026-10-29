@@ -323,6 +323,7 @@ STABLE_CORNER = 0.38         # Identified ions: side of the corner triangles (st
 ISOMER_CORNER_COLOUR = "#8e44ad"   # bottom-left corner: a NUBASE isomer of this nuclide is identified
 NEW_STAR_COLOUR = "#ffd21f"        # bottom-left star: a new isomer (not in NUBASE) is logged
 STAR_R = 0.15                      # outer radius of that star, in squares
+ALT_COLOUR = "#1f4e9e"             # curved double arrow: uncertain identification <-> alternative
 SEARCHED_COLOUR = "#d62728"        # bottom-right corner: searched for but not identified
 LABEL_INSET = 0.05                 # A + symbol label: distance from the square's top-left corner
 
@@ -361,8 +362,10 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
     n_arr, z_arr = rows["N"].to_numpy(), rows["Z"].to_numpy()
     hover = rows["hover"].to_numpy()
     srch = searched_cells() if by == "identified" else set()
+    links, alt_back = alt_links([e for es in (id_cells or {}).values() for e in es]) if id_cells else ({}, {})
     if id_cells or srch:
         hover = np.array([h + "".join("<br>" + entry_hover_line(e) for e in (id_cells or {}).get((zz, nn), []))
+                          + "".join("<br>" + t for t in alt_back.get((zz, nn), []))
                           + ("<br>✗ searched, not identified" if (zz, nn) in srch else "")
                           for h, zz, nn in zip(hover, z_arr, n_arr)], dtype=object)
 
@@ -496,6 +499,8 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
         legend=dict(x=0.01, y=0.99, xanchor="left", yanchor="top", bgcolor="rgba(255,255,255,0.85)",
                     bordercolor=LINE, borderwidth=1),
         shapes=cell_shapes + shapes, dragmode="pan", uirevision=uirev,
+        # uncertain identification <-> its alternatives, drawn by the page on hover
+        meta={"altlinks": links if by == "identified" else {}},
         xaxis=dict(title="N (neutrons)", range=xr or [-1, N_MAX + 1], showgrid=False,
                    zeroline=False, constrain="domain", ticks="outside"),
         yaxis=dict(title="Z (protons)", range=yr or [-1, Z_MAX + 1], showgrid=False,
@@ -742,6 +747,71 @@ def cell_status(es):
     return "unsure" if es else "not identified"
 
 
+_ALT_RE = re.compile(r"([a-z])?(\d{1,3})([A-Z][a-z]?)(\d{1,3})\+(?:\s*h\s*=?\s*(\d+))?")
+
+
+def parse_alts(text):
+    """'204Au79+ h214, m203Pt78+' -> ([{Z, N, A, sym, isomer, charge, harmonic}], None)
+    or ([], error).  A missing harmonic (None) means 'the entry's own harmonic'."""
+    out = []
+    for part in [p.strip() for p in re.split(r"[,;]", str(text or "")) if p.strip()]:
+        m = _ALT_RE.fullmatch(part)
+        if not m:
+            return [], f"can't read '{part}' (e.g. 204Au79+ h214 or m203Pt78+)"
+        iso, a, sym, q, h = m.groups()
+        z = z_of(sym)
+        if z is None:
+            return [], f"no element '{sym}' in '{part}'"
+        a, q = int(a), int(q)
+        n = a - z
+        if TABLE[(TABLE["Z"] == z) & (TABLE["N"] == n) & (TABLE["state"] == "g")].empty:
+            return [], f"{a}{sym} is not in NUBASE2020"
+        if iso and TABLE[(TABLE["Z"] == z) & (TABLE["N"] == n) & (TABLE["state"] == iso)].empty:
+            return [], f"{a}{sym} has no isomer '{iso}' in NUBASE2020"
+        if not 1 <= q <= z:
+            return [], f"charge {q}+ of {a}{sym} must be 1–{z}"
+        out.append({"Z": z, "N": n, "A": a, "sym": SYMBOLS.get(z, sym), "isomer": iso or "g",
+                    "charge": q, "harmonic": int(h) if h else None})
+    return out, None
+
+
+def alt_text(alt, entry=None):
+    """'204Au79+ h214' (the entry's harmonic when the alternative has none)."""
+    h = alt.get("harmonic") or (entry or {}).get("harmonic")
+    return ion_name(alt) + (f" h{h}" if h else "")
+
+
+def alts_input_text(e):
+    """The form text that gives back an entry's alternatives."""
+    return ", ".join(ion_name(a) + (f" h{a['harmonic']}" if a.get("harmonic") else "")
+                     for a in e.get("alts") or [])
+
+
+def active_alts(e):
+    """Alternatives that count: unsure own entries only."""
+    return (e.get("alts") or []) if e.get("status") == "unsure" and not e.get("source") else []
+
+
+def alt_links(entries):
+    """Curved-line data for the page: {"Z,N": [[N1, Z1, N2, Z2], ...]} for both ends
+    of every (uncertain entry -> alternative) pair, and the hover lines of the
+    alternatives' squares: {(Z, N): ["↔ possible alternative for …"]}."""
+    links, back = {}, {}
+    for e in entries:
+        for a in active_alts(e):
+            src, dst = (e["Z"], e["N"]), (a["Z"], a["N"])
+            back.setdefault(dst, []).append(
+                f"↔ {alt_text(a, e)}: possible alternative for {ion_name(e)} h{e['harmonic']}")
+            if src == dst:
+                continue
+            seg = [e["N"], e["Z"], a["N"], a["Z"]]
+            for c in (src, dst):
+                lst = links.setdefault(f"{c[0]},{c[1]}", [])
+                if seg not in lst:
+                    lst.append(seg)
+    return links, back
+
+
 def entry_hover_line(e):
     mark = "✓" if e["status"] == "confident" else "?"
     note = (e.get("notes") or "").strip().replace("<", "&lt;")
@@ -750,7 +820,9 @@ def entry_hover_line(e):
     src = " [Theia list]" if e.get("source") else ""
     new = f" [new isomer{': ' + new_isomer_text(e) if new_isomer_text(e) else ''}]" \
         if e.get("isomer") == NEW_ISOMER else ""
-    return f"{mark} {ion_name(e)} h{e['harmonic']}{new}{src}" + (f" – {note}" if note else "")
+    alts = active_alts(e)
+    alt = (" ↔ or " + ", ".join(alt_text(a, e) for a in alts)) if alts else ""
+    return f"{mark} {ion_name(e)} h{e['harmonic']}{new}{src}{alt}" + (f" – {note}" if note else "")
 
 
 # ===========================================================================
@@ -797,6 +869,7 @@ header .exp{{color:#777;font-family:monospace;font-size:12px}}
 .entry.confident{{border-left-color:{ID_COLOURS[0][1]}}} .entry.unsure{{border-left-color:{ID_COLOURS[1][1]}}}
 .panel .searched label{{font-weight:600;color:{SEARCHED_COLOUR}}}
 .panel .searched input{{accent-color:{SEARCHED_COLOUR}}}
+.entry .alts{{color:{ALT_COLOUR};font-weight:600;margin-top:3px}}
 .entry .newiso{{color:{ISOMER_CORNER_COLOUR};font-weight:600;margin-top:3px}}
 .entry .ion{{font-weight:700;font-family:monospace;font-size:13px}} .entry .st{{color:#555;margin-left:6px}}
 .entry .notes{{white-space:pre-wrap;margin-top:3px;color:#333}} .entry .src{{color:#777;font-size:11px;margin-top:3px;word-break:break-all}}
@@ -808,6 +881,7 @@ header .exp{{color:#777;font-family:monospace;font-size:12px}}
 .form textarea{{width:100%;min-height:70px;padding:4px 6px;border:1px solid {LINE};border-radius:4px;font-size:13px;font-family:inherit}}
 .form .radio label{{margin-right:12px}} .form .radio input{{accent-color:{ACCENT};margin-right:3px}}
 .form .btns{{margin-top:8px;display:flex;gap:8px;align-items:center}}
+.form input#id-alts{{width:100%;padding:4px 6px;border:1px solid {LINE};border-radius:4px;font-size:13px}}
 .form .newbox{{border-left:4px solid {ISOMER_CORNER_COLOUR};padding:2px 0 4px 8px;margin-top:6px}}
 .btn.primary{{background:{ACCENT};border-color:{ACCENT};color:#fff}} .btn.primary:hover{{color:#fff;opacity:.9}}
 .btn.danger:hover{{border-color:#c62828;color:#c62828}}
@@ -887,6 +961,13 @@ def id_panel():
             dcc.RadioItems(id="id-status", value="confident", className="radio", inline=True,
                            options=[{"label": "Confident", "value": "confident"},
                                     {"label": "Unsure", "value": "unsure"}]),
+            html.Div([
+                lbl("Alternative identifications"),
+                dcc.Input(id="id-alts", type="text", className="wide", autoComplete="off",
+                          placeholder="e.g. 204Au79+ h214, m203Pt78+"),
+                html.Div("Other ions this peak could be, separated by commas; the harmonic is "
+                         "optional (same as above if left out).", className="hint"),
+            ], id="id-alts-box", style={"display": "none"}),
             lbl("Notes"),
             dcc.Textarea(id="id-notes", value=""),
             html.Div([html.Button("Add", id="id-save", className="btn primary", n_clicks=0),
@@ -1070,6 +1151,11 @@ def _entry_card(e):
     if e.get("isomer") == NEW_ISOMER:
         out.append(html.Div("New isomer" + (": " + new_isomer_text(e) if new_isomer_text(e) else
                                             " (energy and half-life not given yet)"), className="newiso"))
+    if e.get("alts"):
+        txt = "Alternatives: " + ", ".join(alt_text(a, e) for a in e["alts"])
+        if e.get("status") != "unsure":
+            txt += " (kept; shown only while unsure)"
+        out.append(html.Div(txt, className="alts"))
     if (e.get("notes") or "").strip():
         out.append(html.Div(e["notes"], className="notes"))
     if e.get("source"):
@@ -1161,13 +1247,20 @@ def _id_searched(value, sel, ver):
     return (ver or 0) + 1, msg
 
 
+@app.callback(Output("id-alts-box", "style"), Input("id-status", "value"))
+def _id_alts_box(status):
+    """Alternatives only for unsure identifications."""
+    return {} if status == "unsure" else {"display": "none"}
+
+
 @app.callback(Output("id-new-box", "style"), Input("id-iso", "value"))
 def _id_new_box(iso):
     return {} if iso == NEW_ISOMER else {"display": "none"}
 
 
 EDIT_OUTPUTS = ["ver", "editing", "iso", "charge", "harm", "status", "notes",
-                "new_ex", "new_ex_unc", "new_t", "new_t_unc", "new_t_unit", "msg", "save_label", "cancel_style"]
+                "new_ex", "new_ex_unc", "new_t", "new_t_unc", "new_t_unit", "alts",
+                "msg", "save_label", "cancel_style"]
 
 
 def _out(**kw):
@@ -1177,7 +1270,7 @@ def _out(**kw):
 
 def _cleared(**kw):
     """Outputs that empty the form (the harmonic and status are kept: often the same)."""
-    base = dict(editing=None, iso="g", charge="", notes="", new_ex="", new_ex_unc="", new_t="",
+    base = dict(editing=None, iso="g", charge="", notes="", alts="", new_ex="", new_ex_unc="", new_t="",
                 new_t_unc="", new_t_unit="s", save_label="Add", cancel_style={"display": "none"})
     base.update(kw)
     return _out(**base)
@@ -1207,6 +1300,7 @@ def _str(v):
     Output("id-status", "value"), Output("id-notes", "value"),
     Output("id-new-ex", "value"), Output("id-new-ex-unc", "value"),
     Output("id-new-t", "value"), Output("id-new-t-unc", "value"), Output("id-new-t-unit", "value"),
+    Output("id-alts", "value"),
     Output("id-msg", "children"), Output("id-save", "children"), Output("id-cancel", "style"),
     Input("id-save", "n_clicks"), Input("id-cancel", "n_clicks"),
     Input({"type": "idedit", "id": ALL}, "n_clicks"),
@@ -1216,11 +1310,12 @@ def _str(v):
     State("id-status", "value"), State("id-notes", "value"),
     State("id-new-ex", "value"), State("id-new-ex-unc", "value"),
     State("id-new-t", "value"), State("id-new-t-unc", "value"), State("id-new-t-unit", "value"),
+    State("id-alts", "value"),
     State("id-editing", "data"), State("id-ver", "data"),
     prevent_initial_call=True,
 )
 def _id_edit(_save, _cancel, _edit, _del, sel, iso, charge, harm, status, notes,
-             new_ex, new_ex_unc, new_t, new_t_unc, new_t_unit, editing, ver):
+             new_ex, new_ex_unc, new_t, new_t_unc, new_t_unit, alts_text, editing, ver):
     """Add / save / edit / delete an identification of the selected nuclide."""
     t = ctx.triggered_id
     ver = ver or 0
@@ -1241,7 +1336,7 @@ def _id_edit(_save, _cancel, _edit, _del, sel, iso, charge, harm, status, notes,
                     harm=str(e["harmonic"]), status=e["status"], notes=e.get("notes", ""),
                     new_ex=_str(e.get("new_ex")), new_ex_unc=_str(e.get("new_ex_unc")),
                     new_t=_str(e.get("new_t")), new_t_unc=_str(e.get("new_t_unc")),
-                    new_t_unit=e.get("new_t_unit") or "s",
+                    new_t_unit=e.get("new_t_unit") or "s", alts=alts_input_text(e),
                     msg=f"Editing {ion_name(e)} h{e['harmonic']}", save_label="Save changes",
                     cancel_style={})
     # Add / Save changes
@@ -1268,11 +1363,21 @@ def _id_edit(_save, _cancel, _edit, _del, sel, iso, charge, harm, status, notes,
                 return _out(msg=err)
             newvals[key] = v
         newvals["new_t_unit"] = new_t_unit if new_t_unit in T_UNITS else "s"
+    alts = None                         # None: leave an edited entry's alternatives as they are
+    if status == "unsure":
+        alts, err = parse_alts(alts_text)
+        if err:
+            return _out(msg=f"⚠ Alternative identifications: {err}.")
+        if any(a["Z"] == zz and a["N"] == nn and a["isomer"] == iso and a["charge"] in qs
+               and (a["harmonic"] is None or a["harmonic"] in hs) for a in alts):
+            return _out(msg="⚠ An alternative can't be the identification itself.")
     d = load_ids()
     now = datetime.datetime.now().isoformat(timespec="seconds")
     base = {"Z": zz, "N": nn, "A": zz + nn, "sym": r["sym"] if r is not None else SYMBOLS.get(zz, "?"),
             "isomer": iso, "status": "unsure" if status == "unsure" else "confident",
             "notes": (notes or "").strip(), "updated": now, **newvals}
+    if alts is not None:
+        base["alts"] = alts
 
     def clash(q, h):
         # a new isomer is told apart from other new isomers of the nuclide by its energy
@@ -1433,7 +1538,61 @@ app.clientside_callback(
                                     {capture: true, passive: true});
                 gd.addEventListener('mousedown', function() { mouseDown = true; }, true);
                 window.addEventListener('mouseup', function() { if (mouseDown) { mouseDown = false; soon(); } });
-                gd.on('plotly_relayout', function() { if (!gd._segreBusy) soon(); });
+                gd.on('plotly_relayout', function() { if (!gd._segreBusy) soon(); clearAlt(); });
+                // Identified ions: hovering an uncertain identification (or one of its
+                // alternatives) draws curved double arrows between the two nuclides.
+                // Drawn in an SVG overlay, not by Plotly, so the chart is not redrawn.
+                var NS = 'http://www.w3.org/2000/svg', altSvg = null;
+                var clearAlt = function() { if (altSvg) altSvg.innerHTML = ''; };
+                var mk = function(tag, attrs, parent) {
+                    var el = document.createElementNS(NS, tag);
+                    for (var k in attrs) el.setAttribute(k, attrs[k]);
+                    if (parent) parent.appendChild(el);
+                    return el;
+                };
+                var drawAlt = function(ev) {
+                    clearAlt();
+                    var meta = (gd.layout && gd.layout.meta) || {}, links = meta.altlinks || {};
+                    var pt = ((ev && ev.points) || []).filter(function(p) {
+                        return p.data && p.data.name === 'hover'; })[0];
+                    if (!pt) return;
+                    var segs = links[Math.round(pt.y) + ',' + Math.round(pt.x)];
+                    if (!segs || !segs.length) return;
+                    var L = gd._fullLayout, xa = L.xaxis, ya = L.yaxis;
+                    if (!altSvg) {
+                        var host = gd.querySelector('.svg-container') || gd;
+                        altSvg = mk('svg', {'class': 'segre-alt'});
+                        altSvg.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;overflow:visible';
+                        // between the plot and Plotly's top layer, so hover labels stay on top
+                        var layers = host.querySelectorAll('svg.main-svg');
+                        if (layers.length > 1) host.insertBefore(altSvg, layers[layers.length - 1]);
+                        else host.appendChild(altSvg);
+                    }
+                    altSvg.setAttribute('width', L.width); altSvg.setAttribute('height', L.height);
+                    var defs = mk('defs', {}, altSvg);
+                    var m = mk('marker', {id: 'segreArrow', viewBox: '0 0 10 10', refX: '8', refY: '5',
+                                          markerWidth: '5', markerHeight: '5',
+                                          orient: 'auto-start-reverse', markerUnits: 'strokeWidth'}, defs);
+                    mk('path', {d: 'M0,0 L10,5 L0,10 z', fill: '%s', stroke: '#ffffff', 'stroke-width': '1'}, m);
+                    var sq = ya._length / Math.abs(ya.range[1] - ya.range[0]);     // one square in px
+                    var px = function(n, z) { return [xa._offset + xa.d2p(n), ya._offset + ya.d2p(z)]; };
+                    segs.forEach(function(sg) {
+                        var a = px(sg[0], sg[1]), b = px(sg[2], sg[3]);
+                        var dx = b[0] - a[0], dy = b[1] - a[1], len = Math.sqrt(dx * dx + dy * dy);
+                        if (len < 1) return;
+                        var ux = dx / len, uy = dy / len, cut = Math.min(0.3 * sq, len / 4);
+                        a = [a[0] + ux * cut, a[1] + uy * cut]; b = [b[0] - ux * cut, b[1] - uy * cut];
+                        var bulge = 0.22 * len;                       // control point off the straight line
+                        var c = [(a[0] + b[0]) / 2 - uy * bulge, (a[1] + b[1]) / 2 + ux * bulge];
+                        var d = 'M' + a[0] + ',' + a[1] + ' Q' + c[0] + ',' + c[1] + ' ' + b[0] + ',' + b[1];
+                        mk('path', {d: d, fill: 'none', stroke: '#ffffff', 'stroke-width': '6',
+                                    'stroke-linecap': 'round'}, altSvg);
+                        mk('path', {d: d, fill: 'none', stroke: '%s', 'stroke-width': '2.5',
+                                    'marker-start': 'url(#segreArrow)', 'marker-end': 'url(#segreArrow)'}, altSvg);
+                    });
+                };
+                gd.on('plotly_hover', drawAlt);
+                gd.on('plotly_unhover', clearAlt);
                 window.addEventListener('resize', soon);
                 gd._segreSoon = soon;
             }
@@ -1442,7 +1601,7 @@ app.clientside_callback(
         }, 150);
         return window.dash_clientside.no_update;
     }
-    """ % (LABEL_PX, LABEL_PX),
+    """ % (LABEL_PX, LABEL_PX, ALT_COLOUR, ALT_COLOUR),
     Output("labels-dummy", "children"),
     Input("chart", "figure"),
 )
