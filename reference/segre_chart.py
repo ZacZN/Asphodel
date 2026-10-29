@@ -831,15 +831,18 @@ def id_panel():
     return html.Div([
         html.H4(["Identified ions", html.Span(id="id-count")]),
         html.Details([
-            html.Summary("Theia confirmed lists"),
+            html.Summary(f"Theia confirmed lists ({len(files)})", id="id-lists-summary"),
             html.Div("Lists whose ions are shown as identified too (read-only; "
                      "accepted → confident, only unsure → unsure).", className="hint"),
             dcc.Checklist(id="id-lists", className="lists",
                           options=[{"label": lab, "value": n} for n, lab in files],
                           value=[n for n in d["confirmed_lists"] if n in have]),
-            html.Div("No confirmed lists in outputs/confirmed." if not files else "", className="hint"),
+            html.Div("No confirmed lists in outputs/confirmed." if not files else "", className="hint",
+                     id="id-lists-empty"),
             html.Button("Apply", id="id-lists-apply", className="btn small", n_clicks=0),
-        ]),
+            # lists saved in Theia while this page is open appear within a few seconds
+            dcc.Interval(id="id-lists-tick", interval=3000),
+        ], id="id-lists-box"),
         html.Div(id="id-sel-title", className="selt"),
         html.Div(dcc.Checklist(id="id-searched", value=[], className="lists",
                                options=[{"label": "Searched but not identified", "value": "yes"}]),
@@ -1305,6 +1308,28 @@ def _id_edit(_save, _cancel, _edit, _del, sel, iso, charge, harm, status, notes,
             (f" Skipped (already in the list): {', '.join(skipped)}." if skipped else "")
     save_ids(d)
     return _cleared(ver=ver + 1, msg=msg)
+
+
+@app.callback(
+    Output("id-lists", "options"), Output("id-lists-summary", "children"),
+    Output("id-lists-empty", "children"),
+    Input("id-lists-tick", "n_intervals"), Input("id-lists-box", "open"),
+    State("by", "value"), State("id-lists", "options"),
+    prevent_initial_call=True,
+)
+def _id_lists_refresh(_n, _open, by, current):
+    """Re-read Theia's confirmed lists (a list saved in Theia shows up here
+    without reloading the page).  Only while the Identified ions panel is shown,
+    and only sends anything when the set of lists changed."""
+    nu = dash.no_update
+    if by != "identified":
+        return nu, nu, nu
+    files = confirmed_files()
+    opts = [{"label": lab, "value": n} for n, lab in files]
+    if opts == (current or []):
+        return nu, nu, nu
+    return (opts, f"Theia confirmed lists ({len(files)})",
+            "" if files else "No confirmed lists in outputs/confirmed.")
 
 
 @app.callback(
