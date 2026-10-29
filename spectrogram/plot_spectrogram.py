@@ -1012,6 +1012,34 @@ function _regDrawShape() {
                  line: {color: '#f97316', width: 2}, fillcolor: 'rgba(249,115,22,0.08)'});
   }
   Plotly.relayout('heatPlot', {shapes: shapes});
+  _regDraw3d();
+}
+
+// the same region as an orange wireframe box in the 3-D plot (trace 1 of
+// specPlot): rectangles at the bottom and top of the z-axis range, joined by
+// vertical edges. Empty when not in box mode or no box is set.
+function _regDraw3d() {
+  var gd = document.getElementById('specPlot');
+  if (!gd || !gd.data || gd.data.length < 2) return;
+  var v = _regBoxValues(), x = [], y = [], z = [];
+  if (_regIsBox() && v) {
+    var zr = (gd.layout && gd.layout.scene && gd.layout.scene.zaxis && gd.layout.scene.zaxis.range) ||
+             (gd._fullLayout && gd._fullLayout.scene && gd._fullLayout.scene.zaxis.range);
+    if (zr) {
+      var t0 = Math.min(v[0], v[1]), t1 = Math.max(v[0], v[1]);
+      var f0 = Math.min(v[2], v[3]), f1 = Math.max(v[2], v[3]);
+      var z0 = Math.min(zr[0], zr[1]), z1 = Math.max(zr[0], zr[1]);
+      var ct = [t0, t1, t1, t0, t0], cf = [f0, f0, f1, f1, f0];
+      [z0, z1].forEach(function(zz) {             // bottom and top rectangles
+        for (var i = 0; i < 5; i++) { x.push(ct[i]); y.push(cf[i]); z.push(zz); }
+        x.push(null); y.push(null); z.push(null);
+      });
+      for (var k = 0; k < 4; k++) {               // vertical edges
+        x.push(ct[k], ct[k], null); y.push(cf[k], cf[k], null); z.push(z0, z1, null);
+      }
+    }
+  }
+  Plotly.restyle('specPlot', {x: [x], y: [y], z: [z]}, [1]);
 }
 
 function setRegionMode() {
@@ -2434,7 +2462,11 @@ function _initSurface(h, rebinned, mm) {{
   layout.scene.zaxis = Object.assign({{}}, layout.scene.zaxis, {{range: [mm.min, mm.max], title: {{text: d.zLabel}}}});
   var gd = document.getElementById('specPlot');
   gd.style.height = h + 'px';
-  return Plotly.newPlot('specPlot', [trace], layout, {{responsive: true}});
+  // trace 1: decay-fit region box (filled by _regDraw3d)
+  var regTrace = {{type: 'scatter3d', mode: 'lines', x: [], y: [], z: [],
+                  connectgaps: false, showlegend: false, hoverinfo: 'skip',
+                  line: {{color: '#f97316', width: 5}}}};
+  return Plotly.newPlot('specPlot', [trace, regTrace], layout, {{responsive: true}});
 }}
 
 function updateSurface() {{
@@ -2516,6 +2548,7 @@ function _rescaleToWindow(Z, t) {{
   Plotly.update('specPlot', {{ cmin: [mm.min], cmax: [mm.max], cauto: [false] }},
                 {{ 'scene.zaxis.range': [mm.min, mm.max] }}, [0]);
   if (_heatReady) Plotly.restyle('heatPlot', {{ zmin: [mm.min], zmax: [mm.max], zauto: [false] }}, [0]);
+  _regDraw3d();   // keep the 3-D region box spanning the new z-range
 }}
 
 function update() {{
