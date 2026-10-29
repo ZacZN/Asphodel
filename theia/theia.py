@@ -2930,6 +2930,80 @@ function(figure) {
         gd.addEventListener('mouseleave', function() {
             readout.style.display = 'none';
         });
+
+        // Keep the hover labels on screen.  Plotly keeps them inside the plot,
+        // but the plot can reach below the visible part of the page (the tab
+        // scrolls), and stacked labels of nearby lines (hovermode "x") are
+        // pushed downwards.  After each hover, shift the label layer up (or
+        // down) so all labels sit inside the visible area: the window, cut by
+        // every scrolling box around the plot, and above the coordinate readout.
+        var fitHover = function() {
+            var hl = gd._fullLayout && gd._fullLayout._hoverlayer && gd._fullLayout._hoverlayer.node();
+            if (!hl) return;
+            watchLayer(hl);
+            // each label is a <g class="hovertext" transform="translate(x,y)"> holding its box
+            // and its text; it is moved through that same attribute, so box and text stay
+            // together (a CSS transform on the whole layer moved the boxes without their
+            // text in Firefox)
+            var labels = hl.querySelectorAll('g.hovertext'), items = [], fresh = false;
+            for (var i = 0; i < labels.length; i++) {
+                var g = labels[i];
+                var m = /translate\\(\\s*([-\\d.e]+)[ ,]+([-\\d.e]+)\\s*\\)/.exec(g.getAttribute('transform') || '');
+                if (!m) continue;
+                var x = parseFloat(m[1]), y = parseFloat(m[2]);
+                var sh = g._theiaShift;
+                if (sh && Math.abs(y - sh.to) < 0.01 && Math.abs(x - sh.x) < 0.01) y = sh.from;  // our own move
+                else fresh = true;                                                        // drawn by Plotly
+                items.push({g: g, x: x, y: y});
+            }
+            if (!items.length || !fresh) return;          // nothing new since the last fit
+            // measure at Plotly's positions
+            items.forEach(function(it) { it.g.setAttribute('transform', 'translate(' + it.x + ',' + it.y + ')'); });
+            var top = Infinity, bot = -Infinity, left = Infinity, right = -Infinity;
+            items.forEach(function(it) {
+                var r = it.g.getBoundingClientRect();
+                if (!r.height) return;
+                top = Math.min(top, r.top); bot = Math.max(bot, r.bottom);
+                left = Math.min(left, r.left); right = Math.max(right, r.right);
+            });
+            var dy = 0;
+            if (isFinite(top)) {
+                var vTop = 0, vBot = window.innerHeight;
+                for (var el = gd.parentElement; el && el !== document.body; el = el.parentElement) {
+                    if (/(auto|scroll|hidden)/.test(getComputedStyle(el).overflowY)) {
+                        var bx = el.getBoundingClientRect();
+                        vTop = Math.max(vTop, bx.top); vBot = Math.min(vBot, bx.bottom);
+                    }
+                }
+                if (readout.style.display !== 'none') {
+                    var ro = readout.getBoundingClientRect();
+                    if (ro.height && right > ro.left && left < ro.right) vBot = Math.min(vBot, ro.top);
+                }
+                var pad = 4;
+                if (bot > vBot - pad) dy = (vBot - pad) - bot;
+                if (top + dy < vTop + pad) dy = (vTop + pad) - top;     // too tall: keep the top visible
+                dy = Math.round(dy);
+            }
+            items.forEach(function(it) {
+                var to = it.y + dy;
+                it.g.setAttribute('transform', 'translate(' + it.x + ',' + to + ')');
+                it.g._theiaShift = {x: it.x, from: it.y, to: to};
+            });
+        };
+        // Plotly redraws the labels on every mouse move (it only reports a hover when
+        // the hovered points change), so refit whenever the label layer changes; the
+        // observer runs before the browser paints, so a moved label never flashes
+        var watchLayer = function(hl) {
+            if (hl._theiaObs || !window.MutationObserver) return;
+            hl._theiaObs = new MutationObserver(function() { fitHover(); });
+            hl._theiaObs.observe(hl, {childList: true, subtree: true, attributes: true,
+                                      attributeFilter: ['transform']});
+        };
+        gd.on('plotly_hover', fitHover);
+        gd.on('plotly_afterplot', function() {
+            var hl = gd._fullLayout && gd._fullLayout._hoverlayer && gd._fullLayout._hoverlayer.node();
+            if (hl) watchLayer(hl);
+        });
     }, 150);
     return window.dash_clientside.no_update;
 }
