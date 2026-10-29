@@ -75,7 +75,7 @@ TOOLS = {
                         "Draw nuclear level schemes (Tk window).", False),
     "segre":           ("Reference", "Segrè chart", "reference/segre_chart.py",
                         "Chart of nuclides from NUBASE2020: colour by half-life, decay mode or "
-                        "mass; ground states or isomers; hover for the data.", True),
+                        "identified ions; ground states or isomers; hover for the data.", True),
 }
 SECTIONS = ["Theia", "Spectrogram", "Tartarus", "Elysium"]
 # sections shown side by side on one row (each takes as many columns as it has cards)
@@ -878,7 +878,11 @@ h3.sec{{font-size:12px;text-transform:uppercase;letter-spacing:.8px;color:var(--
 .tsec .tools{{flex:1}}
 section{{margin-bottom:24px}}
 .tools{{display:grid;gap:12px}}
-.tool{{border:1px solid var(--line);border-radius:6px;padding:12px;background:#fff;border-top:3px solid var(--accent)}}
+.tool{{border:1px solid var(--line);border-radius:6px;padding:12px;background:#fff;border-top:3px solid var(--accent);
+  display:flex;flex-direction:column}}
+/* the card's last block (its buttons, or the form ending in its Run button) sits at the
+   bottom of the card, so the buttons of the cards in a row line up at the bottom left */
+.tool>:last-child{{margin-top:auto}}
 .tool .name{{font-weight:700;font-size:15px}} .tool .from{{font-size:11px;color:var(--muted);font-family:monospace}}
 .tool p{{font-size:12px;color:#555;margin:6px 0 8px}}
 .status{{font-size:11px;margin-bottom:8px}}
