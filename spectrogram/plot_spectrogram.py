@@ -288,7 +288,6 @@ def format_title_html(text):
 
 def make_title(path, fmin, fmax, linear=False, ion=None):
     return (f"{os.path.basename(path)}   "
-            f"[{fmin:,.0f} – {fmax:,.0f} Hz]   "
             f"({'linear' if linear else 'dB'})"
             + (f"   ·   {ion}" if ion else ""))
 
@@ -1001,45 +1000,74 @@ function _regSync() {
   _regDrawShape();
 }
 
-// orange outline of the fit region on the heatmap (box mode only)
+// The fit region clipped to the visible window (time/frequency sliders).
+// Returns null when there is nothing to draw, else the clipped corners and,
+// per edge, whether it is a real box edge (solid) or where the box runs past
+// the edge of the plot (cut → dashed line along the plot border).
+function _regClipped() {
+  var v = _regBoxValues();
+  if (!_regIsBox() || !v) return null;
+  var T0 = +document.getElementById('tMin').value, T1 = +document.getElementById('tMax').value;
+  var F0 = +document.getElementById('fMin').value, F1 = +document.getElementById('fMax').value;
+  var t0 = Math.min(v[0], v[1]), t1 = Math.max(v[0], v[1]);
+  var f0 = Math.min(v[2], v[3]), f1 = Math.max(v[2], v[3]);
+  var c = {t0: Math.max(t0, T0), t1: Math.min(t1, T1), f0: Math.max(f0, F0), f1: Math.min(f1, F1)};
+  if (!(c.t1 > c.t0) || !(c.f1 > c.f0)) return null;       // box entirely outside the view
+  // edges: [[ta, fa], [tb, fb], cut?]
+  c.edges = [
+    [[c.t0, c.f0], [c.t0, c.f1], t0 < T0],    // left   (start time)
+    [[c.t1, c.f0], [c.t1, c.f1], t1 > T1],    // right  (end time)
+    [[c.t0, c.f0], [c.t1, c.f0], f0 < F0],    // bottom (low freq)
+    [[c.t0, c.f1], [c.t1, c.f1], f1 > F1]     // top    (high freq)
+  ];
+  return c;
+}
+
+// orange outline of the fit region on the heatmap (box mode only); parts cut
+// off by the view are drawn dashed along the plot border
 function _regDrawShape() {
-  if (typeof _heatReady === 'undefined' || !_heatReady) return;
-  var v = _regBoxValues(), shapes = [];
-  if (_regIsBox() && v) {
-    shapes.push({type: 'rect', xref: 'x', yref: 'y',
-                 x0: Math.min(v[0], v[1]), x1: Math.max(v[0], v[1]),
-                 y0: Math.min(v[2], v[3]), y1: Math.max(v[2], v[3]),
-                 line: {color: '#f97316', width: 2}, fillcolor: 'rgba(249,115,22,0.08)'});
+  if (typeof _heatReady !== 'undefined' && _heatReady) {
+    var c = _regClipped(), shapes = [];
+    if (c) {
+      shapes.push({type: 'rect', xref: 'x', yref: 'y', x0: c.t0, x1: c.t1, y0: c.f0, y1: c.f1,
+                   line: {width: 0}, fillcolor: 'rgba(249,115,22,0.08)'});
+      c.edges.forEach(function(e) {
+        shapes.push({type: 'line', xref: 'x', yref: 'y',
+                     x0: e[0][0], y0: e[0][1], x1: e[1][0], y1: e[1][1],
+                     line: {color: '#f97316', width: e[2] ? 2.5 : 2, dash: e[2] ? 'dash' : 'solid'}});
+      });
+    }
+    Plotly.relayout('heatPlot', {shapes: shapes});
   }
-  Plotly.relayout('heatPlot', {shapes: shapes});
   _regDraw3d();
 }
 
-// the same region as an orange wireframe box in the 3-D plot (trace 1 of
-// specPlot): rectangles at the bottom and top of the z-axis range, joined by
-// vertical edges. Empty when not in box mode or no box is set.
+// the same region as an orange wireframe box in the 3-D plot: rectangles at
+// the bottom and top of the z-axis range joined by vertical edges. Real edges
+// go in trace 1 (solid), edges where the view cuts the box in trace 2 (dashed).
 function _regDraw3d() {
   var gd = document.getElementById('specPlot');
-  if (!gd || !gd.data || gd.data.length < 2) return;
-  var v = _regBoxValues(), x = [], y = [], z = [];
-  if (_regIsBox() && v) {
-    var zr = (gd.layout && gd.layout.scene && gd.layout.scene.zaxis && gd.layout.scene.zaxis.range) ||
-             (gd._fullLayout && gd._fullLayout.scene && gd._fullLayout.scene.zaxis.range);
-    if (zr) {
-      var t0 = Math.min(v[0], v[1]), t1 = Math.max(v[0], v[1]);
-      var f0 = Math.min(v[2], v[3]), f1 = Math.max(v[2], v[3]);
-      var z0 = Math.min(zr[0], zr[1]), z1 = Math.max(zr[0], zr[1]);
-      var ct = [t0, t1, t1, t0, t0], cf = [f0, f0, f1, f1, f0];
-      [z0, z1].forEach(function(zz) {             // bottom and top rectangles
-        for (var i = 0; i < 5; i++) { x.push(ct[i]); y.push(cf[i]); z.push(zz); }
-        x.push(null); y.push(null); z.push(null);
-      });
-      for (var k = 0; k < 4; k++) {               // vertical edges
-        x.push(ct[k], ct[k], null); y.push(cf[k], cf[k], null); z.push(z0, z1, null);
-      }
-    }
+  if (!gd || !gd.data || gd.data.length < 3) return;
+  var sol = {x: [], y: [], z: []}, dsh = {x: [], y: [], z: []};
+  function seg(o, a, b) {
+    o.x.push(a[0], b[0], null); o.y.push(a[1], b[1], null); o.z.push(a[2], b[2], null);
   }
-  Plotly.restyle('specPlot', {x: [x], y: [y], z: [z]}, [1]);
+  var c = _regClipped();
+  var zr = (gd.layout && gd.layout.scene && gd.layout.scene.zaxis && gd.layout.scene.zaxis.range) ||
+           (gd._fullLayout && gd._fullLayout.scene && gd._fullLayout.scene.zaxis.range);
+  if (c && zr) {
+    var z0 = Math.min(zr[0], zr[1]), z1 = Math.max(zr[0], zr[1]);
+    c.edges.forEach(function(e) {               // bottom and top outlines
+      var o = e[2] ? dsh : sol;
+      seg(o, [e[0][0], e[0][1], z0], [e[1][0], e[1][1], z0]);
+      seg(o, [e[0][0], e[0][1], z1], [e[1][0], e[1][1], z1]);
+    });
+    // vertical edges at the corners: dashed if the corner lies on a cut edge
+    var L = c.edges[0][2], R = c.edges[1][2], B = c.edges[2][2], T = c.edges[3][2];
+    [[c.t0, c.f0, L || B], [c.t1, c.f0, R || B], [c.t1, c.f1, R || T], [c.t0, c.f1, L || T]]
+      .forEach(function(k) { seg(k[2] ? dsh : sol, [k[0], k[1], z0], [k[0], k[1], z1]); });
+  }
+  Plotly.restyle('specPlot', {x: [sol.x, dsh.x], y: [sol.y, dsh.y], z: [sol.z, dsh.z]}, [1, 2]);
 }
 
 function setRegionMode() {
@@ -2426,11 +2454,13 @@ function _initSurface(h, rebinned, mm) {{
   layout.scene.zaxis = Object.assign({{}}, layout.scene.zaxis, {{range: [mm.min, mm.max], title: {{text: d.zLabel}}}});
   var gd = document.getElementById('specPlot');
   gd.style.height = h + 'px';
-  // trace 1: decay-fit region box (filled by _regDraw3d)
+  // trace 1: decay-fit region box, solid edges (filled by _regDraw3d)
   var regTrace = {{type: 'scatter3d', mode: 'lines', x: [], y: [], z: [],
                   connectgaps: false, showlegend: false, hoverinfo: 'skip',
                   line: {{color: '#f97316', width: 5}}}};
-  return Plotly.newPlot('specPlot', [trace, regTrace], layout, {{responsive: true}});
+  // trace 2: parts of the box cut off by the view, dashed along the plot border
+  var regCut = Object.assign({{}}, regTrace, {{line: {{color: '#f97316', width: 5, dash: 'dash'}}}});
+  return Plotly.newPlot('specPlot', [trace, regTrace, regCut], layout, {{responsive: true}});
 }}
 
 function updateSurface() {{
@@ -2512,7 +2542,7 @@ function _rescaleToWindow(Z, t) {{
   Plotly.update('specPlot', {{ cmin: [mm.min], cmax: [mm.max], cauto: [false] }},
                 {{ 'scene.zaxis.range': [mm.min, mm.max] }}, [0]);
   if (_heatReady) Plotly.restyle('heatPlot', {{ zmin: [mm.min], zmax: [mm.max], zauto: [false] }}, [0]);
-  _regDraw3d();   // keep the 3-D region box spanning the new z-range
+  _regDrawShape();   // region box: re-clip to the new window, 3-D box to the new z-range
 }}
 
 function update() {{
