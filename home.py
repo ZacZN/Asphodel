@@ -508,11 +508,9 @@ def nubase_card():
     if not have_pdf:
         body = [html.Div("core/nubase2020.pdf not found", className="note")]
     else:
+        # go-to-nuclide form first, the Open NUBASE button last (bottom of the card)
         body = [
-            html.Div(html.A("Open NUBASE", href=NUBASE_URL, target="_blank",
-                            className="btn primary small",
-                            title="NUBASE2020 (Kondev et al., Chin. Phys. C 45, 030001) in a new tab"),
-                     className="btns"),
+            dcc.Store(id="nub-index", data=pages),
             html.Div([
                 html.Label("Go to a nuclide (e.g. 198Ir, Ir198, Ir-198)", className="flabel"),
                 dcc.Input(id="nub-q", type="text", list="nub-names", debounce=False,
@@ -522,7 +520,10 @@ def nubase_card():
                                  className="btn small"),
                           html.Span(id="nub-msg", className="note")], className="below"),
             ], className="form"),
-            dcc.Store(id="nub-index", data=pages),
+            html.Div(html.A("Open NUBASE", href=NUBASE_URL, target="_blank",
+                            className="btn primary small",
+                            title="NUBASE2020 (Kondev et al., Chin. Phys. C 45, 030001) in a new tab"),
+                     className="btns"),
         ]
     return html.Div([
         html.Div("View NUBASE", className="name"),
@@ -545,7 +546,13 @@ def tools_section():
                     continue
                 card = tool_card(key)
                 if key in forms:
-                    card.children.append(forms[key])
+                    # the card's own buttons (Open / Stop) stay last, at the bottom of the
+                    # card, with the form above them; cards without such buttons end
+                    # with the form and its Run button
+                    if card.children[-1].children:
+                        card.children.insert(len(card.children) - 1, forms[key])
+                    else:
+                        card.children[-1] = forms[key]
                 cards.append(card)
             if sec == "Reference":
                 cards.append(nubase_card())
@@ -883,6 +890,7 @@ section{{margin-bottom:24px}}
 /* the card's last block (its buttons, or the form ending in its Run button) sits at the
    bottom of the card, so the buttons of the cards in a row line up at the bottom left */
 .tool>:last-child{{margin-top:auto}}
+.tool .form+.btns{{padding-top:10px}}
 .tool .name{{font-weight:700;font-size:15px}} .tool .from{{font-size:11px;color:var(--muted);font-family:monospace}}
 .tool p{{font-size:12px;color:#555;margin:6px 0 8px}}
 .status{{font-size:11px;margin-bottom:8px}}
