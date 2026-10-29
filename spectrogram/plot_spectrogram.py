@@ -1326,14 +1326,16 @@ function _renderFull() {
     title: {text: 'Whole file: all ' + FULL.n + ' frames, ' +
                   Math.round(FULL.f[0]).toLocaleString('en-GB') + ' – ' +
                   Math.round(FULL.f[FULL.f.length - 1]).toLocaleString('en-GB') + ' Hz',
-            x: 0.5, xanchor: 'center', font: {size: 18, color: '#e5e7eb'}},
+            x: 0.5, xanchor: 'center', font: {size: 18, color: '#e5e7eb'},
+            // below the Plotly toolbar (top-right) so it is never covered
+            yref: 'container', y: 1, yanchor: 'top', pad: {t: 34}},
     xaxis: {title: {text: 'Frequency (Hz)'}, tickformat: ',d',
             color: '#9ca3af', gridcolor: '#374151', zerolinecolor: '#374151'},
     yaxis: {title: {text: pLabel}, range: [y0, y1],
             color: '#9ca3af', gridcolor: '#374151', zerolinecolor: '#374151'},
     paper_bgcolor: '#111827', plot_bgcolor: '#1f2937', font: {color: '#e5e7eb'},
     hovermode: 'x', dragmode: 'pan', uirevision: 'full',   // as Theia
-    margin: {l: 90, r: 20, t: 40, b: 50}, height: 380
+    margin: {l: 90, r: 20, t: 70, b: 50}, height: 380
   }, {responsive: true, scrollZoom: true});
 }
 """
@@ -1540,9 +1542,11 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
         _scene["xaxis"]["range"] = [t_sel_min, t_sel_max]
 
     fig.update_layout(
-        title=dict(text=format_title_html(title), x=0.5, xanchor="center", font_size=18),
+        # title below the Plotly toolbar (top-right) so it is never covered
+        title=dict(text=format_title_html(title), x=0.5, xanchor="center", font_size=18,
+                   yref="container", y=1, yanchor="top", pad=dict(t=34)),
         scene=_scene,
-        margin=dict(l=0, r=0, t=60, b=0),
+        margin=dict(l=0, r=0, t=80, b=0),
         height=680,
     )
 
@@ -2019,7 +2023,8 @@ function _initHeatmap(h, rebinned, mm) {{
   }}], {{
     template: {{}},
     title: {{ text: formatTitleHtml(document.getElementById('plotTitle').value),
-              x: 0.5, xanchor: 'center', y: 0.985, yanchor: 'top',
+              // below the Plotly toolbar (top-right) so it is never covered
+              x: 0.5, xanchor: 'center', yref: 'container', y: 1, yanchor: 'top', pad: {{ t: 34 }},
               font: {{ size: 18, color: '#e5e7eb' }} }},
     xaxis2: {{ overlaying: 'x', side: 'top', title: {{ text: '', standoff: 4 }},
                showgrid: false, zeroline: false,
