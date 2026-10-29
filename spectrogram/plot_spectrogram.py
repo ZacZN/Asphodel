@@ -1411,17 +1411,12 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
     _prefs = read_prefs()
     loader_html, loader_js = loader_parts(file_path, fmin_req, fmax_req)
     _saved_gamma = str(_prefs.get("gamma", ""))
-    _saved_err_a = str(_prefs.get("errA", ""))
-    _saved_err_b = str(_prefs.get("errB", ""))
     _saved_hl_iso = str(_prefs.get("hlIso", ""))
     _saved_hl_gs  = str(_prefs.get("hlGs", ""))
-    _saved_skip0  = str(_prefs.get("skipStart", ""))
-    _saved_skip1  = str(_prefs.get("skipEnd", ""))
     _saved_pmin   = str(_prefs.get("parentMin", ""))
     _saved_pmax   = str(_prefs.get("parentMax", ""))
     _saved_srch_w = str(_prefs.get("srchWidth", "10"))
     _chk_bateman    = "checked" if _prefs.get("bateman")    else ""
-    _chk_unweighted = "checked" if _prefs.get("unweighted") else ""
     _chk_logplot    = "checked" if _prefs.get("logPlot")    else ""
     _chk_resid      = "checked" if _prefs.get("residuals")  else ""
     _chk_bars3d     = "" if _prefs.get("bars3d") == "0" else "checked"   # bars by default
@@ -1803,28 +1798,6 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
              style="width:64px;" value="{_saved_gamma}"
              oninput="savePref('gamma', this.value)">
     </div>
-    <div class="opt-grp">
-      <span style="text-transform:none;" title="Error bar on each point: σ = a·I + b. Leave both blank to estimate a, b automatically from the fit residuals.">σ =</span>
-      <input type="number" id="errA" step="any"
-             placeholder="auto" title="Error-bar slope a in σ = a·I + b (single-frame). Blank = estimate from residuals"
-             style="width:64px;" value="{_saved_err_a}"
-             oninput="savePref('errA', this.value)">
-      <label>·I +</label>
-      <input type="number" id="errB" step="any"
-             placeholder="auto" title="Error-bar intercept b in σ = a·I + b (single-frame). Blank = estimate from residuals"
-             style="width:64px;" value="{_saved_err_b}"
-             oninput="savePref('errB', this.value)">
-      <input type="checkbox" id="unweightedChk" {_chk_unweighted}
-             onchange="savePref('unweighted', this.checked ? '1' : ''); _syncDecayControls()">
-      <label for="unweightedChk" title="Single unweighted fit, no error bars">unweighted</label>
-    </div>
-    <div class="opt-grp" title="Skip the first X and last Y time bins (applied before the time-slider window)">
-      <span>Skip bins</span>
-      <input type="number" id="skipStart" min="0" step="1" placeholder="first"
-             style="width:56px;" value="{_saved_skip0}" oninput="savePref('skipStart', this.value)">
-      <input type="number" id="skipEnd" min="0" step="1" placeholder="last"
-             style="width:56px;" value="{_saved_skip1}" oninput="savePref('skipEnd', this.value)">
-    </div>
     <div class="opt-grp" id="grpPlots" title="Extra panels in the fit plot (single-window fits only)">
       <span>Plots</span>
       <input type="checkbox" id="logPlotChk" {_chk_logplot}
@@ -1832,7 +1805,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
       <label for="logPlotChk" title="Semi-log panel to the right: data − C and fit − C on a log axis (C = fitted background), so an exponential decay is a straight line">log (data − C)</label>
       <input type="checkbox" id="residChk" {_chk_resid}
              onchange="savePref('residuals', this.checked ? '1' : '')">
-      <label for="residChk" title="Residual panel under each plot: (data − fit)/σ, or data − fit for an unweighted fit">residuals</label>
+      <label for="residChk" title="Residual panel under each plot: (data − fit)/σ">residuals</label>
       <label id="plotsNote" style="color:#fbbf24; font-size:11px;"></label>
     </div>
     <div class="opt-grp">
@@ -2159,14 +2132,11 @@ function _renderSpec1d() {{
 // ── Decay-fit controls: enable only what applies to the chosen mode ──────────
 function _syncDecayControls() {{
   var bateman    = document.getElementById('batemanChk').checked;
-  var unweighted = document.getElementById('unweightedChk').checked;
   // Bateman-only options are shown only in Bateman mode; "no offset" only for
   // the simple exponential (Bateman always fits C)
   document.getElementById('grpParent').style.display   = bateman ? '' : 'none';
   document.getElementById('grpFixedHl').style.display  = bateman ? '' : 'none';
   document.getElementById('grpNoOffset').style.display = bateman ? 'none' : 'contents';
-  document.getElementById('errA').disabled     = unweighted;
-  document.getElementById('errB').disabled     = unweighted;
   // log / residual panels: single-window fits only (not the parent/daughter fit)
   var joint = bateman && (document.getElementById('parentMin').value.trim() !== '' ||
                           document.getElementById('parentMax').value.trim() !== '');
@@ -2259,11 +2229,8 @@ async function runDecayFit() {{
   try {{
     var gammaRaw = document.getElementById('gammaVal').value.trim();
     var bateman  = document.getElementById('batemanChk').checked;
-    var unweighted = document.getElementById('unweightedChk').checked;
     var hlIsoRaw = document.getElementById('hlIso').value.trim();
     var hlGsRaw  = document.getElementById('hlGs').value.trim();
-    var skip0    = Math.max(0, Math.round(+document.getElementById('skipStart').value || 0));
-    var skip1    = Math.max(0, Math.round(+document.getElementById('skipEnd').value || 0));
     var win = decayWindow();   // sliders or drawn box (throws if the box is invalid)
     if (bateman && (hlIsoRaw !== '' || hlGsRaw !== '') && gammaRaw === '') {{
       throw new Error('fixed half-lives need γ (they are c.o.m. values)');
@@ -2280,11 +2247,6 @@ async function runDecayFit() {{
       }}
       parentWindow = [+pMinRaw, +pMaxRaw];
     }}
-    var errARaw  = document.getElementById('errA').value.trim();
-    var errBRaw  = document.getElementById('errB').value.trim();
-    // Blank box counts as 0; both blank → unweighted fit
-    var errCoeffs = (errARaw === '' && errBRaw === '') ? null
-                  : [errARaw === '' ? 0 : +errARaw, errBRaw === '' ? 0 : +errBRaw];
     var payload = {{
       fMin:  win.fMin,
       fMax:  win.fMax,
@@ -2293,14 +2255,11 @@ async function runDecayFit() {{
       nAvg:  Math.max(1, Math.round(+document.getElementById('nAvg').value || 1)),
       gamma:    gammaRaw !== '' ? +gammaRaw : null,
       noOffset: !bateman && document.getElementById('noOffset').checked,
-      errCoeffs: unweighted ? null : errCoeffs,
-      unweighted: unweighted,
       logPlot:   document.getElementById('logPlotChk').checked,
       residuals: document.getElementById('residChk').checked,
       bateman:  bateman,
       hlIso:    (bateman && hlIsoRaw !== '') ? +hlIsoRaw : null,
       hlGs:     (bateman && hlGsRaw  !== '') ? +hlGsRaw  : null,
-      skip:     [skip0, skip1],
       titleFull: titleFull,
       parentWindow: parentWindow
     }};
@@ -3065,8 +3024,7 @@ def serve(html, state):
                     body = self._body()
                     pref_key = body.get("key")
                     pref_val = body.get("value", "")
-                    if pref_key not in ("gamma", "errA", "errB", "hlIso", "hlGs",
-                                        "skipStart", "skipEnd", "bateman", "unweighted",
+                    if pref_key not in ("gamma", "hlIso", "hlGs", "bateman",
                                         "parentMin", "parentMax", "bars3d", "fullOpen", "colorscale", "decayRegion",
                                         "logPlot", "residuals", "srchWidth"):
                         raise ValueError(f"unknown pref key: {pref_key!r}")
