@@ -991,7 +991,7 @@ def serve_layout():
                               className="exp")]),
         html.Div([
             html.Div([html.Label("Colour by", className="t"),
-                      dcc.Dropdown(id="by", clearable=False, className="dd", value="halflife",
+                      dcc.Dropdown(id="by", clearable=False, className="dd", value="identified",
                                    options=[{"label": "Half-life", "value": "halflife"},
                                             {"label": "Main decay mode", "value": "mode"},
                                             {"label": "Identified ions", "value": "identified"}])],
