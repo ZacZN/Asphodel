@@ -925,7 +925,6 @@ def id_panel():
                           value=[n for n in d["confirmed_lists"] if n in have]),
             html.Div("No confirmed lists in outputs/confirmed." if not files else "", className="hint",
                      id="id-lists-empty"),
-            html.Button("Apply", id="id-lists-apply", className="btn small", n_clicks=0),
             # lists saved in Theia while this page is open appear within a few seconds
             dcc.Interval(id="id-lists-tick", interval=3000),
         ], id="id-lists-box"),
@@ -1484,12 +1483,16 @@ def _id_lists_refresh(_n, _open, by, current):
 
 @app.callback(
     Output("id-ver", "data", allow_duplicate=True), Output("id-msg", "children", allow_duplicate=True),
-    Input("id-lists-apply", "n_clicks"), State("id-lists", "value"), State("id-ver", "data"),
+    Input("id-lists", "value"), State("id-ver", "data"),
     prevent_initial_call=True,
 )
-def _id_lists(_n, chosen, ver):
+def _id_lists(chosen, ver):
+    """Ticking / unticking a Theia list loads / removes it at once."""
     d = load_ids()
-    d["confirmed_lists"] = list(chosen or [])
+    chosen = list(chosen or [])
+    if chosen == d["confirmed_lists"]:
+        return dash.no_update, dash.no_update
+    d["confirmed_lists"] = chosen
     save_ids(d)
     n = sum(len(confirmed_entries(x)) for x in d["confirmed_lists"])
     return (ver or 0) + 1, f"{len(d['confirmed_lists'])} Theia list(s) shown ({n} ion/harmonic entries)."
