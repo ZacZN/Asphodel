@@ -53,7 +53,7 @@ import sys
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core import browser, icon, paths, physics, tabwatch
 from core.nubase_reader import (df_nubase, rect_restrict, diag_restrict, index_by_name, unpack_npz,
-                                get_base_dataframe)
+                                get_base_dataframe, ion_electron_energy_kev)
 from core.physics import (delta_f, apply_correction, ion_base_name, build_hover_label, HL_UNITS,
                           HL_CUT_UNITS, half_life_seconds, hl_allowed, hl_cut_text,
                           build_ion_database, simulate_frequencies)
@@ -7500,9 +7500,11 @@ app.clientside_callback(
 # 1. Calibration: pick two peaks (a fitted peak's centre is used if you click
 #    on one, otherwise the peak is fitted on its own in a small window), name
 #    them (NUBASE names, e.g. 207Tl81+ or m207Tl), press Calibrate:
-#        k = (ME2 - ME1) / (f2 - f1)        [keV per Hz]
-#    For an isomer / ground-state pair of the same nuclide, ME2 - ME1 is the
-#    excitation-energy difference (with its own, smaller uncertainty).
+#        k = (M2 - M1) / (f2 - f1)          [keV per Hz]
+#    M = ion mass (mass excess - q m_e c^2 + binding energy of the q removed
+#    electrons, NIST) when the names carry charges; atomic mass excess otherwise.
+#    For an isomer / ground-state pair of the same nuclide the nuclear part is
+#    the excitation-energy difference (with its own, smaller uncertainty).
 # 2. Then pick peaks in pairs A, B:  dE = E(B) - E(A) = k (f_B - f_A).
 
 ENERGY_TRACE = "energy picks"
@@ -7543,13 +7545,40 @@ def lookup_mass_excess(name):
                 ex=ex, dex=dex, sys=bool(r["m.e. sys?"]))
 
 
+def _name_charge(name):
+    """Charge from an ion name ('207Tl81+' -> 81), None if no charge is given."""
+    m = re.fullmatch(r"\s*[a-z]?\d+[A-Z][a-z]?(\d+)\+\s*", name or "")
+    return int(m.group(1)) if m else None
+
+
 def mass_excess_difference(n1, n2):
-    """ME(n2) - ME(n1) in keV with its uncertainty.  For two states of the
-    same nuclide the excitation energies are used (correlated ME errors)."""
+    """Mass difference E(n2) - E(n1) in keV with its uncertainty.
+
+    Nuclear part: NUBASE mass excesses, or for two states of the same nuclide
+    the excitation energies (correlated ME errors).  If both names carry a
+    charge (207Tl81+), the ion masses are used: each side adds
+    -q m_e c^2 + S(Z, q), S = binding energy of the q removed electrons (NIST
+    ionization energies).  Without charges the atomic difference is returned."""
     a, b = lookup_mass_excess(n1), lookup_mass_excess(n2)
-    if (a["A"], a["Z"]) == (b["A"], b["Z"]) and np.isfinite(a["ex"]) and np.isfinite(b["ex"]):
-        return b["ex"] - a["ex"], float(np.hypot(a["dex"], b["dex"])), a, b, "excitation energies"
-    return b["me"] - a["me"], float(np.hypot(a["dme"], b["dme"])), a, b, "mass excesses"
+    same = (a["A"], a["Z"]) == (b["A"], b["Z"]) and np.isfinite(a["ex"]) and np.isfinite(b["ex"])
+    if same:
+        de, dde, how = b["ex"] - a["ex"], float(np.hypot(a["dex"], b["dex"])), "excitation energies"
+    else:
+        de, dde, how = b["me"] - a["me"], float(np.hypot(a["dme"], b["dme"])), "mass excesses"
+    qa, qb = _name_charge(n1), _name_charge(n2)
+    if qa is None or qb is None:
+        return de, dde, a, b, how + " (atomic: give both charges to include the electrons)"
+    for r, q in ((a, qa), (b, qb)):
+        if not 1 <= q <= r["Z"]:
+            raise ValueError(f"charge {q}+ is not possible for {r['name']} (Z = {r['Z']})")
+    ea, dea = ion_electron_energy_kev(a["Z"], qa)
+    eb, deb = ion_electron_energy_kev(b["Z"], qb)
+    if not (np.isfinite(ea) and np.isfinite(eb)):
+        raise ValueError("no NIST ionization energies for one of the ions")
+    a = dict(a, name=f"{a['name']}{qa}+")
+    b = dict(b, name=f"{b['name']}{qb}+")
+    return (de + float(eb - ea), float(np.sqrt(dde ** 2 + dea ** 2 + deb ** 2)), a, b,
+            "ion masses (" + how + ", electron masses, NIST electron binding)")
 
 
 def local_peak_fit(ff, pp, sigma, x, shape):
