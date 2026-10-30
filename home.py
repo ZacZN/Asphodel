@@ -14,7 +14,8 @@ The suite's launcher and overview, as a Dash app (http://127.0.0.1:8050/):
     experiment ("Connect data folder…" / "Connect output folder…", each with a
     kind; core/paths.py keeps them in <experiment>/settings/folders.json)
   * the shared physics settings (physics.json) and the overrides of each tool
-  * notes per experiment
+  * lab book per experiment: time-stamped notes under a heading per day
+    (<experiment>/notes.md, append-only; core/labbook.py)
   * "Sync with APPC256": sends new confirmed lists to APPC256 and pulls the
     summed spectrograms you pick from it (core/sync.py)
 
@@ -41,7 +42,7 @@ import time
 import webbrowser
 
 sys.path.insert(1, os.path.dirname(os.path.abspath(__file__)))
-from core import browser, corrections, folderpick, icon, paths, physics, sync, tabwatch, version
+from core import browser, corrections, folderpick, icon, labbook, paths, physics, sync, tabwatch, version
 
 import dash
 from dash import dcc, html, Input, Output, State, ALL, ctx
@@ -646,16 +647,46 @@ def folders_section():
     )
 
 
+def _labbook_log():
+    """The lab book, newest day first (and newest entry first within a day),
+    with the notes from before the lab book at the end."""
+    earlier, days = labbook.parse(paths.notes_file())
+    today = datetime.date.today()
+    out = []
+    for day in reversed(days):
+        d = day["date"]
+        label = f"{d:%A} {d.day} {d:%B %Y}"
+        if d == today:
+            label = "Today · " + label
+        elif d == today - datetime.timedelta(days=1):
+            label = "Yesterday · " + label
+        n = len(day["entries"])
+        out.append(html.Div([
+            html.Div([html.Span(label), html.Span(f"{n} entr{'y' if n == 1 else 'ies'}", className="lb-n")],
+                     className="lb-day"),
+            *[html.Div([html.Div(e["time"], className="lb-time"),
+                        html.Div(e["text"], className="lb-text")], className="lb-entry")
+              for e in reversed(day["entries"])],
+        ], className="lb-dayblock"))
+    if earlier:
+        out.append(html.Div([html.Div("Earlier notes (before the lab book)", className="lb-day"),
+                             html.Div(earlier, className="lb-text lb-earlier")], className="lb-dayblock"))
+    if not out:
+        out = [html.Div("No entries yet.", className="note")]
+    return out
+
+
 def notes_section():
-    try:
-        with open(paths.notes_file(), encoding="utf-8") as fh:
-            text = fh.read()
-    except OSError:
-        text = ""
-    return section("Notes", dcc.Textarea(id="notes", value=text, className="notes",
-                                         placeholder="Notes for this experiment…"),
-                   html.Div([html.Button("Save notes", id="notes-save", className="btn small", n_clicks=0),
-                             html.Span(id="notes-msg", className="note")], className="below"))
+    return section(
+        "Lab book",
+        dcc.Textarea(id="notes", value="", className="notes",
+                     placeholder="New entry for today (time-stamped when added)…"),
+        html.Div([html.Button("Add entry", id="notes-add", className="btn primary small", n_clicks=0),
+                  html.Span(id="notes-msg", className="note"),
+                  html.Span("Entries can't be changed once added; add a new one to correct.",
+                            className="note lb-hint")], className="below"),
+        html.Div(_labbook_log(), id="notes-log", className="lb-log below"),
+    )
 
 
 def header():
@@ -849,7 +880,17 @@ tbody tr:nth-child(even) td{{background:var(--pale)}}
 .note{{font-size:11px;color:var(--muted)}}
 .below{{margin-top:8px}}
 .otabs{{margin-bottom:8px}}
-.notes{{width:100%;min-height:140px;font-family:monospace;font-size:12px;border:1px solid var(--line);border-radius:4px;padding:8px}}
+.notes{{width:100%;min-height:70px;font-family:monospace;font-size:12px;border:1px solid var(--line);border-radius:4px;padding:8px;resize:vertical}}
+/* Lab book */
+.lb-hint{{margin-left:10px}}
+.lb-log{{max-height:480px;overflow-y:auto;border:1px solid var(--line);border-radius:4px}}
+.lb-day{{position:sticky;top:0;z-index:1;display:flex;justify-content:space-between;align-items:baseline;
+  background:var(--pale);border-bottom:2px solid var(--accent);padding:5px 10px;font-weight:700;font-size:13px}}
+.lb-n{{font-weight:400;font-size:11px;color:var(--muted)}}
+.lb-entry{{display:flex;gap:12px;padding:6px 10px;border-bottom:1px solid var(--line)}}
+.lb-time{{flex:none;width:42px;font-family:monospace;font-size:12px;color:var(--accent);font-weight:700;padding-top:1px}}
+.lb-text{{flex:1;min-width:0;white-space:pre-wrap;word-break:break-word;font-family:monospace;font-size:12px}}
+.lb-earlier{{padding:6px 10px;color:#444}}
 .modal{{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:1000;align-items:center;justify-content:center}}
 .modal-box{{background:#fff;border-radius:8px;padding:18px 22px;width:520px;border-top:4px solid var(--accent)}}
 .chk input{{width:auto}}
@@ -1091,18 +1132,20 @@ def save_physics(_n, values, ids):
 
 
 @app.callback(
-    Output("notes-msg", "children"),
-    Input("notes-save", "n_clicks"),
+    Output("notes-msg", "children"), Output("notes-log", "children"), Output("notes", "value"),
+    Input("notes-add", "n_clicks"),
     State("notes", "value"),
     prevent_initial_call=True,
 )
-def save_notes(_n, text):
-    path = paths.notes_file()
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(text or "")
-    os.replace(tmp, path)
-    return f"Saved {datetime.datetime.now():%H:%M:%S}."
+def add_note(_n, text):
+    """Append the text as a time-stamped entry under today's heading."""
+    try:
+        when = labbook.add_entry(paths.notes_file(), text, experiment=paths.experiment())
+    except ValueError as exc:
+        return f"⚠ Not added: {exc}.", dash.no_update, dash.no_update
+    except OSError as exc:
+        return f"⚠ Not added: {exc}", dash.no_update, dash.no_update
+    return f"Added {when:%H:%M}.", _labbook_log(), ""
 
 
 @app.callback(
