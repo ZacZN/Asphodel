@@ -283,7 +283,7 @@ def main():
     # constrained layout re-fits margins to the window size, so labels never get cut off
     fig = plt.figure(figsize=(22, 16), layout="constrained")
     fig.get_layout_engine().set(hspace=0.0, h_pad=0.05)
-    gs = fig.add_gridspec(3, 1, height_ratios=[3, 1, 0.16])
+    gs = fig.add_gridspec(4, 1, height_ratios=[3, 1, 0.16, 0.1])
     ax = fig.add_subplot(gs[0])
     axr = fig.add_subplot(gs[1], sharex=ax)
     ax.tick_params(labelbottom=False)
@@ -367,8 +367,10 @@ def main():
         "ions": [f"{ion} h{h}" for ion, h in zip(df["Ion"][fit_mask], df["Harmonic"][fit_mask])],
         "source_file": os.path.abspath(args.spreadsheet), "sheet": args.sheet,
     }
+    # controls on one row, the save status on its own full-width row below
     ctrl = gs[2].subgridspec(1, 4, width_ratios=[6, 3.2, 1.6, 5], wspace=0.04)
-    ax_name, ax_chk, ax_btn, ax_msg = (fig.add_subplot(ctrl[0, i]) for i in range(4))
+    ax_name, ax_chk, ax_btn = (fig.add_subplot(ctrl[0, i]) for i in range(3))
+    ax_msg = fig.add_subplot(gs[3])
     name_box = TextBox(ax_name, "Profile name ",
                        initial=default_profile_name(args.weighted, int(fit_mask.sum())))
     name_box.label.set_fontsize(16)
@@ -379,7 +381,7 @@ def main():
     btn = Button(ax_btn, "Save as profile")
     btn.label.set_fontsize(16)
     ax_msg.set_axis_off()
-    msg = ax_msg.text(0.0, 0.5, "", va="center", ha="left", fontsize=14, wrap=True,
+    msg = ax_msg.text(0.0, 0.5, "", va="center", ha="left", fontsize=14,
                       transform=ax_msg.transAxes)
 
     def on_save(_event):
