@@ -168,7 +168,7 @@ SIM_DEFAULTS = {
     "show_excluded":      True,
 }
 
-from core import physics
+from core import corrections, physics
 from core.physics import HL_UNITS, HL_CUT_UNITS, hl_allowed, build_ion_database, simulate_frequencies
 
 
@@ -603,10 +603,13 @@ def sim_panel_html():
     <div class="opt-grp" title="Second-order correction applied to the revolution frequency: f + a·f² + b·f + c">
       <input type="checkbox" id="sim_correction_enabled" {chk("correction_enabled")}>
       <label for="sim_correction_enabled">correction</label>
+      <select id="sim_corr_profile" onchange="corrPick()" onfocus="corrRefresh()" style="max-width:200px;"
+              title="Correction profile (saved fits of the 2nd-order correction); picking one fills a, b, c"></select>
       <span>a</span>{txt("corr_a", 150, "a")}
       <span>b</span>{txt("corr_b", 150, "b")}
       <span>c</span>{txt("corr_c", 150, "c")}
     </div>
+    <div class="opt-grp" id="sim_corr_info" style="display:block;font-size:11px;opacity:.85;max-width:760px;"></div>
     <div class="opt-grp" title="Ions with a half-life below this are drawn dotted (as 'excluded'). 0 = off">
       <span>T½ ≥</span>{txt("min_half_life", 44, "Minimum half-life (0 = off)")}
       <select id="sim_min_half_life_unit">{units}</select>
@@ -708,6 +711,57 @@ var SIM_KEYS = ['ref_name', 'ref_harmonic', 'z_lims', 'n_lims', 'el1', 'el2', 'm
                 'gamma_t', 'harmonics', 'corr_a', 'corr_b', 'corr_c', 'min_half_life',
                 'min_half_life_unit'];
 var SIM_CHECKS = ['show', 'show_excluded', 'correction_enabled', 'exclude_unknown_hl'];
+
+// ── Correction profiles (core/corrections.py) ───────────────────────────────
+// The dropdown shows the profile whose a, b, c equal the boxes ('custom'
+// otherwise); picking a profile fills a, b, c.
+var CORR_PROFILES = [];
+async function corrRefresh() {
+  var q = new URLSearchParams();
+  ['corr_a', 'corr_b', 'corr_c', 'ref_name', 'ref_harmonic', 'gamma_t'].forEach(function(k) {
+    q.set(k, document.getElementById('sim_' + k).value);
+  });
+  try {
+    var r = await fetch('/correction-profiles?' + q.toString());
+    var d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'error');
+    CORR_PROFILES = d.profiles;
+    var sel = document.getElementById('sim_corr_profile');
+    sel.innerHTML = '';
+    d.profiles.concat([{name: d.custom, label: d.custom_label, describe: ''}]).forEach(function(p) {
+      var o = document.createElement('option');
+      o.value = p.name; o.textContent = p.label || p.name; o.title = p.describe || '';
+      sel.appendChild(o);
+    });
+    sel.value = d.match || d.custom;
+    var info = document.getElementById('sim_corr_info');
+    info.innerHTML = '';
+    d.info.forEach(function(line, i) {
+      var div = document.createElement('div');
+      div.textContent = (i > 0 ? '⚠ ' : '') + line;
+      if (i > 0) div.style.color = '#fbbf24';
+      info.appendChild(div);
+    });
+  } catch (e) {
+    document.getElementById('sim_corr_info').textContent = '✗ correction profiles: ' + e.message;
+  }
+}
+function corrPick() {
+  var name = document.getElementById('sim_corr_profile').value;
+  var p = CORR_PROFILES.find(function(x) { return x.name === name; });
+  if (p) {
+    document.getElementById('sim_corr_a').value = p.a_text;
+    document.getElementById('sim_corr_b').value = p.b_text;
+    document.getElementById('sim_corr_c').value = p.c_text;
+  }
+  corrRefresh();
+}
+document.addEventListener('DOMContentLoaded', function() {
+  ['corr_a', 'corr_b', 'corr_c', 'ref_name', 'ref_harmonic', 'gamma_t'].forEach(function(k) {
+    var el = document.getElementById('sim_' + k);
+    if (el) el.addEventListener('change', corrRefresh);
+  });
+});
 
 function _simStatus(msg, kind) {
   var s = document.getElementById('simStatus');
@@ -1226,7 +1280,7 @@ function modalClose(id) {
   document.getElementById(id).classList.remove('open');
   if (_modalLastFocus) _modalLastFocus.focus();
 }
-function simOpen()  { modalOpen('simModal', 'sim_ref_name'); }
+function simOpen()  { modalOpen('simModal', 'sim_ref_name'); corrRefresh(); }
 function simClose() { modalClose('simModal'); }
 document.addEventListener('keydown', function(e) {
   if (e.key !== 'Escape') return;
@@ -2790,6 +2844,26 @@ def serve(html, state):
                 if fit["proc"].poll() is None:
                     return self._send(200, {"state": "running"})
                 self._send(200, {"state": "failed", **_fit_error(fit)})
+
+            elif url.path == "/correction-profiles":
+                # profiles for the PID popup's dropdown, the one matching the
+                # a, b, c given, and its fit summary + warnings
+                def arg(k):
+                    return q.get(k, [""])[0]
+                profs = corrections.load_profiles()
+                name = corrections.match(arg("corr_a"), arg("corr_b"), arg("corr_c"), profiles=profs)
+                p = next((x for x in profs if x["name"] == name), None)
+                info = (["Values typed in (no profile)."] if p is None else
+                        [corrections.describe(p)]
+                        + corrections.warnings(p, arg("ref_name"), arg("ref_harmonic"),
+                                               arg("gamma_t")))
+                self._send(200, {
+                    "profiles": [{"name": x["name"], "describe": corrections.describe(x),
+                                  "a_text": physics._fmt_num(x["a"]),
+                                  "b_text": physics._fmt_num(x["b"]),
+                                  "c_text": physics._fmt_num(x["c"])} for x in profs],
+                    "match": name, "custom": corrections.CUSTOM,
+                    "custom_label": corrections.CUSTOM_LABEL, "info": info})
 
             elif url.path == "/get-pref":
                 key = q.get("key", [""])[0]

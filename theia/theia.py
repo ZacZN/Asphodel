@@ -51,7 +51,7 @@ Peak detection (no smoothing is ever applied to the data)
 import os
 import sys
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import browser, icon, paths, physics, tabwatch
+from core import browser, corrections, icon, paths, physics, tabwatch
 from core.nubase_reader import (df_nubase, rect_restrict, diag_restrict, index_by_name, unpack_npz,
                                 get_base_dataframe, ion_electron_energy_kev)
 from core.physics import (delta_f, apply_correction, ion_base_name, build_hover_label, HL_UNITS,
@@ -1083,6 +1083,74 @@ FB_SHOWN = {"display": "flex", "position": "fixed", "inset": "0", "zIndex": "100
 FB_HIDDEN = {**FB_SHOWN, "display": "none"}
 
 
+# ---------------------------------------------------------------------------
+# 2nd-order correction profiles (core/corrections.py): a dropdown next to the
+# a, b, c boxes of the Scan settings ("s-"), the Viewer ("v-") and the PID
+# settings popup ("pid-").  Picking a profile fills a, b, c; typing a, b, c
+# selects the matching profile (or "custom").
+# ---------------------------------------------------------------------------
+
+def corr_profile_state(a, b, c, ref_name=None, ref_h=None, gamma_t=None, ref_f=None):
+    """(dropdown value, options, info children) for these a, b, c and settings."""
+    profs = corrections.load_profiles()
+    match = corrections.match(a, b, c, profiles=profs)
+    p = next((q for q in profs if q["name"] == match), None)
+    if p is None:
+        info = "Values typed in (no profile)."
+    else:
+        warn = corrections.warnings(p, ref_name, ref_h, gamma_t, ref_f, a, b, c)
+        info = [html.Div(corrections.describe(p))] + [
+            html.Div("⚠ " + w, style={"color": "#b45309"}) for w in warn]
+    return match or corrections.CUSTOM, corrections.options(profs), info
+
+
+def corr_profile_ui(prefix, a=None, b=None, c=None, **settings):
+    """Profile dropdown + info line for the a, b, c boxes with id prefix."""
+    value, opts, info = corr_profile_state(a, b, c, **settings)
+    return html.Div([
+        html.Label("Correction profile", style=LABEL_STYLE),
+        dcc.Dropdown(id=f"{prefix}corr_profile", options=opts, value=value, clearable=False,
+                     style={"fontSize": "13px"}),
+        html.Small(info, id=f"{prefix}corr_info", style=HELP_STYLE),
+    ], style=INPUT_STYLE)
+
+
+def register_corr_profile(prefix, as_text, has_ref_freq):
+    """Callback linking the profile dropdown and the a, b, c boxes of prefix.
+    as_text: the boxes are text inputs (else number inputs)."""
+    ref_inputs = [Input(f"{prefix}ref_name", "value"), Input(f"{prefix}ref_harmonic", "value"),
+                  Input(f"{prefix}gamma_t", "value")]
+    if has_ref_freq:
+        ref_inputs.append(Input(f"{prefix}ref_frequency", "value"))
+
+    @app.callback(
+        Output(f"{prefix}corr_a", "value", allow_duplicate=True),
+        Output(f"{prefix}corr_b", "value", allow_duplicate=True),
+        Output(f"{prefix}corr_c", "value", allow_duplicate=True),
+        Output(f"{prefix}corr_profile", "value"),
+        Output(f"{prefix}corr_profile", "options"),
+        Output(f"{prefix}corr_info", "children"),
+        Input(f"{prefix}corr_profile", "value"),
+        Input(f"{prefix}corr_a", "value"),
+        Input(f"{prefix}corr_b", "value"),
+        Input(f"{prefix}corr_c", "value"),
+        *ref_inputs,
+        prevent_initial_call=True,
+    )
+    def _corr_profile(name, a, b, c, ref_name, ref_h, gamma_t, ref_f=None):
+        nu = dash.no_update
+        out = [nu, nu, nu]
+        trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
+        if trig.startswith(f"{prefix}corr_profile.") and name != corrections.CUSTOM:
+            p = corrections.get_profile(name)
+            if p is not None:
+                a, b, c = p["a"], p["b"], p["c"]
+                out = ([physics._fmt_num(v) for v in (a, b, c)] if as_text
+                       else [float(v) for v in (a, b, c)])
+        value, opts, info = corr_profile_state(a, b, c, ref_name, ref_h, gamma_t, ref_f)
+        return (*out, value if value != name else nu, opts, info)
+
+
 sidebar = html.Div([
     html.H5("Scan settings", style={"fontWeight": "700", "marginBottom": "4px"}),
 
@@ -1119,6 +1187,8 @@ sidebar = html.Div([
 
     *section("Frequency correction"),
     check("Second order correction", "correction_enabled"),
+    corr_profile_ui("s-", CFG["corr_a"], CFG["corr_b"], CFG["corr_c"], ref_name=CFG["ref_name"],
+                    ref_h=CFG["ref_harmonic"], gamma_t=CFG["gamma_t"], ref_f=CFG["ref_frequency"]),
     inp("a  (f² coefficient)", "corr_a", True),
     inp("b  (f coefficient)", "corr_b", True),
     inp("c  (constant)", "corr_c", True),
@@ -1641,6 +1711,7 @@ pid_modal = html.Div([
                 dcc.Checklist(id="pid-correction_enabled",
                               options=[{"label": " Second order correction", "value": "on"}],
                               style={"fontSize": "13px", "marginBottom": "6px"}),
+                corr_profile_ui("pid-"),
             ] + [_pid_field(k, lab) for k, lab in PID_FIELDS[9:12]] + [
                 html.Label("Exclude half-life below  [0 = off]", style=LABEL_STYLE),
                 html.Div([
@@ -2548,6 +2619,9 @@ viewer_sidebar = html.Div([
                   options=[{"label": " Second order correction", "value": "on"}],
                   value=VCFG["correction_enabled"], style={"fontSize": "13px", "marginBottom": "10px"}),
     html.Div([
+        corr_profile_ui("v-", VCFG["corr_a"], VCFG["corr_b"], VCFG["corr_c"],
+                        ref_name=VCFG["ref_name"], ref_h=VCFG["ref_harmonic"],
+                        gamma_t=VCFG["gamma_t"], ref_f=VCFG["ref_frequency"]),
         v_input("a  (f² coefficient)", "corr_a", True, "any"),
         v_input("b  (f coefficient)", "corr_b", True, "any"),
         v_input("c  (constant)", "corr_c", True, "any"),
@@ -2868,6 +2942,25 @@ def serve_layout():
         comp = _find_component(_BASE_LAYOUT, cid)
         if comp is not None:
             setattr(comp, prop, value)
+
+    # correction profiles: options (profiles saved since the last load) and the
+    # profile matching the a, b, c shown
+    for prefix in ("s-", "v-"):
+        def val(k):
+            comp = _find_component(_BASE_LAYOUT, f"{prefix}{k}")
+            return None if comp is None else getattr(comp, "value", None)
+        value, opts, info = corr_profile_state(
+            val("corr_a"), val("corr_b"), val("corr_c"), val("ref_name"), val("ref_harmonic"),
+            val("gamma_t"), val("ref_frequency"))
+        for cid, prop, v in ((f"{prefix}corr_profile", "options", opts),
+                             (f"{prefix}corr_profile", "value", value),
+                             (f"{prefix}corr_info", "children", info)):
+            comp = _find_component(_BASE_LAYOUT, cid)
+            if comp is not None:
+                setattr(comp, prop, v)
+    comp = _find_component(_BASE_LAYOUT, "pid-corr_profile")
+    if comp is not None:
+        comp.options = corrections.options()
     return _BASE_LAYOUT
 
 
@@ -3192,6 +3285,11 @@ def v_spectrum_options(directory, current):
 # ===========================================================================
 
 _V_INPUTS = [Input(f"v-{k}", "value") for k in VIEWER_KEYS]
+
+
+register_corr_profile("s-", as_text=False, has_ref_freq=True)
+register_corr_profile("v-", as_text=False, has_ref_freq=True)
+register_corr_profile("pid-", as_text=True, has_ref_freq=False)
 
 
 @app.callback(Output("v-correction-inputs", "style"), Input("v-correction_enabled", "value"))

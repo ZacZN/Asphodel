@@ -37,6 +37,10 @@ _IE_FILE = os.path.join(_HERE, "nist_ionization_energies.csv")
 AMU_KEV = 931494.10242               # 1 u in keV
 ELECTRON_MASS_U = 5.48579909065e-4   # electron mass in u
 
+# Short name of the mass model above, stored with fits that depend on it
+# (e.g. 2nd-order correction profiles); change it if the mass calculation changes
+MASS_MODEL = "NUBASE2020 + NIST electron binding"
+
 
 # ---------------------------------------------------------------------------
 # Electron binding energies (NIST ASD ionization energies)

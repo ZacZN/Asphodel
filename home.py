@@ -41,7 +41,7 @@ import time
 import webbrowser
 
 sys.path.insert(1, os.path.dirname(os.path.abspath(__file__)))
-from core import browser, folderpick, icon, paths, physics, sync, tabwatch, version
+from core import browser, corrections, folderpick, icon, paths, physics, sync, tabwatch, version
 
 import dash
 from dash import dcc, html, Input, Output, State, ALL, ctx
@@ -500,7 +500,18 @@ def physics_panel():
         else:
             inp = dcc.Input(id={"type": "phys", "k": k}, type="text", value=_phys_text(k, sh[k]),
                             debounce=True)
+        if k == "corr_a":
+            # correction profiles (core/corrections.py): picking one fills a, b, c
+            profs = corrections.load_profiles()
+            fields += [html.Label("Correction profile"),
+                       dcc.Dropdown(id="phys-corr-profile", options=corrections.options(profs),
+                                    value=corrections.match(sh["corr_a"], sh["corr_b"], sh["corr_c"],
+                                                            profiles=profs) or corrections.CUSTOM,
+                                    clearable=False, className="unit")]
         fields += [html.Label(PHYS_LABELS.get(k, k)), inp]
+        if k == "corr_c":
+            fields += [html.Div(id="phys-corr-info", className="note",
+                                style={"gridColumn": "1 / -1"})]
     ov = tool_overrides()
     ov_lines = ([html.Div([html.B(t + ": "), ", ".join(f"{k} = {_phys_text(k, v)}" for k, v in d.items())])
                  for t, d in ov.items()] or [html.Div("none")])
@@ -1013,6 +1024,48 @@ def run_forms(_s, _c, _l, ss_in, ss_out, cp_file, cp_sheet, ls_file):
 )
 def refresh_status(_n, ids):
     return [_status_children(*tool_status(i["k"])) for i in ids]
+
+
+@app.callback(
+    Output({"type": "phys", "k": "corr_a"}, "value"),
+    Output({"type": "phys", "k": "corr_b"}, "value"),
+    Output({"type": "phys", "k": "corr_c"}, "value"),
+    Output("phys-corr-profile", "value"),
+    Output("phys-corr-profile", "options"),
+    Output("phys-corr-info", "children"),
+    Input("phys-corr-profile", "value"),
+    Input({"type": "phys", "k": "corr_a"}, "value"),
+    Input({"type": "phys", "k": "corr_b"}, "value"),
+    Input({"type": "phys", "k": "corr_c"}, "value"),
+    Input({"type": "phys", "k": "ref_name"}, "value"),
+    Input({"type": "phys", "k": "ref_harmonic"}, "value"),
+    Input({"type": "phys", "k": "ref_frequency"}, "value"),
+    Input({"type": "phys", "k": "gamma_t"}, "value"),
+    Input("tick", "n_intervals"),
+)
+def corr_profile(name, a, b, c, ref_name, ref_h, ref_f, gamma_t, _tick):
+    """Correction profile dropdown: picking a profile fills a, b, c; typing a, b, c
+    selects the matching profile (or 'custom').  Shows the profile's fit and
+    warnings if it was fitted with another setup."""
+    nu = dash.no_update
+    profs = corrections.load_profiles()
+    opts = corrections.options(profs)
+    out_abc = [nu, nu, nu]
+    if ctx.triggered_id == "phys-corr-profile" and name != corrections.CUSTOM:
+        p = next((q for q in profs if q["name"] == name), None)
+        if p is not None:
+            a, b, c = p["a"], p["b"], p["c"]
+            out_abc = [physics._fmt_num(a), physics._fmt_num(b), physics._fmt_num(c)]
+    match = corrections.match(a, b, c, profiles=profs)
+    sel = match or corrections.CUSTOM
+    p = next((q for q in profs if q["name"] == match), None)
+    if p is None:
+        info = "Values typed in (no profile)."
+    else:
+        warn = corrections.warnings(p, ref_name, ref_h, gamma_t, ref_f, a, b, c)
+        info = [html.Div(corrections.describe(p))] + [
+            html.Div("⚠ " + w, style={"color": "#b45309"}) for w in warn]
+    return (*out_abc, sel if sel != name else nu, opts, info)
 
 
 @app.callback(

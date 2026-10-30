@@ -27,12 +27,17 @@ Usage:
 frequency from the m/q uncertainties (NUBASE (+) NIST) of the ion and the
 reference.  The measured frequencies have no uncertainty in the sheet.
 
-After the plot window is closed the script offers to write a, b, c to the
-shared physics settings.
+Saving: the plot window has a name box and a "Save as profile" button.  Each
+saved fit becomes a correction profile (core/corrections.py, stored in
+data/<experiment>/settings/correction_profiles.json) that the Viewer, Scan,
+PID settings, spectrogram and home page offer in a dropdown.  With "also make
+it the default" ticked, a, b, c are also written to the shared physics
+settings (physics.json).
 
 The default spreadsheet is data/<experiment>/rionid/186hf_rionid-v8_PID.xlsx.
 """
 import argparse
+import datetime
 import os
 import re
 import sys
@@ -43,8 +48,10 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import paths, physics
-from core.nubase_reader import df_nubase
+from matplotlib.widgets import Button, CheckButtons, TextBox
+
+from core import corrections, paths, physics
+from core.nubase_reader import MASS_MODEL, df_nubase
 
 plt.rcParams["font.size"] = 2 * plt.rcParams["font.size"]  # all fonts doubled
 
@@ -183,22 +190,27 @@ def pretty_ion(name):
     return rf"$^{{{A}{iso}}}\mathrm{{{el}}}^{{{q}}}$"
 
 
-def offer_save(c2, c1, c0):
-    """Ask in the terminal whether to write a, b, c to the shared physics settings."""
-    path = physics.shared_path()
-    old = physics.load_shared()
-    print(f"\nShared physics settings: {path}")
-    print(f"  current: a = {old['corr_a']!r}, b = {old['corr_b']!r}, c = {old['corr_c']!r}")
-    print(f"  new:     a = {float(c2)!r}, b = {float(c1)!r}, c = {float(c0)!r}")
-    try:
-        answer = input("Write the new a, b, c to physics.json? [y/N] ").strip().lower()
-    except EOFError:
-        answer = ""
-    if answer in ("y", "yes"):
+def default_profile_name(weighted, n_points):
+    mode = "weighted" if weighted else "unweighted"
+    return f"{datetime.datetime.now():%Y-%m-%d %H:%M} {mode}, e-binding, {n_points} ions"
+
+
+def save_profile(name, make_default, coeffs, uncs, fit_info):
+    """Save a correction profile; with make_default also write a, b, c to
+    physics.json.  Returns a status message (raises ValueError on a bad name)."""
+    (c2, c1, c0), (dc2, dc1, dc0) = coeffs, uncs
+    prof = corrections.save_profile({
+        "name": name.strip(), "a": float(c2), "b": float(c1), "c": float(c0),
+        "a_unc": float(dc2), "b_unc": float(dc1), "c_unc": float(dc0),
+        "created": datetime.datetime.now().isoformat(timespec="seconds"),
+        "fit": fit_info, "notes": ""})
+    msg = f"Saved profile '{prof['name']}'"
+    print(f"\n{msg} in {corrections.profiles_path()}")
+    if make_default:
         physics.save_shared({"corr_a": float(c2), "corr_b": float(c1), "corr_c": float(c0)})
-        print("Saved. Restart open tools (Theia, spectrograms) to use the new correction.")
-    else:
-        print("Not saved.")
+        msg += " and made it the default (physics.json)"
+        print(f"a, b, c written to {physics.shared_path()}")
+    return msg + ". Restart open tools / reload Theia to see it."
 
 
 def main():
@@ -269,9 +281,12 @@ def main():
 
     # ---- Plot ----
     # constrained layout re-fits margins to the window size, so labels never get cut off
-    fig, (ax, axr) = plt.subplots(2, 1, figsize=(22, 15), sharex=True, layout="constrained",
-                                  gridspec_kw=dict(height_ratios=[3, 1]))
+    fig = plt.figure(figsize=(22, 16), layout="constrained")
     fig.get_layout_engine().set(hspace=0.0, h_pad=0.05)
+    gs = fig.add_gridspec(3, 1, height_ratios=[3, 1, 0.16])
+    ax = fig.add_subplot(gs[0])
+    axr = fig.add_subplot(gs[1], sharex=ax)
+    ax.tick_params(labelbottom=False)
     yerr = sig[fit_mask] if args.weighted else None
     ax.errorbar(x[fit_mask], y[fit_mask], yerr=yerr, fmt="o", color="C0", zorder=3,
                 capsize=4 if args.weighted else 0, label="Data")
@@ -342,9 +357,44 @@ def main():
     axr.ticklabel_format(axis="x", useOffset=False, style="plain")
     axr.grid(alpha=0.3)
     fig.align_ylabels([ax, axr])
-    plt.show()
 
-    offer_save(c2, c1, c0)
+    # ---- Save as correction profile ----
+    fit_info = {
+        "ref_ion": ref_ion, "ref_f_exp": ref_f, "ref_harmonic": ref_h, "f_ref_rev": f_ref,
+        "gamma_t": gamma_t, "mass_model": MASS_MODEL, "weighted": bool(args.weighted),
+        "n_points": int(fit_mask.sum()), "rms_rev_hz": float(rms),
+        "chi2_ndf": float(chi2ndf) if args.weighted else None,
+        "ions": [f"{ion} h{h}" for ion, h in zip(df["Ion"][fit_mask], df["Harmonic"][fit_mask])],
+        "source_file": os.path.abspath(args.spreadsheet), "sheet": args.sheet,
+    }
+    ctrl = gs[2].subgridspec(1, 4, width_ratios=[6, 3.2, 1.6, 5], wspace=0.04)
+    ax_name, ax_chk, ax_btn, ax_msg = (fig.add_subplot(ctrl[0, i]) for i in range(4))
+    name_box = TextBox(ax_name, "Profile name ",
+                       initial=default_profile_name(args.weighted, int(fit_mask.sum())))
+    name_box.label.set_fontsize(16)
+    name_box.text_disp.set_fontsize(15)
+    chk = CheckButtons(ax_chk, ["also make it the default"], [False])
+    for t in chk.labels:
+        t.set_fontsize(15)
+    btn = Button(ax_btn, "Save as profile")
+    btn.label.set_fontsize(16)
+    ax_msg.set_axis_off()
+    msg = ax_msg.text(0.0, 0.5, "", va="center", ha="left", fontsize=14, wrap=True,
+                      transform=ax_msg.transAxes)
+
+    def on_save(_event):
+        try:
+            text = save_profile(name_box.text, chk.get_status()[0], (c2, c1, c0),
+                                (dc2, dc1, dc0), fit_info)
+            msg.set_text("✓ " + text)
+            msg.set_color("darkgreen")
+        except (ValueError, OSError) as exc:
+            msg.set_text(f"✗ Not saved: {exc}")
+            msg.set_color("firebrick")
+        fig.canvas.draw_idle()
+
+    btn.on_clicked(on_save)
+    plt.show()
 
 
 if __name__ == "__main__":
