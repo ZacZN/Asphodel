@@ -788,8 +788,9 @@ def alts_input_text(e):
 
 
 def active_alts(e):
-    """Alternatives that count: unsure own entries only."""
-    return (e.get("alts") or []) if e.get("status") == "unsure" and not e.get("source") else []
+    """Alternatives that count: those of own entries, confident or unsure
+    (Theia lists have none)."""
+    return (e.get("alts") or []) if not e.get("source") else []
 
 
 def alt_links(entries):
@@ -970,7 +971,7 @@ def id_panel():
                           placeholder="e.g. 204Au79+ h214, m203Pt78+"),
                 html.Div("Other ions this peak could be, separated by commas; the harmonic is "
                          "optional (same as above if left out).", className="hint"),
-            ], id="id-alts-box", style={"display": "none"}),
+            ], id="id-alts-box"),
             lbl("Notes"),
             dcc.Textarea(id="id-notes", value=""),
             html.Div([html.Button("Add", id="id-save", className="btn primary", n_clicks=0),
@@ -1156,8 +1157,6 @@ def _entry_card(e):
                                             " (energy and half-life not given yet)"), className="newiso"))
     if e.get("alts"):
         txt = "Alternatives: " + ", ".join(alt_text(a, e) for a in e["alts"])
-        if e.get("status") != "unsure":
-            txt += " (kept; shown only while unsure)"
         out.append(html.Div(txt, className="alts"))
     if (e.get("notes") or "").strip():
         out.append(html.Div(e["notes"], className="notes"))
@@ -1248,12 +1247,6 @@ def _id_searched(value, sel, ver):
         msg = f"{nm}: 'searched but not identified' removed."
     save_ids(d)
     return (ver or 0) + 1, msg
-
-
-@app.callback(Output("id-alts-box", "style"), Input("id-status", "value"))
-def _id_alts_box(status):
-    """Alternatives only for unsure identifications."""
-    return {} if status == "unsure" else {"display": "none"}
 
 
 @app.callback(Output("id-new-box", "style"), Input("id-iso", "value"))
@@ -1366,14 +1359,12 @@ def _id_edit(_save, _cancel, _edit, _del, sel, iso, charge, harm, status, notes,
                 return _out(msg=err)
             newvals[key] = v
         newvals["new_t_unit"] = new_t_unit if new_t_unit in T_UNITS else "s"
-    alts = None                         # None: leave an edited entry's alternatives as they are
-    if status == "unsure":
-        alts, err = parse_alts(alts_text)
-        if err:
-            return _out(msg=f"⚠ Alternative identifications: {err}.")
-        if any(a["Z"] == zz and a["N"] == nn and a["isomer"] == iso and a["charge"] in qs
-               and (a["harmonic"] is None or a["harmonic"] in hs) for a in alts):
-            return _out(msg="⚠ An alternative can't be the identification itself.")
+    alts, err = parse_alts(alts_text)          # confident and unsure entries alike
+    if err:
+        return _out(msg=f"⚠ Alternative identifications: {err}.")
+    if any(a["Z"] == zz and a["N"] == nn and a["isomer"] == iso and a["charge"] in qs
+           and (a["harmonic"] is None or a["harmonic"] in hs) for a in alts):
+        return _out(msg="⚠ An alternative can't be the identification itself.")
     d = load_ids()
     now = datetime.datetime.now().isoformat(timespec="seconds")
     base = {"Z": zz, "N": nn, "A": zz + nn, "sym": r["sym"] if r is not None else SYMBOLS.get(zz, "?"),
