@@ -323,7 +323,8 @@ STABLE_CORNER = 0.38         # Identified ions: side of the corner triangles (st
 ISOMER_CORNER_COLOUR = "#8e44ad"   # bottom-left corner: a NUBASE isomer of this nuclide is identified
 NEW_STAR_COLOUR = "#ffd21f"        # bottom-left star: a new isomer (not in NUBASE) is logged
 STAR_R = 0.15                      # outer radius of that star, in squares
-ALT_COLOUR = "#1f4e9e"             # curved double arrow: uncertain identification <-> alternative
+ALT_COLOUR = "#1f4e9e"             # "Alternatives:" text in the entry cards
+ALT_LINE_COLOUR = "#000000"        # curved double arrow (and its label) between an identification and an alternative
 SEARCHED_COLOUR = "#d62728"        # bottom-right corner: searched for but not identified
 LABEL_INSET = 0.05                 # A + symbol label: distance from the square's top-left corner
 
@@ -1656,7 +1657,7 @@ app.clientside_callback(
                     var avoid = avoidRects(origin);
                     var defs = mk('defs', {}, altSvg);
                     var m = mk('marker', {id: 'segreArrow', viewBox: '0 0 10 10', refX: '8', refY: '5',
-                                          markerWidth: '5', markerHeight: '5',
+                                          markerWidth: '4', markerHeight: '4',
                                           orient: 'auto-start-reverse', markerUnits: 'strokeWidth'}, defs);
                     mk('path', {d: 'M0,0 L10,5 L0,10 z', fill: '%s', stroke: '#ffffff', 'stroke-width': '1'}, m);
                     var sq = ya._length / Math.abs(ya.range[1] - ya.range[0]);     // one square in px
@@ -1694,37 +1695,37 @@ app.clientside_callback(
                         });
                         var d = 'M' + best.a[0] + ',' + best.a[1] + ' C' + best.c1[0] + ',' + best.c1[1] + ' ' +
                                 best.c2[0] + ',' + best.c2[1] + ' ' + best.b[0] + ',' + best.b[1];
-                        mk('path', {d: d, fill: 'none', stroke: '#ffffff', 'stroke-width': '6',
+                        mk('path', {d: d, fill: 'none', stroke: '#ffffff', 'stroke-width': '7.5',
                                     'stroke-linecap': 'round'}, altSvg);
-                        mk('path', {d: d, fill: 'none', stroke: '%s', 'stroke-width': '2.5',
+                        mk('path', {d: d, fill: 'none', stroke: '%s', 'stroke-width': '3.5',
                                     'marker-start': 'url(#segreArrow)', 'marker-end': 'url(#segreArrow)'}, altSvg);
                         // the line's label: on the curve, at the first spot clear of the hover labels
                         var text = 'Alternative Identification: ' + (sg[4] || []).join(', ');
                         var g = mk('g', {}, altSvg);
-                        var t = mk('text', {'font-size': '12', 'font-family': 'sans-serif', 'font-weight': '600',
+                        var t = mk('text', {'font-size': '15', 'font-family': 'sans-serif', 'font-weight': '600',
                                             fill: '%s'}, g);
                         t.textContent = text;
-                        var w = t.getComputedTextLength ? t.getComputedTextLength() : text.length * 6.5, h = 16;
+                        var w = t.getComputedTextLength ? t.getComputedTextLength() : text.length * 8.2, h = 21;
                         var spots = [0.5, 0.65, 0.35, 0.8, 0.2, 0.9];
                         var placed = null;
                         for (var j = 0; j < spots.length && !placed; j++) {
                             var q = bez(best.a, best.c1, best.c2, best.b, spots[j]);
                             [[8, -h - 4], [8, 6], [-w - 16, -h - 4], [-w - 16, 6]].forEach(function(o) {
                                 if (placed) return;
-                                var box = [q[0] + o[0], q[1] + o[1], q[0] + o[0] + w + 8, q[1] + o[1] + h];
+                                var box = [q[0] + o[0], q[1] + o[1], q[0] + o[0] + w + 12, q[1] + o[1] + h];
                                 if (box[0] < 0 || box[2] > L.width || box[1] < 0 || box[3] > L.height) return;
                                 if (!boxHits(box, avoid)) placed = box;
                             });
                         }
                         if (!placed) {
                             var qm = bez(best.a, best.c1, best.c2, best.b, 0.5);
-                            placed = [qm[0] + 8, qm[1] - h - 4, qm[0] + 16 + w, qm[1] - 4];
+                            placed = [qm[0] + 8, qm[1] - h - 4, qm[0] + 20 + w, qm[1] - 4];
                         }
                         avoid.push(placed);                  // a second line's label goes elsewhere
-                        mk('rect', {x: placed[0], y: placed[1], width: w + 8, height: h, rx: 3,
+                        mk('rect', {x: placed[0], y: placed[1], width: w + 12, height: h, rx: 3,
                                     fill: 'rgba(255,255,255,0.92)', stroke: '%s', 'stroke-width': '1'}, g)
                             .parentNode.insertBefore(g.lastChild, t);
-                        t.setAttribute('x', placed[0] + 4); t.setAttribute('y', placed[1] + 12);
+                        t.setAttribute('x', placed[0] + 6); t.setAttribute('y', placed[1] + 15.5);
                     });
                 };
                 gd.on('plotly_hover', drawAlt);
@@ -1737,7 +1738,7 @@ app.clientside_callback(
         }, 150);
         return window.dash_clientside.no_update;
     }
-    """ % (LABEL_PX, LABEL_PX, ALT_COLOUR, ALT_COLOUR, ALT_COLOUR, ALT_COLOUR),
+    """ % (LABEL_PX, LABEL_PX, ALT_LINE_COLOUR, ALT_LINE_COLOUR, ALT_LINE_COLOUR, ALT_LINE_COLOUR),
     Output("labels-dummy", "children"),
     Input("chart", "figure"),
 )
