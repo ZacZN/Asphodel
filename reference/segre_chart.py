@@ -559,7 +559,8 @@ def ids_path():
 
 def load_ids():
     d = {"format": "asphodel-segre-identified", "version": 1, "entries": [], "confirmed_lists": [],
-         "searched": []}          # [{"Z", "N", "updated"}]: searched for, not identified
+         "searched": [],          # [{"Z", "N", "updated"}]: searched for, not identified
+         "list_addons": {}}       # {Theia-list entry id: {"alts", "notes", "updated"}}
     try:
         with open(ids_path(), encoding="utf-8") as fh:
             saved = json.load(fh)
@@ -567,6 +568,8 @@ def load_ids():
             d["entries"] = [e for e in saved.get("entries", []) if isinstance(e, dict)]
             d["confirmed_lists"] = [str(x) for x in saved.get("confirmed_lists", [])]
             d["searched"] = [x for x in saved.get("searched", []) if isinstance(x, dict) and "Z" in x and "N" in x]
+            d["list_addons"] = {k: v for k, v in (saved.get("list_addons") or {}).items()
+                                if isinstance(v, dict)}
     except (OSError, ValueError):
         pass
     return d
@@ -709,7 +712,8 @@ def confirmed_entries(name):
                         "A": int(m.group(2)), "sym": m.group(3), "isomer": m.group(1) or "g",
                         "charge": int(m.group(4)), "harmonic": int(harm),
                         "status": "confident" if (g["decision"] == "accepted").any() else "unsure",
-                        "notes": f"{(g['decision'] == 'accepted').sum()} accepted, "
+                        "notes": "",
+                        "peaks": f"{(g['decision'] == 'accepted').sum()} accepted, "
                                  f"{(g['decision'] == 'unsure').sum()} unsure peaks",
                         "source": name})
     except Exception as exc:                    # unreadable list: skip it, say so on the console
@@ -724,11 +728,16 @@ def searched_cells(d=None):
 
 
 def all_entries(d=None):
-    """Own entries + those of the selected Theia lists."""
+    """Own entries + those of the selected Theia lists, the latter with the
+    alternatives and notes added to them here (list_addons; the CSV is never changed)."""
     d = d or load_ids()
     out = [dict(e, source=None) for e in d["entries"]]
+    addons = d.get("list_addons") or {}
     for name in d["confirmed_lists"]:
-        out += confirmed_entries(name)
+        for e in confirmed_entries(name):
+            ad = addons.get(e["id"]) or {}
+            out.append(dict(e, alts=ad.get("alts") or [], notes=ad.get("notes") or "",
+                            updated=ad.get("updated")))        # copies: the list cache stays clean
     return out
 
 
@@ -788,9 +797,8 @@ def alts_input_text(e):
 
 
 def active_alts(e):
-    """Alternatives that count: those of own entries, confident or unsure
-    (Theia lists have none)."""
-    return (e.get("alts") or []) if not e.get("source") else []
+    """Alternatives of an entry (own or Theia-list), confident or unsure."""
+    return e.get("alts") or []
 
 
 def alt_links(entries):
@@ -1161,7 +1169,12 @@ def _entry_card(e):
     if (e.get("notes") or "").strip():
         out.append(html.Div(e["notes"], className="notes"))
     if e.get("source"):
-        out.append(html.Div(f"Theia list: {os.path.basename(e['source'])}", className="src"))
+        out.append(html.Div(f"Theia list: {os.path.basename(e['source'])} · {e.get('peaks', '')}",
+                            className="src"))
+        out.append(html.Div(html.Button("Edit", id={"type": "idedit", "id": e["id"]}, className="btn",
+                                        n_clicks=0, title="Add alternatives / notes (the list itself "
+                                                          "and the status from it stay as they are)"),
+                            className="btns"))
     else:
         if e.get("updated"):
             out.append(html.Div(f"updated {e['updated'][:16].replace('T', ' ')}", className="src"))
@@ -1256,7 +1269,11 @@ def _id_new_box(iso):
 
 EDIT_OUTPUTS = ["ver", "editing", "iso", "charge", "harm", "status", "notes",
                 "new_ex", "new_ex_unc", "new_t", "new_t_unc", "new_t_unit", "alts",
-                "msg", "save_label", "cancel_style"]
+                "msg", "save_label", "cancel_style", "lock_iso", "lock_charge", "lock_harm", "status_opts"]
+STATUS_OPTS = [{"label": "Confident", "value": "confident"}, {"label": "Unsure", "value": "unsure"}]
+LOCKED = dict(lock_iso=True, lock_charge=True, lock_harm=True,
+              status_opts=[dict(o, disabled=True) for o in STATUS_OPTS])
+UNLOCKED = dict(lock_iso=False, lock_charge=False, lock_harm=False, status_opts=STATUS_OPTS)
 
 
 def _out(**kw):
@@ -1267,7 +1284,8 @@ def _out(**kw):
 def _cleared(**kw):
     """Outputs that empty the form (the harmonic and status are kept: often the same)."""
     base = dict(editing=None, iso="g", charge="", notes="", alts="", new_ex="", new_ex_unc="", new_t="",
-                new_t_unc="", new_t_unit="s", save_label="Add", cancel_style={"display": "none"})
+                new_t_unc="", new_t_unit="s", save_label="Add", cancel_style={"display": "none"},
+                **UNLOCKED)
     base.update(kw)
     return _out(**base)
 
@@ -1298,6 +1316,8 @@ def _str(v):
     Output("id-new-t", "value"), Output("id-new-t-unc", "value"), Output("id-new-t-unit", "value"),
     Output("id-alts", "value"),
     Output("id-msg", "children"), Output("id-save", "children"), Output("id-cancel", "style"),
+    Output("id-iso", "disabled"), Output("id-charge", "disabled"), Output("id-harm", "disabled"),
+    Output("id-status", "options"),
     Input("id-save", "n_clicks"), Input("id-cancel", "n_clicks"),
     Input({"type": "idedit", "id": ALL}, "n_clicks"),
     Input({"type": "iddel", "id": ALL}, "submit_n_clicks"),
@@ -1322,6 +1342,17 @@ def _id_edit(_save, _cancel, _edit, _del, sel, iso, charge, harm, status, notes,
             return _out()
         d = load_ids()
         e = next((x for x in d["entries"] if x.get("id") == t["id"]), None)
+        if e is None and str(t["id"]).startswith("theia:") and t["type"] == "idedit":
+            # a Theia-list ion: only its alternatives and notes can be edited here
+            e = next((x for x in all_entries(d) if x.get("id") == t["id"]), None)
+            if e is None:
+                return _out(msg="⚠ that list entry is no longer shown")
+            return _out(editing=e["id"], iso=e.get("isomer", "g"), charge=str(e["charge"]),
+                        harm=str(e["harmonic"]), status=e["status"], notes=e.get("notes", ""),
+                        alts=alts_input_text(e), save_label="Save changes", cancel_style={},
+                        msg=f"Editing {ion_name(e)} h{e['harmonic']} from a Theia list: only its "
+                            "alternatives and notes are saved here (the rest comes from the list).",
+                        **LOCKED)
         if e is None:
             return _out(msg="⚠ that entry no longer exists")
         if t["type"] == "iddel":
@@ -1334,7 +1365,27 @@ def _id_edit(_save, _cancel, _edit, _del, sel, iso, charge, harm, status, notes,
                     new_t=_str(e.get("new_t")), new_t_unc=_str(e.get("new_t_unc")),
                     new_t_unit=e.get("new_t_unit") or "s", alts=alts_input_text(e),
                     msg=f"Editing {ion_name(e)} h{e['harmonic']}", save_label="Save changes",
-                    cancel_style={})
+                    cancel_style={}, **UNLOCKED)
+    # Save a Theia-list ion's add-ons (alternatives, notes)
+    if editing and str(editing).startswith("theia:"):
+        d = load_ids()
+        e = next((x for x in all_entries(d) if x.get("id") == editing), None)
+        if e is None:
+            return _cleared(msg="⚠ that list entry is no longer shown")
+        alts, err = parse_alts(alts_text)
+        if err:
+            return _out(msg=f"⚠ Alternative identifications: {err}.")
+        if any(a["Z"] == e["Z"] and a["N"] == e["N"] and a["isomer"] == e.get("isomer", "g")
+               and a["charge"] == e["charge"] and a["harmonic"] in (None, e["harmonic"]) for a in alts):
+            return _out(msg="⚠ An alternative can't be the identification itself.")
+        note = (notes or "").strip()
+        if alts or note:
+            d["list_addons"][editing] = {"alts": alts, "notes": note,
+                                         "updated": datetime.datetime.now().isoformat(timespec="seconds")}
+        else:
+            d["list_addons"].pop(editing, None)
+        save_ids(d)
+        return _cleared(ver=ver + 1, msg=f"Saved {ion_name(e)} h{e['harmonic']} (Theia list).")
     # Add / Save changes
     if not sel:
         return _out(msg="Select a nuclide first (click its square).")
