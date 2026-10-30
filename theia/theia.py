@@ -2421,10 +2421,13 @@ V_HIGHLIGHT_COLORS = ["#2E91E5", "#E15F99", "#1CA71C", "#FB0D0D", "#DA16FF", "#B
 def v_build_figure(file_path, spectrum_name, ref_name, ref_frequency, ref_harmonic,
                    z_lims, n_lims, el1, el2, mq_width, gamma_t, harmonics,
                    correction_enabled=False, corr_a=0.0, corr_b=0.0, corr_c=0.0,
-                   highlight_ions=None, shown_harmonics=None):
+                   highlight_ions=None, shown_harmonics=None, lines_out=None):
     """Run the full computation and return (figure, error text).
 
-    shown_harmonics: harmonics to draw (None = all); set by the toggle box."""
+    shown_harmonics: harmonics to draw (None = all); set by the toggle box.
+    lines_out: if a list, filled with the highlighted lines inside the
+    spectrum, every harmonic (also hidden ones), sorted by frequency:
+    dicts {ion, h, f, shown} (for the Zoom / ◀ / ▶ buttons)."""
     highlight_ions = highlight_ions or []
     try:
         full_database = pd.concat([v_get_chargestate(e, z_lims, n_lims, el1, el2)
@@ -2457,6 +2460,23 @@ def v_build_figure(file_path, spectrum_name, ref_name, ref_frequency, ref_harmon
         HIGHLIGHT_WIDTH = 3
         multi_harmonic = len(harmonics) > 1
         shown = [h for h in harmonics if shown_harmonics is None or h in shown_harmonics]
+
+        # highlighted lines of every harmonic, for the zoom buttons
+        if lines_out is not None and highlight_ions:
+            hi_names = [n for n in dict.fromkeys(db.index)
+                        if v_ion_matches_highlight(str(n), highlight_ions)]
+            for h in harmonics:
+                col = f"frequency_direct_{h}"
+                for ion_name in hi_names:
+                    f = db.loc[ion_name, col]
+                    if isinstance(f, pd.Series):     # (duplicate ion name)
+                        f = f.iloc[0]
+                    if pd.isna(f) or f < freq_min or f > freq_max:
+                        continue
+                    lines_out.append({"ion": str(ion_name), "h": int(h), "f": float(f),
+                                      "shown": h in shown})
+            lines_out.sort(key=lambda l: l["f"])
+
         highlighted = {}            # (ion, h) -> [xs, ys, hover, f]
         first_sim = True
 
@@ -2562,11 +2582,32 @@ def load_viewer_config():
     return physics.with_shared(VIEWER_DEFAULTS, _load_json(VIEWER_CONFIG_PATH))
 
 
+# Viewer settings saved in viewer_config.json that are not plot inputs (so
+# changing them doesn't redraw the plot); kept when the others are saved
+V_EXTRA_KEYS = ("zoom_width_khz",)
+V_ZOOM_DEFAULT_KHZ = 10.0
+
+
+def v_zoom_width_saved():
+    v = _load_json(VIEWER_CONFIG_PATH).get("zoom_width_khz")
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return V_ZOOM_DEFAULT_KHZ
+    return v if np.isfinite(v) and v > 0 else V_ZOOM_DEFAULT_KHZ
+
+
 def save_viewer_config(cfg):
+    """Save the viewer settings in cfg; the V_EXTRA_KEYS not in cfg keep
+    their saved values."""
+    old = _load_json(VIEWER_CONFIG_PATH)
+    extra = {k: cfg.get(k, old.get(k)) for k in V_EXTRA_KEYS
+             if cfg.get(k, old.get(k)) is not None}
+    main = {k: v for k, v in cfg.items() if k not in V_EXTRA_KEYS}
     try:
         tmp = VIEWER_CONFIG_PATH + ".tmp"
         with open(tmp, "w") as fh:
-            json.dump(physics.strip_shared(cfg), fh, indent=2)
+            json.dump({**physics.strip_shared(main), **extra}, fh, indent=2)
         os.replace(tmp, VIEWER_CONFIG_PATH)
     except Exception:
         pass
@@ -2630,6 +2671,34 @@ viewer_sidebar = html.Div([
     *section("Highlight ions"),
     v_input("Ion names (comma-separated)", "highlight_ions", placeholder="e.g. 204Hg, 208Tl79+",
             help="Omit charge state to highlight all charge states (upper or lower case)"),
+    # Zoom to each highlighted line in turn (left to right, every harmonic)
+    html.Div([
+        html.Div([
+            html.Label("Zoom window  ±", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
+            dcc.Input(id="v-zoom-width", type="number", min=0, step="any", debounce=True,
+                      value=v_zoom_width_saved(), placeholder="10",
+                      className="form-control form-control-sm",
+                      style={"width": "80px", "fontSize": "13px", "marginRight": "4px"}),
+            html.Span("kHz", style={"fontSize": "13px"}),
+        ], style={"display": "flex", "alignItems": "center", "marginBottom": "6px"}),
+        html.Div([
+            html.Button("Zoom", id="v-zoom-btn", className="btn btn-sm", disabled=True,
+                        title="Zoom to the left-most highlighted line",
+                        style={"backgroundColor": ACCENT, "color": "white"}),
+            html.Button("◀", id="v-zoom-prev", className="btn btn-outline-secondary btn-sm",
+                        disabled=True, title="Previous highlighted line (lower frequency)"),
+            html.Button("▶", id="v-zoom-next", className="btn btn-outline-secondary btn-sm",
+                        disabled=True, title="Next highlighted line (higher frequency)"),
+            html.Button("Full view", id="v-zoom-full", className="btn btn-outline-secondary btn-sm",
+                        disabled=True, title="Show the whole spectrum again"),
+        ], style={"display": "flex", "gap": "6px", "flexWrap": "wrap"}),
+        html.Div(id="v-zoom-status", style={"fontSize": "12px", "marginTop": "6px",
+                                            "minHeight": "16px"}),
+        dcc.Store(id="v-zoom-lines", data={"src": "", "lines": []}),
+        dcc.Store(id="v-zoom-idx", data=None),
+        dcc.Store(id="v-zoom", data=None),
+        html.Div(id="_v-zoom-hook", style={"display": "none"}),
+    ], style=INPUT_STYLE),
     html.Hr(style={"margin": "10px 0"}),
     html.Div(id="v-error-box", style={"color": "#c0392b", "fontSize": "12px",
                                       "whiteSpace": "pre-wrap"}),
@@ -2911,6 +2980,9 @@ def serve_layout():
     comp = _find_component(_BASE_LAYOUT, "v-correction-inputs")
     if comp is not None:
         comp.style = {"display": "block" if vcfg["correction_enabled"] else "none"}
+    comp = _find_component(_BASE_LAYOUT, "v-zoom-width")
+    if comp is not None:
+        comp.value = v_zoom_width_saved()
 
     st = load_config().get("further_state") or {}
     files = [f for f in (st.get("files") or []) if os.path.isfile(f)]
@@ -3373,13 +3445,17 @@ app.clientside_callback(
 )
 
 
-@app.callback(Output("viewer-graph", "figure"), Output("v-error-box", "children"), *_V_INPUTS,
+@app.callback(Output("viewer-graph", "figure"), Output("v-error-box", "children"),
+              Output("v-zoom-lines", "data"), *_V_INPUTS,
               Input("v-harm-toggle", "value"))
 def v_update_figure(*values):
     shown = values[-1]
     v = dict(zip(VIEWER_KEYS, values[:-1]))
+    src = f"{v['file_path']}|{v['spectrum_name']}"
     if not v["spectrum_name"]:
-        return empty_fig("No spectrum selected (no .npz files in this folder?)"), ""
+        return (empty_fig("No spectrum selected (no .npz files in this folder?)"), "",
+                {"src": src, "lines": []})
+    lines = []
     try:
         fig, err = v_build_figure(
             file_path=v["file_path"] or "", spectrum_name=v["spectrum_name"] or "",
@@ -3393,10 +3469,173 @@ def v_update_figure(*values):
             corr_a=float(v["corr_a"] or 0), corr_b=float(v["corr_b"] or 0),
             corr_c=float(v["corr_c"] or 0),
             highlight_ions=v_parse_highlight_ions(v["highlight_ions"] or ""),
-            shown_harmonics=None if shown is None else [int(h) for h in shown])
-        return fig, err
+            shown_harmonics=None if shown is None else [int(h) for h in shown],
+            lines_out=lines)
+        return fig, err, {"src": src, "lines": lines}
     except Exception as exc:
-        return empty_fig(), f"Parse error: {exc}"
+        return empty_fig(), f"Parse error: {exc}", {"src": src, "lines": []}
+
+
+def _v_zoom_hw(width_khz):
+    """Half-width (Hz) of the zoom window from the ± kHz box (default 10 kHz)."""
+    try:
+        v = float(width_khz)
+    except (TypeError, ValueError):
+        return V_ZOOM_DEFAULT_KHZ * 1000.0
+    return v * 1000.0 if np.isfinite(v) and v > 0 else V_ZOOM_DEFAULT_KHZ * 1000.0
+
+
+def _v_save_extra(key, value):
+    """Save one of V_EXTRA_KEYS in viewer_config.json, other entries untouched."""
+    cfg = _load_json(VIEWER_CONFIG_PATH)
+    cfg[key] = value
+    try:
+        tmp = VIEWER_CONFIG_PATH + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(cfg, fh, indent=2)
+        os.replace(tmp, VIEWER_CONFIG_PATH)
+    except Exception:
+        pass
+
+
+@app.callback(
+    Output("v-zoom", "data"),
+    Output("v-zoom-idx", "data"),
+    Output("v-zoom-width", "style"),
+    Input("v-zoom-btn", "n_clicks"),
+    Input("v-zoom-prev", "n_clicks"),
+    Input("v-zoom-next", "n_clicks"),
+    Input("v-zoom-full", "n_clicks"),
+    Input("v-zoom-lines", "data"),
+    Input("v-zoom-width", "value"),
+    State("v-zoom-idx", "data"),
+    prevent_initial_call=True,
+)
+def v_zoom_nav(_z, _p, _n, _f, store, width, cur):
+    """Zoom: left-most highlighted line; ◀ / ▶: previous / next line;
+    Full view: unzoom.  cur (v-zoom-idx) is the line zoomed to: {i, src,
+    ion, h, f}, or None when not zoomed.  New lines (plot redrawn): stay on
+    the same ion and harmonic if it is still highlighted, and zoom again only
+    if the spectrum or the line's frequency changed (so a manual pan isn't
+    undone by e.g. a harmonic toggle)."""
+    trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
+    store = store or {}
+    lines = store.get("lines") or []
+    src = store.get("src")
+    nu = dash.no_update
+
+    w_style = {"width": "80px", "fontSize": "13px", "marginRight": "4px"}
+    try:
+        wv = float(width) if width not in (None, "") else None
+    except (TypeError, ValueError):
+        wv = -1
+    if wv is not None and not (np.isfinite(wv) and wv > 0):
+        w_style["borderColor"] = "#c0392b"
+    hw = _v_zoom_hw(width)
+
+    def zoom_to(i, reapply=False):
+        l = lines[i]
+        return ({"x": [l["f"] - hw, l["f"] + hw], "reapply": reapply, "t": time.time()},
+                {"i": i, "src": src, "ion": l["ion"], "h": l["h"], "f": l["f"]}, w_style)
+
+    if trig.startswith("v-zoom-full"):
+        return {"full": True, "t": time.time()}, None, w_style
+    if trig.startswith("v-zoom-btn"):
+        return zoom_to(0) if lines else (nu, None, w_style)
+    if trig.startswith("v-zoom-prev") or trig.startswith("v-zoom-next"):
+        if not lines:
+            return nu, None, w_style
+        step = -1 if trig.startswith("v-zoom-prev") else 1
+        i = 0 if cur is None else min(max(cur["i"] + step, 0), len(lines) - 1)
+        return zoom_to(i)
+    if trig.startswith("v-zoom-width"):
+        if wv is not None and wv > 0:
+            _v_save_extra("zoom_width_khz", wv)
+        if cur is None or cur["i"] >= len(lines):
+            return nu, nu, w_style
+        return zoom_to(cur["i"])
+    # v-zoom-lines: the plot was redrawn
+    if cur is None:
+        return nu, nu, w_style
+    for i, l in enumerate(lines):
+        if (l["ion"], l["h"]) == (cur["ion"], cur["h"]):
+            if src != cur["src"] or l["f"] != cur["f"]:
+                return zoom_to(i, reapply=True)
+            return nu, {**cur, "i": i}, w_style
+    return nu, None, w_style
+
+
+@app.callback(
+    Output("v-zoom-btn", "disabled"),
+    Output("v-zoom-prev", "disabled"),
+    Output("v-zoom-next", "disabled"),
+    Output("v-zoom-full", "disabled"),
+    Output("v-zoom-status", "children"),
+    Input("v-zoom-lines", "data"),
+    Input("v-zoom-idx", "data"),
+    Input("v-highlight_ions", "value"),
+)
+def v_zoom_buttons(store, cur, hl):
+    lines = (store or {}).get("lines") or []
+    n = len(lines)
+    if not n:
+        msg = ("No highlighted lines in this spectrum" if (hl or "").strip()
+               else "Highlight ions above to zoom to their lines")
+        return True, True, True, cur is None, html.Span(msg, style={"color": "#888"})
+    if cur is None or cur["i"] >= n:
+        return (False, True, False, True,
+                html.Span(f"{n} highlighted line{'' if n == 1 else 's'} in this spectrum",
+                          style={"color": "#888"}))
+    i = cur["i"]
+    l = lines[i]
+    txt = f"{i + 1} / {n}:  {l['ion']}  h{l['h']}  ({l['f']:,.1f} Hz)"
+    kids = [html.Span(txt, style={"fontWeight": "600"})]
+    if not l.get("shown", True):
+        kids.append(html.Span(f"  h{l['h']} hidden", style={"color": "#888"},
+                              title="This harmonic is switched off in the Harmonics box, "
+                                    "so its lines are not drawn"))
+    return False, i == 0, i == n - 1, False, html.Span(kids)
+
+
+# Zoom the Viewer plot to the chosen window, y fitted to the data inside it;
+# {"full": true} shows the whole spectrum.  "reapply": the plot is being
+# redrawn (new spectrum), so the zoom is applied again once it has been drawn.
+app.clientside_callback(
+    """
+    function(z) {
+        if (!z) return window.dash_clientside.no_update;
+        function apply() {
+            var gd = document.querySelector('#viewer-graph .js-plotly-plot');
+            if (!gd || !gd._fullData || !gd._fullData.length) return;
+            if (z.full) {
+                Plotly.relayout(gd, {'xaxis.autorange': true, 'yaxis.autorange': true});
+                return;
+            }
+            var lo = z.x[0], hi = z.x[1], X = gd._fullData[0].x, Y = gd._fullData[0].y;
+            var ymin = Infinity, ymax = -Infinity;
+            for (var i = 0; i < X.length; i++) {
+                if (X[i] < lo || X[i] > hi) continue;
+                var y = Y[i];
+                if (isFinite(y)) { if (y < ymin) ymin = y; if (y > ymax) ymax = y; }
+            }
+            var upd = {'xaxis.range': [lo, hi]};
+            if (isFinite(ymin) && isFinite(ymax)) {
+                var pad = 0.05 * ((ymax - ymin) || Math.abs(ymax) || 1);
+                upd['yaxis.range'] = [ymin - pad, ymax + pad];
+            } else {
+                upd['yaxis.autorange'] = true;
+            }
+            Plotly.relayout(gd, upd);
+        }
+        apply();
+        if (z.reapply) { setTimeout(apply, 250); }
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("_v-zoom-hook", "children"),
+    Input("v-zoom", "data"),
+    prevent_initial_call=True,
+)
 
 
 # ===========================================================================
