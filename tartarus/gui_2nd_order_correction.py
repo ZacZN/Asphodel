@@ -151,7 +151,8 @@ def _session_key(path):
     return os.path.realpath(os.path.expanduser(path)) if path else ""
 
 
-SESSION_KEYS = ("h", "harmonics", "k", "offsets", "ref_override", "assign", "fit", "undo")
+SESSION_KEYS = ("h", "harmonics", "k", "offsets", "ref_override", "assign", "fit", "undo",
+                "corr_base")
 
 
 def load_session(path):
@@ -186,6 +187,7 @@ def new_state(path, saved=None):
             "k": saved.get("k") or {},
             "offsets": saved.get("offsets") or {}, "ref_override": saved.get("ref_override") or {},
             "assign": saved.get("assign") or {}, "fit": fit, "undo": saved.get("undo") or [],
+            "corr_base": saved.get("corr_base") or {},
             "selected": None}
 
 
@@ -347,14 +349,24 @@ def model(s, state):
     assign = state.get("assign") or {}
     r = float(refs[h])
     f_sim = lines["f_sim"].to_numpy(float)
+    # after Calculate the lines start from the corrected positions (that fit's
+    # a, b, c on the revolution frequency); drags are applied on top of them
+    cb = (state.get("corr_base") or {}).get(str(h))
+    if cb:
+        x = f_sim / h
+        f_base = physics.apply_correction(x, *cb["abc"]) * h
+    else:
+        f_base = f_sim.copy()
+    lines["f_base"] = f_base
+    lines["f_corr"] = f_base if cb else np.nan
     off = np.array([float(offsets.get(q, 0.0)) for q in lines["key"]])
-    show = np.where(lines["is_ref"], f_sim, r + k * (f_sim - r) + off)
+    show = np.where(lines["is_ref"], f_sim, r + k * (f_base - r) + off)
     lines["assigned"] = [q in assign for q in lines["key"]]
     lines["f_exp"] = [float((assign.get(q) or {}).get("f_exp", np.nan)) for q in lines["key"]]
     lines["f_show"] = np.where(lines["assigned"], lines["f_exp"], show)
     lines["moved"] = [q in offsets for q in lines["key"]]
     return {"h": h, "ff": ff, "pp": pp, "f_ref": f_ref, "ref_h_f": r, "ref_info": info[h],
-            "warnings": warnings, "lines": lines, "k": k}
+            "warnings": warnings, "lines": lines, "k": k, "corr_base": cb}
 
 
 def _vline_xy(xs):
@@ -411,8 +423,10 @@ def overlay(s, state, m, view, mode):
     # same tooltip as the simulated lines in Theia's Viewer / the spectrogram
     # (ion, m.e., T½, E_x, decay, harmonic, f_sim), then this tool's extras
     hov = [f"{hv}<br>Harmonic: {r.h}<br>f_sim = {r.f_sim:,.1f} Hz"
+           + (f"<br>f_sim corrected = {r.f_corr:,.1f} Hz ({r.f_corr - r.f_sim:+.1f} Hz)"
+              if np.isfinite(r.f_corr) and not r.is_ref else "")
            + (f"<br>shown at {r.f_show:,.1f} Hz" if not r.is_ref and not r.assigned
-              and abs(r.f_show - r.f_sim) > 0.05 else "")
+              and abs(r.f_show - r.f_base) > 0.05 else "")
            + (f"<br><b>assigned: f_exp = {r.f_exp:,.1f} Hz</b>" if r.assigned else "")
            + ("<br><b>reference line</b>" if r.is_ref else "")
            for hv, r in zip(lines["hover"], lines.itertuples(index=False))]
@@ -787,6 +801,10 @@ def serve_layout():
                     {"label": " Move one line", "value": "one"}],
                     labelStyle={"display": "block"}),
                 html.Div(id="g-stretch", className="note"),
+                html.Button("Lines to corrected positions", id="g-tocorr", className="btn",
+                            n_clicks=0, title="After Calculate: put this harmonic's lines back "
+                                              "at the positions given by its last calculated "
+                                              "correction (clears stretch and moved lines)"),
                 html.Button("↶ Undo last drag", id="g-undo", className="btn", n_clicks=0,
                             title="Undo the last dragged line on this harmonic (stretch, "
                                   "moved line or moved reference line); click again for the "
@@ -1105,6 +1123,10 @@ def draw(state, view, mode, *values):
     n_off = sum(1 for q in (state.get("offsets") or {}) if split_key(q)[1] == h)
     stretch = f"h{h} stretch ×{m['k']:.6f}" + (f" · {n_off} line(s) moved on their own"
                                                  if n_off else "")
+    if m.get("corr_base"):
+        t = m["corr_base"].get("time") or ""
+        stretch = (f"h{h} lines start from the corrected positions (fit of "
+                   f"{t[11:16] or t}) · " + stretch)
     head = f"Assignments h{h} ({len(rows)})"
     return fig, keys, title, info, warn, txt, rows, stretch, sig, head
 
@@ -1156,10 +1178,10 @@ def _drag(moved, keys, state, s, m, mode):
         if r["assigned"]:
             continue
         if mode == "one":
-            base = ref_h + m["k"] * (r["f_sim"] - ref_h)
+            base = ref_h + m["k"] * (r["f_base"] - ref_h)
             state.setdefault("offsets", {})[key] = float(x_new - base)
             continue
-        d = float(r["f_sim"] - ref_h)
+        d = float(r["f_base"] - ref_h)
         if abs(d) < 1e-6:
             continue
         kn = (x_new - float((state.get("offsets") or {}).get(key, 0.0)) - ref_h) / d
@@ -1171,6 +1193,23 @@ def _drag(moved, keys, state, s, m, mode):
     if changed[0]:
         state["undo"] = ((state.get("undo") or []) + [before])[-UNDO_MAX:]
     return msg if changed[0] else None
+
+
+def _to_corrected(state, h, corr=None, set_base=False):
+    """Lines of h back to the corrected positions: stretch and moved lines of h
+    cleared (the moved reference line is kept); with set_base, corr (a fit
+    result) becomes the corrected base.  Undoable."""
+    offs = {q: v for q, v in (state.get("offsets") or {}).items() if split_key(q)[1] == h}
+    entry = {"h": h, "k": (state.get("k") or {}).get(str(h)),
+             "ref": (state.get("ref_override") or {}).get(str(h)), "offsets": offs}
+    if set_base:
+        entry["corr_base"] = (state.get("corr_base") or {}).get(str(h))
+        state["corr_base"] = dict(state.get("corr_base") or {},
+                                  **{str(h): {"abc": list(corr["abc"]), "time": corr["time"]}})
+    state["undo"] = ((state.get("undo") or []) + [entry])[-UNDO_MAX:]
+    state["k"] = {x: v for x, v in (state.get("k") or {}).items() if x != str(h)}
+    state["offsets"] = {q: v for q, v in (state.get("offsets") or {}).items()
+                        if split_key(q)[1] != h}
 
 
 def _undo(state, h):
@@ -1200,6 +1239,13 @@ def _undo(state, h):
         else:
             off[q] = v
     state["offsets"] = off
+    if "corr_base" in b:                   # undoing a Calculate / "to corrected positions"
+        cbs = dict(state.get("corr_base") or {})
+        if b["corr_base"] is None:
+            cbs.pop(str(h), None)
+        else:
+            cbs[str(h)] = b["corr_base"]
+        state["corr_base"] = cbs
     left = sum(1 for e in stack if e.get("h") == h)
     return f"Undid the last drag on h{h}" + (f" ({left} more to undo)." if left else ".")
 
@@ -1228,7 +1274,7 @@ def _assign(state, s, m, key, centre):
     Input("g-drag", "data"), Input("g-graph", "clickData"), Input("g-click", "data"),
     Input("g-assign", "n_clicks"), Input("g-unassign", "n_clicks"), Input("g-deselect", "n_clicks"),
     Input("g-reset", "n_clicks"), Input("g-clear", "n_clicks"), Input("g-table", "data_timestamp"),
-    Input("g-undo", "n_clicks"),
+    Input("g-undo", "n_clicks"), Input("g-tocorr", "n_clicks"),
     Input("g-file", "value"),
     Input({"type": "g-hsel", "h": ALL}, "n_clicks"), Input({"type": "g-hdel", "h": ALL}, "n_clicks"),
     Input("g-hadd", "n_clicks"), Input("g-hnew", "n_submit"),
@@ -1237,7 +1283,7 @@ def _assign(state, s, m, key, centre):
     State("g-mode", "value"), *SETTING_STATES,
     prevent_initial_call=True,
 )
-def update_state(drag, click, sclick, _a, _u, _d, _r, _c, _ts, _undo_n, file, _hs, _hd, _ha, _hn, hnew,
+def update_state(drag, click, sclick, _a, _u, _d, _r, _c, _ts, _undo_n, _tocorr, file, _hs, _hd, _ha, _hn, hnew,
                  table, state, keys, mode, *values):
     nu = dash.no_update
     trig = ctx.triggered_id
@@ -1351,6 +1397,11 @@ def update_state(drag, click, sclick, _a, _u, _d, _r, _c, _ts, _undo_n, file, _h
         msg = f"h{h}: stretch, moved lines and moved reference line reset."
     elif trig == "g-undo":
         msg = _undo(state, h)
+    elif trig == "g-tocorr":
+        if not (state.get("corr_base") or {}).get(str(h)):
+            return nu, f"Calculate h{h} first: the corrected positions come from its fit.", nu
+        _to_corrected(state, h)
+        msg = f"h{h}: lines back at their corrected positions."
     elif trig == "g-clear":
         state["assign"] = {q: v for q, v in (state.get("assign") or {}).items()
                            if split_key(q)[1] != h}
@@ -1388,8 +1439,10 @@ def calculate(n, state, *values):
     except Exception as exc:
         return nu, f"⚠ {exc}", nu
     state = dict(state, fit=dict(state.get("fit") or {}, **{str(m["h"]): r}))
+    _to_corrected(state, m["h"], r, set_base=True)
     save_session(state)
-    return state, f"✓ h{m['h']} calculated.", n
+    return (state, f"✓ h{m['h']} calculated; the lines are now at their corrected positions "
+                   f"(↶ Undo last drag goes back).", n)
 
 
 CORR_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
