@@ -88,6 +88,7 @@ MIN_POINTS = 3              # assigned ions for a fit (2 parameters + 1 dof)
 Y_TOP = 0.86                # top of the spectrum (paper); the marker strip is above it
 MAX_SHAPES = 150            # draggable lines at once (zoom in for more)
 MAX_LABELS = 60             # labels drawn (in view)
+UNDO_MAX = 50               # drags remembered for "Undo last drag" (per spectrum)
 MAX_HOVER_LINES = 600       # lines in view that get a tooltip along their height
 NEW_PROFILE = "__new__"
 
@@ -150,7 +151,7 @@ def _session_key(path):
     return os.path.realpath(os.path.expanduser(path)) if path else ""
 
 
-SESSION_KEYS = ("h", "harmonics", "k", "offsets", "ref_override", "assign", "fit")
+SESSION_KEYS = ("h", "harmonics", "k", "offsets", "ref_override", "assign", "fit", "undo")
 
 
 def load_session(path):
@@ -184,7 +185,8 @@ def new_state(path, saved=None):
     return {"file": path or "", "h": saved.get("h"), "harmonics": saved.get("harmonics"),
             "k": saved.get("k") or {},
             "offsets": saved.get("offsets") or {}, "ref_override": saved.get("ref_override") or {},
-            "assign": saved.get("assign") or {}, "fit": fit, "selected": None}
+            "assign": saved.get("assign") or {}, "fit": fit, "undo": saved.get("undo") or [],
+            "selected": None}
 
 
 def _ints(v, n=None, what="value"):
@@ -785,6 +787,10 @@ def serve_layout():
                     {"label": " Move one line", "value": "one"}],
                     labelStyle={"display": "block"}),
                 html.Div(id="g-stretch", className="note"),
+                html.Button("↶ Undo last drag", id="g-undo", className="btn", n_clicks=0,
+                            title="Undo the last dragged line on this harmonic (stretch, "
+                                  "moved line or moved reference line); click again for the "
+                                  "one before"),
                 html.Button("Reset stretch & moves (this harmonic)", id="g-reset", className="btn",
                             n_clicks=0),
                 html.H3("Simulation"),
@@ -1116,6 +1122,11 @@ def _drag(moved, keys, state, s, m, mode):
     h = m["h"]
     msg = ""
     changed = [False]
+    # what the drag changes, as it was before (for "Undo last drag")
+    keys_moved = [keys[i] for i in moved if i < len(keys)]
+    before = {"h": h, "k": (state.get("k") or {}).get(str(h)),
+              "ref": (state.get("ref_override") or {}).get(str(h)),
+              "offsets": {q: (state.get("offsets") or {}).get(q) for q in keys_moved}}
     for idx, xs in moved.items():
         if idx >= len(keys) or keys[idx] not in lines.index:
             continue
@@ -1151,7 +1162,40 @@ def _drag(moved, keys, state, s, m, mode):
             continue
         state["k"] = dict(state.get("k") or {}, **{str(h): float(kn)})
         msg = f"h{h} stretch ×{kn:.6f}"
+    if changed[0]:
+        state["undo"] = ((state.get("undo") or []) + [before])[-UNDO_MAX:]
     return msg if changed[0] else None
+
+
+def _undo(state, h):
+    """Undo the last drag on harmonic h.  Returns a message."""
+    stack = list(state.get("undo") or [])
+    i = next((j for j in range(len(stack) - 1, -1, -1) if stack[j].get("h") == h), None)
+    if i is None:
+        return f"Nothing to undo on h{h}."
+    b = stack.pop(i)
+    state["undo"] = stack
+    k = dict(state.get("k") or {})
+    if b.get("k") is None:
+        k.pop(str(h), None)
+    else:
+        k[str(h)] = b["k"]
+    state["k"] = k
+    ro = dict(state.get("ref_override") or {})
+    if b.get("ref") is None:
+        ro.pop(str(h), None)
+    else:
+        ro[str(h)] = b["ref"]
+    state["ref_override"] = ro
+    off = dict(state.get("offsets") or {})
+    for q, v in (b.get("offsets") or {}).items():
+        if v is None:
+            off.pop(q, None)
+        else:
+            off[q] = v
+    state["offsets"] = off
+    left = sum(1 for e in stack if e.get("h") == h)
+    return f"Undid the last drag on h{h}" + (f" ({left} more to undo)." if left else ".")
 
 
 def _assign(state, s, m, key, centre):
@@ -1178,6 +1222,7 @@ def _assign(state, s, m, key, centre):
     Input("g-drag", "data"), Input("g-graph", "clickData"), Input("g-click", "data"),
     Input("g-assign", "n_clicks"), Input("g-unassign", "n_clicks"), Input("g-deselect", "n_clicks"),
     Input("g-reset", "n_clicks"), Input("g-clear", "n_clicks"), Input("g-table", "data_timestamp"),
+    Input("g-undo", "n_clicks"),
     Input("g-file", "value"),
     Input({"type": "g-hsel", "h": ALL}, "n_clicks"), Input({"type": "g-hdel", "h": ALL}, "n_clicks"),
     Input("g-hadd", "n_clicks"), Input("g-hnew", "n_submit"),
@@ -1186,7 +1231,7 @@ def _assign(state, s, m, key, centre):
     State("g-mode", "value"), *SETTING_STATES,
     prevent_initial_call=True,
 )
-def update_state(drag, click, sclick, _a, _u, _d, _r, _c, _ts, file, _hs, _hd, _ha, _hn, hnew,
+def update_state(drag, click, sclick, _a, _u, _d, _r, _c, _ts, _undo_n, file, _hs, _hd, _ha, _hn, hnew,
                  table, state, keys, mode, *values):
     nu = dash.no_update
     trig = ctx.triggered_id
@@ -1296,7 +1341,10 @@ def update_state(drag, click, sclick, _a, _u, _d, _r, _c, _ts, file, _hs, _hd, _
                             if split_key(q)[1] != h}
         state["ref_override"] = {k: v for k, v in (state.get("ref_override") or {}).items()
                                  if k != str(h)}
+        state["undo"] = [e for e in (state.get("undo") or []) if e.get("h") != h]
         msg = f"h{h}: stretch, moved lines and moved reference line reset."
+    elif trig == "g-undo":
+        msg = _undo(state, h)
     elif trig == "g-clear":
         state["assign"] = {q: v for q, v in (state.get("assign") or {}).items()
                            if split_key(q)[1] != h}
