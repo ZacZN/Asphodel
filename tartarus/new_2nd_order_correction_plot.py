@@ -22,6 +22,7 @@ Equivalent expanded form (the a, b, c of core.physics.apply_correction):
 
 Usage:
     python new_2nd_order_correction_plot.py [spreadsheet] [sheet name] [--weighted]
+    python new_2nd_order_correction_plot.py --points points.json   (from the GUI tool)
 
 --weighted: weight the points by 1/sigma^2, sigma = uncertainty of the simulated
 frequency from the m/q uncertainties (NUBASE (+) NIST) of the ion and the
@@ -38,6 +39,7 @@ The default spreadsheet is data/<experiment>/rionid/186hf_rionid-v8_PID.xlsx.
 """
 import argparse
 import datetime
+import json
 import os
 import re
 import sys
@@ -202,13 +204,139 @@ def save_profile(name, make_default, coeffs, uncs, fit_info):
     return msg + ". Restart open tools / reload Theia to see it."
 
 
+def draw_figure(names, x, y, fit_mask, x0, ref_ion, ref_f, s1, s2, abc, dabc, rms, chi2ndf,
+                weighted=False, sig=None, mode="unweighted", controls=True, title=None):
+    """The correction figure (f_diff vs f_sim with labels, fit, coefficient box,
+    residuals).  Returns (fig, gridspec); with controls the gridspec has two
+    extra rows for the profile controls."""
+    names = pd.Series(list(names)).reset_index(drop=True)
+    x, y = np.asarray(x, float), np.asarray(y, float)
+    fit_mask = np.asarray(fit_mask, bool)
+    sig = np.full(len(x), np.nan) if sig is None else np.asarray(sig, float)
+    (c2, c1, c0), (dc2, dc1, dc0) = abc, dabc
+    resid = y - (s1 * (x - x0) + s2 * (x - x0) ** 2)
+    # ---- Plot ----
+    # constrained layout re-fits margins to the window size, so labels never get cut off
+    fig = plt.figure(figsize=(22, 16), layout="constrained")
+    fig.get_layout_engine().set(hspace=0.0, h_pad=0.05)
+    gs = (fig.add_gridspec(4, 1, height_ratios=[3, 1, 0.16, 0.1]) if controls
+          else fig.add_gridspec(2, 1, height_ratios=[3, 1]))
+    ax = fig.add_subplot(gs[0])
+    axr = fig.add_subplot(gs[1], sharex=ax)
+    ax.tick_params(labelbottom=False)
+    yerr = sig[fit_mask] if weighted else None
+    ax.errorbar(x[fit_mask], y[fit_mask], yerr=yerr, fmt="o", color="C0", zorder=3,
+                capsize=4 if weighted else 0, label="Data")
+    ax.scatter([x0], [0], color="C3", marker="*", s=360, zorder=4,
+               label=f"Anchor ({pretty_ion(ref_ion)}, $f_{{exp}}$ = {ref_f!r} Hz)")
+
+    # Group nearby points into clusters and stack their labels to avoid overlap
+    xr, yr = np.ptp(x) or 1.0, np.ptp(y) or 1.0
+    order = np.argsort(x)
+    clusters, cur = [], [order[0]]
+    for i in order[1:]:
+        j = cur[-1]
+        if abs(x[i] - x[j]) < 0.02 * xr and abs(y[i] - y[j]) < 0.05 * yr:
+            cur.append(i)
+        else:
+            clusters.append(cur)
+            cur = [i]
+    clusters.append(cur)
+    # Split each cluster: upper half of labels go above-left of the fit line,
+    # the rest below-right. Every label gets a leader line to its point.
+    line_kw = dict(arrowstyle="-", color="black", lw=1.2, shrinkA=2, shrinkB=3)
+    for cl in clusters:
+        cl = sorted(cl, key=lambda k: y[k])  # ascending f_diff
+        n_above = (len(cl) + 1) // 2 if len(cl) > 1 else 0
+        above, below = cl[len(cl) - n_above:], cl[:len(cl) - n_above][::-1]
+        # Above-line labels: rightmost point gets the rightmost (and highest) label,
+        # so leader lines fan out without crossing
+        above = sorted(above, key=lambda k: x[k], reverse=True)
+        for i, k in enumerate(above):
+            ax.annotate(pretty_ion(names[k]), (x[k], y[k]), textcoords="offset points",
+                        xytext=(-20 - 90 * i, 45 + 20 * (len(above) - 1 - i)), fontsize=18,
+                        ha="center", va="center", arrowprops=dict(**line_kw, relpos=(0.5, 0)))
+        for i, k in enumerate(below):   # highest first, stacked downwards
+            ax.annotate(pretty_ion(names[k]), (x[k], y[k]), textcoords="offset points",
+                        xytext=(40 + 20 * i, -30 - 34 * i), fontsize=18, ha="left", va="center",
+                        arrowprops=dict(**line_kw, relpos=(0, 0.5)))
+
+    pad = 0.05 * (x.max() - x.min())
+    xx = np.linspace(x.min() - pad, x.max() + pad, 500)
+    ax.plot(xx, s1 * (xx - x0) + s2 * (xx - x0) ** 2, color="C1",
+            label=f"Anchored 2nd-order fit ({mode})")
+    ax.axhline(0, color="grey", lw=0.8, ls="--")
+
+    txt = (
+        r"Expanded: $f_{diff} = a x^2 + b x + c$" "\n"
+        rf"  $a$ = {c2:.6e} ± {dc2:.2e} Hz$^{{-1}}$" "\n"
+        rf"  $b$ = {c1:.6e} ± {dc1:.2e}" "\n"
+        rf"  $c$ = {c0:.6e} ± {dc0:.2e} Hz" "\n\n"
+        rf"RMS residual = {rms:.3f} Hz"
+        + (f"\nχ²/ndf = {chi2ndf:.3g}" if weighted else "")
+    )
+    ax.text(0.02, 0.98, txt, transform=ax.transAxes, va="top", ha="left", fontsize=18,
+            family="monospace", bbox=dict(boxstyle="round", fc="white", ec="grey", alpha=0.9))
+
+    ax.set_ylabel(r"$f_{diff} = f_{exp,true} - f_{sim,true}$ (Hz)")
+    ax.set_title(title or "Second-order Correction (masses incl. electron binding)")
+    ax.ticklabel_format(axis="x", useOffset=False, style="plain")
+    ax.legend(loc="lower right")
+    ax.grid(alpha=0.3)
+
+    # ---- Residuals panel ----
+    axr.errorbar(x[fit_mask], resid[fit_mask], yerr=yerr, fmt="o", color="C0", zorder=3,
+                 capsize=4 if weighted else 0)
+    axr.scatter([x0], [resid[~fit_mask][0]], color="C3", marker="*", s=360, zorder=4)
+    axr.axhline(0, color="C1", lw=1.5)
+    axr.set_xlabel(r"$f_{sim,true}$ (Hz)")
+    axr.set_ylabel("Residual (Hz)")
+    axr.ticklabel_format(axis="x", useOffset=False, style="plain")
+    axr.grid(alpha=0.3)
+    fig.align_ylabels([ax, axr])
+
+    return fig, gs
+
+
+def plot_points(path):
+    """--points FILE: the same figure for points given in a JSON file (from the
+    GUI correction tool: one harmonic's assigned peaks), without the profile
+    controls.  JSON: {"points": [{"ion", "x", "y"}] (x = f_sim, y = f_diff,
+    revolution Hz), "x0", "ref_ion", "ref_f", "h", "file"}."""
+    with open(path, encoding="utf-8") as fh:
+        d = json.load(fh)
+    pts = d["points"]
+    names = [d["ref_ion"]] + [p["ion"] for p in pts]
+    x = np.array([d["x0"]] + [p["x"] for p in pts], float)
+    y = np.array([0.0] + [p["y"] for p in pts], float)
+    fit_mask = np.array([False] + [True] * len(pts))
+    res = corrections.fit_correction(x[fit_mask], y[fit_mask], float(d["x0"]))
+    print(f"{len(pts)} points + anchor {d['ref_ion']} (h{d['h']}), "
+          f"a = {res['abc'][0]:.16e}, b = {res['abc'][1]:.16e}, c = {res['abc'][2]:.16e}, "
+          f"RMS = {res['rms']:.3f} Hz (rev)")
+    title = (f"Second-order Correction h{d['h']} – {os.path.basename(d.get('file') or '')}"
+             "\n(masses incl. electron binding, GUI assignments)")
+    draw_figure(names, x, y, fit_mask, float(d["x0"]), d["ref_ion"], d["ref_f"], res["s1"],
+                res["s2"], res["abc"], res["abc_unc"], res["rms"], res["chi2_ndf"],
+                controls=False, title=title)
+    try:
+        os.remove(path)                    # a temporary file written by the GUI
+    except OSError:
+        pass
+    plt.show()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("spreadsheet", nargs="?", default=os.path.join(paths.rionid(), DEFAULT_FILE))
     ap.add_argument("sheet", nargs="?", default=DEFAULT_SHEET)
     ap.add_argument("--weighted", action="store_true",
                     help="weight points by 1/sigma^2 of the simulated frequency")
+    ap.add_argument("--points", metavar="JSON",
+                    help="plot points from a JSON file (GUI correction tool) instead of a sheet")
     args = ap.parse_args()
+    if args.points:
+        return plot_points(args.points)
 
     df, ref_ion, ref_h_cell = read_sheet(args.spreadsheet, args.sheet)
     gamma_t = float(physics.load_shared()["gamma_t"])
@@ -268,84 +396,9 @@ def main():
     if args.weighted:
         print(f"chi2/ndf = {chi2ndf:.3g} (simulation uncertainties only)")
 
-    # ---- Plot ----
-    # constrained layout re-fits margins to the window size, so labels never get cut off
-    fig = plt.figure(figsize=(22, 16), layout="constrained")
-    fig.get_layout_engine().set(hspace=0.0, h_pad=0.05)
-    gs = fig.add_gridspec(4, 1, height_ratios=[3, 1, 0.16, 0.1])
-    ax = fig.add_subplot(gs[0])
-    axr = fig.add_subplot(gs[1], sharex=ax)
-    ax.tick_params(labelbottom=False)
-    yerr = sig[fit_mask] if args.weighted else None
-    ax.errorbar(x[fit_mask], y[fit_mask], yerr=yerr, fmt="o", color="C0", zorder=3,
-                capsize=4 if args.weighted else 0, label="Data")
-    ax.scatter([x0], [0], color="C3", marker="*", s=360, zorder=4,
-               label=f"Anchor ({pretty_ion(ref_ion)}, $f_{{exp}}$ = {ref_f!r} Hz)")
-
-    # Group nearby points into clusters and stack their labels to avoid overlap
-    xr, yr = np.ptp(x) or 1.0, np.ptp(y) or 1.0
-    order = np.argsort(x)
-    clusters, cur = [], [order[0]]
-    for i in order[1:]:
-        j = cur[-1]
-        if abs(x[i] - x[j]) < 0.02 * xr and abs(y[i] - y[j]) < 0.05 * yr:
-            cur.append(i)
-        else:
-            clusters.append(cur)
-            cur = [i]
-    clusters.append(cur)
-    # Split each cluster: upper half of labels go above-left of the fit line,
-    # the rest below-right. Every label gets a leader line to its point.
-    line_kw = dict(arrowstyle="-", color="black", lw=1.2, shrinkA=2, shrinkB=3)
-    for cl in clusters:
-        cl = sorted(cl, key=lambda k: y[k])  # ascending f_diff
-        n_above = (len(cl) + 1) // 2 if len(cl) > 1 else 0
-        above, below = cl[len(cl) - n_above:], cl[:len(cl) - n_above][::-1]
-        # Above-line labels: rightmost point gets the rightmost (and highest) label,
-        # so leader lines fan out without crossing
-        above = sorted(above, key=lambda k: x[k], reverse=True)
-        for i, k in enumerate(above):
-            ax.annotate(pretty_ion(df["Ion"][k]), (x[k], y[k]), textcoords="offset points",
-                        xytext=(-20 - 90 * i, 45 + 20 * (len(above) - 1 - i)), fontsize=18,
-                        ha="center", va="center", arrowprops=dict(**line_kw, relpos=(0.5, 0)))
-        for i, k in enumerate(below):   # highest first, stacked downwards
-            ax.annotate(pretty_ion(df["Ion"][k]), (x[k], y[k]), textcoords="offset points",
-                        xytext=(40 + 20 * i, -30 - 34 * i), fontsize=18, ha="left", va="center",
-                        arrowprops=dict(**line_kw, relpos=(0, 0.5)))
-
-    pad = 0.05 * (x.max() - x.min())
-    xx = np.linspace(x.min() - pad, x.max() + pad, 500)
-    ax.plot(xx, s1 * (xx - x0) + s2 * (xx - x0) ** 2, color="C1",
-            label=f"Anchored 2nd-order fit ({mode})")
-    ax.axhline(0, color="grey", lw=0.8, ls="--")
-
-    txt = (
-        r"Expanded: $f_{diff} = a x^2 + b x + c$" "\n"
-        rf"  $a$ = {c2:.6e} ± {dc2:.2e} Hz$^{{-1}}$" "\n"
-        rf"  $b$ = {c1:.6e} ± {dc1:.2e}" "\n"
-        rf"  $c$ = {c0:.6e} ± {dc0:.2e} Hz" "\n\n"
-        rf"RMS residual = {rms:.3f} Hz"
-        + (f"\nχ²/ndf = {chi2ndf:.3g}" if args.weighted else "")
-    )
-    ax.text(0.02, 0.98, txt, transform=ax.transAxes, va="top", ha="left", fontsize=18,
-            family="monospace", bbox=dict(boxstyle="round", fc="white", ec="grey", alpha=0.9))
-
-    ax.set_ylabel(r"$f_{diff} = f_{exp,true} - f_{sim,true}$ (Hz)")
-    ax.set_title("Second-order Correction (masses incl. electron binding)")
-    ax.ticklabel_format(axis="x", useOffset=False, style="plain")
-    ax.legend(loc="lower right")
-    ax.grid(alpha=0.3)
-
-    # ---- Residuals panel ----
-    axr.errorbar(x[fit_mask], resid[fit_mask], yerr=yerr, fmt="o", color="C0", zorder=3,
-                 capsize=4 if args.weighted else 0)
-    axr.scatter([x0], [resid[~fit_mask][0]], color="C3", marker="*", s=360, zorder=4)
-    axr.axhline(0, color="C1", lw=1.5)
-    axr.set_xlabel(r"$f_{sim,true}$ (Hz)")
-    axr.set_ylabel("Residual (Hz)")
-    axr.ticklabel_format(axis="x", useOffset=False, style="plain")
-    axr.grid(alpha=0.3)
-    fig.align_ylabels([ax, axr])
+    fig, gs = draw_figure(df["Ion"], x, y, fit_mask, x0, ref_ion, ref_f, s1, s2, (c2, c1, c0),
+                          (dc2, dc1, dc0), rms, chi2ndf, weighted=args.weighted, sig=sig,
+                          mode=mode)
 
     # ---- Save as correction profile ----
     fit_info = {

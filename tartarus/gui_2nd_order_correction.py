@@ -825,6 +825,12 @@ def serve_layout():
                     html.Div([html.Span(id="g-assign-head", children="Assignments"),
                               html.Div([html.Button("Calculate correction", id="g-calc",
                                                     className="btn primary", n_clicks=0),
+                                        html.Button("Plot (2nd-order correction script)",
+                                                    id="g-mplplot", className="btn", n_clicks=0,
+                                                    title="Open the figure of tartarus/new_2nd_order_"
+                                                          "correction_plot.py for the assigned peaks of "
+                                                          "this harmonic (its own window, with zoom "
+                                                          "and save)"),
                                         html.Button("Clear assignments (this harmonic)",
                                                     id="g-clear", className="btn", n_clicks=0)])],
                              className="head"),
@@ -1384,6 +1390,45 @@ def calculate(n, state, *values):
     state = dict(state, fit=dict(state.get("fit") or {}, **{str(m["h"]): r}))
     save_session(state)
     return state, f"✓ h{m['h']} calculated.", n
+
+
+CORR_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "new_2nd_order_correction_plot.py")
+
+
+@app.callback(
+    Output("g-calc-msg", "children", allow_duplicate=True),
+    Input("g-mplplot", "n_clicks"), State("g-state", "data"), *SETTING_STATES,
+    prevent_initial_call=True,
+)
+def matplotlib_plot(_n, state, *values):
+    """The old script's figure for the assigned peaks of the shown harmonic, in
+    its own window (a child process, so it closes with this tool)."""
+    import subprocess
+    import tempfile
+    import time
+    if not state or not state.get("file"):
+        return "Open a spectrum first."
+    try:
+        s = _settings(values, state)
+        m = model(s, state)
+        r = fit_harmonic(s, state, m)
+    except Exception as exc:
+        return f"⚠ {exc}"
+    fd, path = tempfile.mkstemp(prefix="gui_corr_points_", suffix=".json")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump({"points": [{"ion": p["ion"], "x": p["x"], "y": p["y"]} for p in r["points"]],
+                   "x0": r["x0"], "ref_ion": s["ref_name"], "ref_f": r["ref_f_h"], "h": r["h"],
+                   "file": state["file"]}, fh)
+    err = tempfile.TemporaryFile()
+    proc = subprocess.Popen([sys.executable, CORR_SCRIPT, "--points", path],
+                            cwd=paths.REPO_ROOT, stderr=err)
+    time.sleep(1.5)
+    if proc.poll() not in (None, 0):
+        err.seek(0)
+        tail = err.read().decode(errors="replace").strip().splitlines()[-3:]
+        return "⚠ The plot window failed: " + " ".join(tail)
+    return f"Opened the plot window for h{r['h']} ({r['n']} assigned ions)."
 
 
 @app.callback(
