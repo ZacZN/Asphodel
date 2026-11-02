@@ -75,7 +75,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 import dash
-from dash import dcc, html, dash_table, Input, Output, State, ctx
+from dash import dcc, html, dash_table, Input, Output, State, ALL, ctx
 
 APP_NAME = "GUI Second Order Correction"
 PORT = 8056
@@ -92,17 +92,17 @@ MAX_HOVER_LINES = 600       # lines in view that get a tooltip along their heigh
 NEW_PROFILE = "__new__"
 
 TOOL_DEFAULTS = {
-    "ref_name": "", "ref_harmonic": 0, "gamma_t": 0.0, "harmonics": "",
+    "ref_name": "", "ref_harmonic": 0, "gamma_t": 0.0,
     "z_lims": "", "n_lims": "", "el1": "", "el2": "", "mq_width": 0.0,
     "ref_search_hz": 0.0,
     "peak_window_hz": 100.0,     # ± window for the assigned peaks
     "file": "",                  # last spectrum opened
 }
-SETTING_KEYS = ["ref_name", "ref_harmonic", "gamma_t", "harmonics", "z_lims", "n_lims",
+SETTING_KEYS = ["ref_name", "ref_harmonic", "gamma_t", "z_lims", "n_lims",
                 "el1", "el2", "mq_width", "ref_search_hz", "peak_window_hz"]
 LABELS = {
     "ref_name": "Reference ion (strongest peak)", "ref_harmonic": "Reference harmonic",
-    "gamma_t": "γ_t", "harmonics": "Harmonics", "z_lims": "Z min, max", "n_lims": "N min, max",
+    "gamma_t": "γ_t", "z_lims": "Z min, max", "n_lims": "N min, max",
     "el1": "el1 (A, Z)", "el2": "el2 (A, Z)", "mq_width": "m/q window (±)",
     "ref_search_hz": "Ref. peak search in other harmonics ± (Hz)",
     "peak_window_hz": "Peak window for assignments ± (Hz)",
@@ -150,7 +150,7 @@ def _session_key(path):
     return os.path.realpath(os.path.expanduser(path)) if path else ""
 
 
-SESSION_KEYS = ("h", "k", "offsets", "ref_override", "assign", "fit")
+SESSION_KEYS = ("h", "harmonics", "k", "offsets", "ref_override", "assign", "fit")
 
 
 def load_session(path):
@@ -181,7 +181,8 @@ def new_state(path, saved=None):
                                                       "gamma_t", "ref_search_hz",
                                                       "peak_window_hz", "time")}, h=int(h))
                for h, r in fit["harmonics"].items()}
-    return {"file": path or "", "h": saved.get("h"), "k": saved.get("k") or {},
+    return {"file": path or "", "h": saved.get("h"), "harmonics": saved.get("harmonics"),
+            "k": saved.get("k") or {},
             "offsets": saved.get("offsets") or {}, "ref_override": saved.get("ref_override") or {},
             "assign": saved.get("assign") or {}, "fit": fit, "selected": None}
 
@@ -214,11 +215,9 @@ def parse_settings(raw):
         raise ValueError("reference ion is empty")
     s["ref_harmonic"] = int(_f(raw.get("ref_harmonic"), "reference harmonic"))
     s["gamma_t"] = _f(raw.get("gamma_t"), "γ_t")
-    s["harmonics"] = sorted(set(_ints(raw.get("harmonics"), None, "harmonics")))
-    if not s["harmonics"]:
-        raise ValueError("harmonics list is empty")
-    if s["ref_harmonic"] not in s["harmonics"]:
-        s["harmonics"] = sorted(s["harmonics"] + [s["ref_harmonic"]])
+    if s["ref_harmonic"] <= 0:
+        raise ValueError("the reference harmonic must be > 0")
+    s["harmonics"] = [s["ref_harmonic"]]       # the spectrum's list: state_harmonics()
     for k, n in (("z_lims", 2), ("n_lims", 2), ("el1", 2), ("el2", 2)):
         s[k] = _ints(raw.get(k), n, LABELS[k])
     s["mq_width"] = _f(raw.get("mq_width"), "m/q window")
@@ -227,6 +226,18 @@ def parse_settings(raw):
     if s["peak_window_hz"] <= 0:
         raise ValueError("the peak window must be > 0")
     return s
+
+
+def state_harmonics(state, ref_h):
+    """The harmonics listed for this spectrum: the reference harmonic plus the
+    ones added with ＋ (saved in the session).  Sessions from before the ＋
+    button: the reference harmonic plus every harmonic with work in it."""
+    hs = (state or {}).get("harmonics")
+    if hs is None:
+        hs = {int(h) for d in ("k", "ref_override", "fit") for h in ((state or {}).get(d) or {})}
+        hs |= {split_key(q)[1] for d in ("assign", "offsets") for q in ((state or {}).get(d) or {})}
+    out = {int(h) for h in hs} | {int(ref_h)}
+    return [int(ref_h)] + sorted(h for h in out if h != int(ref_h))
 
 
 def current_h(s, state):
@@ -656,7 +667,14 @@ body {{ font-family: system-ui, sans-serif; margin: 0; background: #fff; color: 
 .side label {{ display: block; margin: 6px 0 2px; color: #444; }}
 .side input[type=text] {{ width: 100%; box-sizing: border-box; padding: 3px 6px;
                          border: 1px solid #bbb; border-radius: 3px; font-size: 13px; }}
-.harm label {{ display: inline-block; margin: 2px 12px 2px 0; font-size: 15px; font-weight: 600; }}
+.harm {{ display: flex; flex-wrap: wrap; gap: 6px; }}
+.chip {{ display: inline-flex; border: 1px solid #999; border-radius: 14px; overflow: hidden;
+         background: #fff; }}
+.chip.on {{ border-color: {ACCENT}; }}
+.chip button {{ border: none; background: none; cursor: pointer; font-size: 14px; padding: 3px 9px; }}
+.chip-h.on {{ background: {ACCENT}; color: #fff; font-weight: 600; }}
+.chip-x {{ color: #777; border-left: 1px solid #ddd !important; padding: 3px 7px !important; }}
+.chip-x:hover {{ color: #b91c1c; }}
 .main {{ padding: 12px 18px; min-width: 0; }}
 .box {{ border: 1px solid black; border-radius: 4px; margin-bottom: 14px; }}
 .box > .head {{ background: {PALE}; border-bottom: 1px solid {LINE}; padding: 6px 10px;
@@ -690,13 +708,23 @@ app.index_string = app.index_string.replace(
 icon.use_in_dash(app, "gui_correction")      # core/icons/gui_correction.png, else asphodel.png
 
 
-def _harm_options(cfg):
-    try:
-        s = parse_settings(cfg)
-    except ValueError:
-        return [], None
-    return [{"label": f" h{h}" + (" (ref)" if h == s["ref_harmonic"] else ""), "value": h}
-            for h in s["harmonics"]], s
+def harmonic_bar(state, ref_h):
+    """One chip per listed harmonic (click = show it; × = take it off the list,
+    its work stays in the session), the reference harmonic first, without ×."""
+    cur = (state or {}).get("h")
+    chips = []
+    for h in state_harmonics(state, ref_h):
+        on = h == cur
+        kids = [html.Button(f"h{h}" + (" (ref)" if h == ref_h else ""),
+                            id={"type": "g-hsel", "h": h}, n_clicks=0,
+                            className="chip-h" + (" on" if on else ""),
+                            title=f"Show h{h}")]
+        if h != ref_h:
+            kids.append(html.Button("×", id={"type": "g-hdel", "h": h}, n_clicks=0,
+                                    className="chip-x", title=f"Take h{h} off the list "
+                                                              f"(its work is kept)"))
+        chips.append(html.Span(kids, className="chip" + (" on" if on else "")))
+    return chips
 
 
 def serve_layout():
@@ -705,8 +733,15 @@ def serve_layout():
     values = [o["value"] for o in files]
     f = cfg.get("file") if cfg.get("file") in values else (values[0] if values else "")
     state = load_session(f) if f else new_state("")
-    hopts, s = _harm_options(cfg)
-    h = current_h(s, state) if s else None
+    try:
+        ref_h = int(float(cfg.get("ref_harmonic") or 0)) or None
+    except (TypeError, ValueError):
+        ref_h = None
+    if ref_h:
+        state["harmonics"] = state_harmonics(state, ref_h)
+        h = state.get("h") if state.get("h") in state["harmonics"] else ref_h
+    else:
+        h = None
     state["h"] = h
     fields = []
     for k in SETTING_KEYS:
@@ -723,6 +758,7 @@ def serve_layout():
         dcc.Store(id="g-sig", data=None),
         dcc.Store(id="g-fitstamp", data=0),
         dcc.Store(id="g-pconfirm", data=None),
+        dcc.Store(id="g-hcur", data=h),          # harmonic shown (for the fit panel)
         html.Div(id="_g-hook", style={"display": "none"}),
         html.Div(id="g-readout"),
         html.Div([html.H1(APP_NAME), html.Span(f"experiment {paths.experiment()}", className="exp")],
@@ -734,7 +770,13 @@ def serve_layout():
                              placeholder="No .npz in the connected spectra folders",
                              style={"fontSize": "12px"}),
                 html.H3("Harmonic"),
-                dcc.RadioItems(id="g-h", options=hopts, value=h, className="harm"),
+                html.Div(harmonic_bar(state, ref_h) if ref_h else [], id="g-hbar", className="harm"),
+                html.Div([
+                    dcc.Input(id="g-hnew", type="number", min=1, step=1, placeholder="h",
+                              debounce=False, n_submit=0, style={"width": "80px"}),
+                    html.Button("＋", id="g-hadd", className="btn primary", n_clicks=0,
+                                title="Add this harmonic to the list"),
+                ], className="row", style={"marginTop": "6px"}),
                 html.Div("Each harmonic keeps its own stretch, moved lines, assignments and fit.",
                          className="note"),
                 html.H3("Dragging"),
@@ -829,8 +871,10 @@ SETTING_INPUTS = [Input(f"g-{k}", "value") for k in SETTING_KEYS]
 SETTING_STATES = [State(f"g-{k}", "value") for k in SETTING_KEYS]
 
 
-def _settings(values):
-    return parse_settings(dict(zip(SETTING_KEYS, values)))
+def _settings(values, state=None):
+    s = parse_settings(dict(zip(SETTING_KEYS, values)))
+    s["harmonics"] = state_harmonics(state, s["ref_harmonic"])
+    return s
 
 
 @app.callback(Output("g-msg", "children", allow_duplicate=True), *SETTING_INPUTS,
@@ -840,10 +884,14 @@ def persist_settings(*values):
     return dash.no_update
 
 
-@app.callback(Output("g-h", "options"), *SETTING_INPUTS, prevent_initial_call=True)
-def harmonic_options(*values):
-    opts, s = _harm_options(dict(zip(SETTING_KEYS, values)))
-    return opts if s else dash.no_update
+@app.callback(Output("g-hbar", "children"), Input("g-state", "data"),
+              Input("g-ref_harmonic", "value"), prevent_initial_call=True)
+def draw_harmonic_bar(state, ref_h):
+    try:
+        ref_h = int(float(ref_h))
+    except (TypeError, ValueError):
+        return dash.no_update
+    return harmonic_bar(state, ref_h)
 
 
 # ---------------------------------------------------------------------------
@@ -989,7 +1037,7 @@ def draw(state, view, mode, *values):
         return go.Figure(), [], "No spectrum", "", "", "", [], "", None, "Assignments"
     title = os.path.basename(state["file"])
     try:
-        s = _settings(values)
+        s = _settings(values, state)
         m = model(s, state)
     except Exception as exc:
         return go.Figure(), [], title, "", f"⚠ {exc}", "", nu, "", None, nu
@@ -1125,64 +1173,101 @@ def _assign(state, s, m, key, centre):
 
 
 @app.callback(
-    Output("g-state", "data"), Output("g-msg", "children"),
+    Output("g-state", "data"), Output("g-msg", "children"), Output("g-hcur", "data"),
     Input("g-drag", "data"), Input("g-graph", "clickData"), Input("g-click", "data"),
     Input("g-assign", "n_clicks"), Input("g-unassign", "n_clicks"), Input("g-deselect", "n_clicks"),
     Input("g-reset", "n_clicks"), Input("g-clear", "n_clicks"), Input("g-table", "data_timestamp"),
-    Input("g-file", "value"), Input("g-h", "value"),
+    Input("g-file", "value"),
+    Input({"type": "g-hsel", "h": ALL}, "n_clicks"), Input({"type": "g-hdel", "h": ALL}, "n_clicks"),
+    Input("g-hadd", "n_clicks"), Input("g-hnew", "n_submit"),
+    State("g-hnew", "value"),
     State("g-table", "data"), State("g-state", "data"), State("g-keys", "data"),
     State("g-mode", "value"), *SETTING_STATES,
     prevent_initial_call=True,
 )
-def update_state(drag, click, sclick, _a, _u, _d, _r, _c, _ts, file, harm, table, state, keys,
-                 mode, *values):
+def update_state(drag, click, sclick, _a, _u, _d, _r, _c, _ts, file, _hs, _hd, _ha, _hn, hnew,
+                 table, state, keys, mode, *values):
     nu = dash.no_update
     trig = ctx.triggered_id
     state = dict(state or new_state(file))
+    try:
+        ref_h = int(float(values[SETTING_KEYS.index("ref_harmonic")]))
+    except (TypeError, ValueError):
+        ref_h = None
     if trig == "g-file":
         if file == state.get("file"):
-            return nu, nu
+            return nu, nu, nu
         save_settings({"file": file})
         new = load_session(file)
-        new["h"] = state.get("h") if new.get("h") is None else new["h"]
-        return new, f"Opened {os.path.basename(file)}."
-    if trig == "g-h":
-        if harm is None or harm == state.get("h"):
-            return nu, nu
-        state["h"], state["selected"] = int(harm), None
+        if ref_h:
+            new["harmonics"] = state_harmonics(new, ref_h)
+            if new.get("h") not in new["harmonics"]:
+                new["h"] = ref_h
+        return new, f"Opened {os.path.basename(file)}.", new.get("h")
+    if isinstance(trig, dict) and trig.get("type") in ("g-hsel", "g-hdel"):
+        if not (ctx.triggered and ctx.triggered[0]["value"]) or not ref_h:
+            return nu, nu, nu                # buttons just (re)drawn, not clicked
+        h = int(trig["h"])
+        hs = state_harmonics(state, ref_h)
+        if trig["type"] == "g-hsel":
+            if h == state.get("h"):
+                return nu, nu, nu
+            state["h"], state["selected"] = h, None
+            msg = ""
+        else:
+            state["harmonics"] = [x for x in hs if x != h]
+            msg = f"h{h} taken off the list (its assignments and fit are kept: ＋ it again)."
+            if state.get("h") == h:
+                state["h"], state["selected"] = ref_h, None
         save_session(state)
-        return state, ""
+        return state, msg, state["h"]
+    if trig in ("g-hadd", "g-hnew"):
+        if not ref_h:
+            return nu, "⚠ Set the reference harmonic first.", nu
+        try:
+            h = int(hnew)
+            if h <= 0 or h != float(hnew):
+                raise ValueError
+        except (TypeError, ValueError):
+            return nu, "Type a harmonic number (a positive integer) next to ＋.", nu
+        hs = state_harmonics(state, ref_h)
+        if h not in hs:
+            state["harmonics"] = hs + [h]
+        state["harmonics"] = state_harmonics(state, ref_h)
+        state["h"], state["selected"] = h, None
+        save_session(state)
+        return state, (f"h{h} added." if h not in hs else f"h{h} is already listed."), h
     if not state.get("file"):
-        return nu, nu
+        return nu, nu, nu
     # cheap checks first: zoom / pan relayouts (no shape moved) do nothing here
     moved = {}
     if trig == "g-drag":
         moved = _shape_moves((drag or {}).get("moves"))
         if not moved:
-            return nu, nu
+            return nu, nu, nu
     if trig == "g-click":
         if not sclick:
-            return nu, nu
+            return nu, nu, nu
         if not state.get("selected"):
-            return nu, "Select a line first (click its ▼ marker)."
+            return nu, "Select a line first (click its ▼ marker).", nu
     try:
-        s = _settings(values)
+        s = _settings(values, state)
         m = model(s, state)
     except Exception as exc:
-        return nu, f"⚠ {exc}"
+        return nu, f"⚠ {exc}", nu
     h = m["h"]
     msg = ""
     if moved:
         msg = _drag(moved, keys or [], state, s, m, mode)
         if msg is None:                    # nothing moved (a click on a line)
-            return nu, nu
+            return nu, nu, nu
     elif trig == "g-graph":
         pt = (click or {}).get("points", [{}])[0]
         key = pt.get("customdata")
         if isinstance(key, list):
             key = key[0] if key else None
         if not key or state.get("selected") == key:
-            return nu, nu
+            return nu, nu, nu
         state["selected"] = key
     elif trig == "g-click":
         msg = _assign(state, s, m, state["selected"], float((sclick or {}).get("x")))
@@ -1190,7 +1275,7 @@ def update_state(drag, click, sclick, _a, _u, _d, _r, _c, _ts, file, harm, table
         sel = state.get("selected")
         lines = m["lines"].set_index("key")
         if not sel or sel not in lines.index:
-            return nu, "Select a line first (click its ▼ marker)."
+            return nu, "Select a line first (click its ▼ marker).", nu
         msg = _assign(state, s, m, sel, float(lines.loc[sel, "f_show"]))
     elif trig == "g-unassign":
         sel = state.get("selected")
@@ -1201,7 +1286,7 @@ def update_state(drag, click, sclick, _a, _u, _d, _r, _c, _ts, file, harm, table
             state["ref_override"].pop(str(h))
             msg = "Reference line back to the automatic search."
         else:
-            return nu, "The selected line is not assigned."
+            return nu, "The selected line is not assigned.", nu
     elif trig == "g-deselect":
         state["selected"] = None
     elif trig == "g-reset":
@@ -1219,12 +1304,12 @@ def update_state(drag, click, sclick, _a, _u, _d, _r, _c, _ts, file, harm, table
         left = {r["key"] for r in (table or [])}
         gone = [q for q in (state.get("assign") or {}) if split_key(q)[1] == h and q not in left]
         if not gone:
-            return nu, nu
+            return nu, nu, nu
         for q in gone:
             state["assign"].pop(q, None)
         msg = "Removed " + ", ".join(q.replace("|", " h") for q in gone) + "."
     save_session(state)
-    return state, msg
+    return state, msg, nu
 
 
 # ---------------------------------------------------------------------------
@@ -1242,7 +1327,7 @@ def calculate(n, state, *values):
     if not state or not state.get("file"):
         return nu, "Open a spectrum first.", nu
     try:
-        s = _settings(values)
+        s = _settings(values, state)
         m = model(s, state)
         r = fit_harmonic(s, state, m)
     except Exception as exc:
@@ -1257,11 +1342,11 @@ def calculate(n, state, *values):
     Output("g-fit-graph", "style"), Output("g-fit-when", "children"),
     Output("g-fit-head", "children"), Output("g-psave", "children"),
     Output("g-calc-msg", "children", allow_duplicate=True),
-    Input("g-h", "value"), Input("g-fitstamp", "data"), Input("g-file", "value"),
+    Input("g-hcur", "data"), Input("g-fitstamp", "data"),
     State("g-state", "data"),
     prevent_initial_call="initial_duplicate",
 )
-def show_fit(h, _stamp, _file, state):
+def show_fit(h, _stamp, state):
     msg = dash.no_update if ctx.triggered_id == "g-fitstamp" else ""
     fits = (state or {}).get("fit") or {}
     head = f"Second-order correction h{h}"
@@ -1283,7 +1368,7 @@ def show_name_box(target):
 @app.callback(
     Output("g-pmsg", "children"), Output("g-ptarget", "options"), Output("g-ptarget", "value"),
     Output("g-pconfirm", "data"),
-    Input("g-psave", "n_clicks"), State("g-state", "data"), State("g-h", "value"),
+    Input("g-psave", "n_clicks"), State("g-state", "data"), State("g-hcur", "data"),
     State("g-ptarget", "value"), State("g-pname", "value"), State("g-pdefault", "value"),
     State("g-pconfirm", "data"),
     prevent_initial_call=True,
