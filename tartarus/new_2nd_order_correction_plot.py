@@ -165,20 +165,8 @@ def simulate(df, ref_ion, gamma_t):
 # Fit
 # ---------------------------------------------------------------------------
 
-def anchored_quadratic_fit(x, y, x0, sigma=None):
-    """Least squares for y = s1*dx + s2*dx^2 (no intercept), dx = x - x0.
-    With sigma: weighted by 1/sigma^2.  The covariance is scaled by the
-    residual variance (chi^2/ndf) in both cases."""
-    dx = x - x0
-    X = np.column_stack([dx, dx ** 2])
-    w = np.ones_like(y) if sigma is None else 1.0 / np.asarray(sigma, float)
-    Xw, yw = X * w[:, None], y * w
-    coef, *_ = np.linalg.lstsq(Xw, yw, rcond=None)
-    resid = y - X @ coef
-    dof = len(y) - X.shape[1]
-    s2 = np.sum((resid * w) ** 2) / dof if dof > 0 else np.nan
-    cov = s2 * np.linalg.inv(Xw.T @ Xw)
-    return coef, cov, resid, s2
+# anchored_quadratic_fit is shared with the GUI correction tool (core/corrections.py)
+anchored_quadratic_fit = corrections.anchored_quadratic_fit
 
 
 def pretty_ion(name):
@@ -207,7 +195,8 @@ def save_profile(name, make_default, coeffs, uncs, fit_info):
     msg = f"Saved profile '{prof['name']}'"
     print(f"\n{msg} in {corrections.profiles_path()}")
     if make_default:
-        physics.save_shared({"corr_a": float(c2), "corr_b": float(c1), "corr_c": float(c0)})
+        physics.save_shared({"corr_profile": prof["name"],
+                             "corr_a": float(c2), "corr_b": float(c1), "corr_c": float(c0)})
         msg += " and made it the default (physics.json)"
         print(f"a, b, c written to {physics.shared_path()}")
     return msg + ". Restart open tools / reload Theia to see it."

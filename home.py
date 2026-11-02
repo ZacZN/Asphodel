@@ -52,6 +52,7 @@ ACCENT, PALE, SIDE, LINE = "#f57d15", "#fff4ec", "#f9f9f9", "#dddddd"
 HOME_PORT = 8050
 THEIA_PORT = 8052
 SEGRE_PORT = 8054             # reference/segre_chart.py
+GUICORR_PORT = 8056           # tartarus/gui_2nd_order_correction.py
 
 # ===========================================================================
 # Tools
@@ -71,6 +72,9 @@ TOOLS = {
                         "Sum all 1-D spectra of a folder (raw and drift-aligned).", False),
     "correction_plot": ("Tartarus", "2nd-order correction", "tartarus/new_2nd_order_correction_plot.py",
                         "f_diff vs f_sim from a RionID table and the 2nd-order polynomial fit.", False),
+    "gui_correction":  ("Tartarus", "GUI Second Order Correction", "tartarus/gui_2nd_order_correction.py",
+                        "Simulated lines on a spectrum (strongest peak = reference): drag them into "
+                        "place, assign peaks, fit and save a correction per harmonic.", True),
     "levelschemer":    ("Elysium", "LevelSchemer", "elysium/levelschemer.py",
                         "Draw nuclear level schemes (Tk window).", False),
     "segre":           ("Reference", "Segrè chart", "reference/segre_chart.py",
@@ -116,6 +120,9 @@ def start_tool(key, args=()):
     if key == "segre" and _port_open(SEGRE_PORT):
         browser.open_url(f"http://127.0.0.1:{SEGRE_PORT}/")
         return "The Segrè chart is already running – opened it in the browser."
+    if key == "gui_correction" and _port_open(GUICORR_PORT):
+        browser.open_url(f"http://127.0.0.1:{GUICORR_PORT}/")
+        return "GUI Second Order Correction is already running – opened it in the browser."
     if single and running(key):
         return f"{name} is already running."
     exp = paths.experiment()
@@ -329,6 +336,9 @@ def tool_card(key):
         "levelschemer": [act("start", "levelschemer", "Open", "btn primary small",
                              title="Reopens the last scheme"),
                          act("stop", "levelschemer", "Stop all")],
+        "gui_correction": [act("start", "gui_correction", "Open", "btn primary small",
+                               title="Opens in a new tab, at the last spectrum"),
+                           act("stop", "gui_correction", "Stop")],
         "segre": [act("start", "segre", "Open", "btn primary small",
                       title="Opens the chart in a new tab"),
                   act("stop", "segre", "Stop")],
@@ -477,6 +487,7 @@ PHYS_LABELS = {
     "correction_enabled": "2nd-order correction", "corr_a": "a", "corr_b": "b", "corr_c": "c",
     "min_half_life": "Min T½", "min_half_life_unit": "T½ unit",
     "exclude_unknown_hl": "Exclude unknown T½",
+    "corr_profile": "Correction profile", "ref_search_hz": "Ref. peak search, other h ± (Hz)",
 }
 
 
@@ -501,14 +512,24 @@ def physics_panel():
         else:
             inp = dcc.Input(id={"type": "phys", "k": k}, type="text", value=_phys_text(k, sh[k]),
                             debounce=True)
+        if k == "corr_profile":
+            continue                       # drawn above a, b, c
         if k == "corr_a":
-            # correction profiles (core/corrections.py): picking one fills a, b, c
+            # correction profiles (core/corrections.py): the profile *name* is stored
+            # (physics.json "corr_profile"); a profile fills a, b, c (its general values)
+            # and they can only be typed in for "custom"
             profs = corrections.load_profiles()
+            r = corrections.resolve(sh.get("corr_profile"), sh["corr_a"], sh["corr_b"], sh["corr_c"],
+                                    profiles=profs)
             fields += [html.Label("Correction profile"),
-                       dcc.Dropdown(id="phys-corr-profile", options=corrections.options(profs),
-                                    value=corrections.match(sh["corr_a"], sh["corr_b"], sh["corr_c"],
-                                                            profiles=profs) or corrections.CUSTOM,
+                       dcc.Dropdown(id={"type": "phys", "k": "corr_profile"},
+                                    options=corrections.options(profs), value=r["name"],
                                     clearable=False, className="unit")]
+            if r["name"] != corrections.CUSTOM:
+                inp.disabled = True
+        if k in ("corr_b", "corr_c") and corrections.resolve(
+                sh.get("corr_profile"), sh["corr_a"], sh["corr_b"], sh["corr_c"])["name"] != corrections.CUSTOM:
+            inp.disabled = True
         fields += [html.Label(PHYS_LABELS.get(k, k)), inp]
         if k == "corr_c":
             fields += [html.Div(id="phys-corr-info", className="note",
@@ -1071,10 +1092,12 @@ def refresh_status(_n, ids):
     Output({"type": "phys", "k": "corr_a"}, "value"),
     Output({"type": "phys", "k": "corr_b"}, "value"),
     Output({"type": "phys", "k": "corr_c"}, "value"),
-    Output("phys-corr-profile", "value"),
-    Output("phys-corr-profile", "options"),
+    Output({"type": "phys", "k": "corr_a"}, "disabled"),
+    Output({"type": "phys", "k": "corr_b"}, "disabled"),
+    Output({"type": "phys", "k": "corr_c"}, "disabled"),
+    Output({"type": "phys", "k": "corr_profile"}, "options"),
     Output("phys-corr-info", "children"),
-    Input("phys-corr-profile", "value"),
+    Input({"type": "phys", "k": "corr_profile"}, "value"),
     Input({"type": "phys", "k": "corr_a"}, "value"),
     Input({"type": "phys", "k": "corr_b"}, "value"),
     Input({"type": "phys", "k": "corr_c"}, "value"),
@@ -1082,31 +1105,35 @@ def refresh_status(_n, ids):
     Input({"type": "phys", "k": "ref_harmonic"}, "value"),
     Input({"type": "phys", "k": "ref_frequency"}, "value"),
     Input({"type": "phys", "k": "gamma_t"}, "value"),
+    Input({"type": "phys", "k": "harmonics"}, "value"),
     Input("tick", "n_intervals"),
 )
-def corr_profile(name, a, b, c, ref_name, ref_h, ref_f, gamma_t, _tick):
-    """Correction profile dropdown: picking a profile fills a, b, c; typing a, b, c
-    selects the matching profile (or 'custom').  Shows the profile's fit and
-    warnings if it was fitted with another setup."""
+def corr_profile(name, a, b, c, ref_name, ref_h, ref_f, gamma_t, harmonics, _tick):
+    """Correction profile dropdown: a profile fills a, b, c with its general values
+    (boxes locked); 'custom' unlocks them.  Shows the profile's fit, its
+    per-harmonic coefficients and warnings if it was fitted with another setup."""
     nu = dash.no_update
     profs = corrections.load_profiles()
     opts = corrections.options(profs)
+    p = next((q for q in profs if q["name"] == name), None) if name != corrections.CUSTOM else None
     out_abc = [nu, nu, nu]
-    if ctx.triggered_id == "phys-corr-profile" and name != corrections.CUSTOM:
-        p = next((q for q in profs if q["name"] == name), None)
-        if p is not None:
-            a, b, c = p["a"], p["b"], p["c"]
-            out_abc = [physics._fmt_num(a), physics._fmt_num(b), physics._fmt_num(c)]
-    match = corrections.match(a, b, c, profiles=profs)
-    sel = match or corrections.CUSTOM
-    p = next((q for q in profs if q["name"] == match), None)
-    if p is None:
-        info = "Values typed in (no profile)."
+    if p is not None:
+        if not all(corrections._same(x, y) for x, y in zip((a, b, c), (p["a"], p["b"], p["c"]))):
+            out_abc = [physics._fmt_num(p["a"]), physics._fmt_num(p["b"]), physics._fmt_num(p["c"])]
+        a, b, c = p["a"], p["b"], p["c"]
+        try:
+            hs = physics.canonical("harmonics", harmonics)
+        except (TypeError, ValueError):
+            hs = None
+        warn = corrections.warnings(p, ref_name, ref_h, gamma_t, ref_f, a, b, c, harmonics=hs)
+        info = ([html.Div(corrections.describe(p))]
+                + [html.Div(t) for t in corrections.coefficient_lines(p)]
+                + [html.Div("⚠ " + w, style={"color": "#b45309"}) for w in warn])
     else:
-        warn = corrections.warnings(p, ref_name, ref_h, gamma_t, ref_f, a, b, c)
-        info = [html.Div(corrections.describe(p))] + [
-            html.Div("⚠ " + w, style={"color": "#b45309"}) for w in warn]
-    return (*out_abc, sel if sel != name else nu, opts, info)
+        info = ("Profile no longer exists – " if name and name != corrections.CUSTOM else "") + \
+            "Values typed in (no profile), used for every harmonic."
+    lock = p is not None
+    return (*out_abc, lock, lock, lock, opts, info)
 
 
 @app.callback(

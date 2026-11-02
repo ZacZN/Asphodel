@@ -162,6 +162,8 @@ SIM_DEFAULTS = {
     "corr_a":             0.0,
     "corr_b":             0.0,
     "corr_c":             0.0,
+    "corr_profile":       "",
+    "ref_search_hz":      0.0,
     "min_half_life":      0.0,
     "min_half_life_unit": "ms",
     "exclude_unknown_hl": False,
@@ -216,6 +218,10 @@ def parse_sim_settings(raw):
     s["corr_a"] = _num(raw.get("corr_a"), "a", 0.0)
     s["corr_b"] = _num(raw.get("corr_b"), "b", 0.0)
     s["corr_c"] = _num(raw.get("corr_c"), "c", 0.0)
+    # correction profile name -> general and per-harmonic a, b, c (core/corrections.py)
+    s["corr_profile"] = str(raw.get("corr_profile") or "").strip()
+    physics.resolve_correction(s)
+    s["ref_search_hz"] = _num(raw.get("ref_search_hz"), "reference search window", 0.0)
     s["min_half_life"] = _num(raw.get("min_half_life"), "min half-life", 0.0)
     s["min_half_life_unit"] = raw.get("min_half_life_unit") or "ms"
     if s["min_half_life_unit"] not in HL_UNITS:
@@ -242,9 +248,11 @@ def compute_sim_lines(freq, sum_all, raw):
                                         tuple(s["el1"]), tuple(s["el2"]),
                                         s["ref_name"], float(s["mq_width"]))
     allowed = hl_allowed(ion_db, s)
-    sims = simulate_frequencies(ion_db, ref_mq, ref_freq, s["ref_harmonic"], s["gamma_t"],
-                                s["harmonics"], s["correction_enabled"],
-                                s["corr_a"], s["corr_b"], s["corr_c"])
+    # every harmonic from the reference ion's own peak in it (in the summed power),
+    # with that harmonic's own correction
+    order = np.argsort(freq)
+    sims, ref_info, warns = physics.simulate_spectrum(
+        ion_db, ref_mq, ref_freq, s, np.asarray(freq, float)[order], np.asarray(sum_all, float)[order])
     lo, hi = float(np.min(freq)), float(np.max(freq))
     sims = sims[(sims["f_sim"] >= lo) & (sims["f_sim"] <= hi)].reset_index(drop=True)
     rows = sims["ion_row"].to_numpy()
@@ -267,7 +275,8 @@ def compute_sim_lines(freq, sum_all, raw):
             "label": f"{hv}<br>Harmonic: {int(h)}<br>f_sim = {float(f):,.1f} Hz",
         })
     return {"ref_freq": ref_freq, "ref_name": s["ref_name"], "ref_harmonic": s["ref_harmonic"],
-            "n_ions": int(len(ion_db)), "lines": lines}
+            "n_ions": int(len(ion_db)), "lines": lines, "warnings": warns,
+            "ref_by_h": {str(h): d["f"] for h, d in ref_info.items()}}
 
 
 import re as _re
@@ -565,6 +574,8 @@ def sim_panel_html():
 
     units = "".join(f'<option value="{u}"{" selected" if u == p.get("min_half_life_unit") else ""}>{u}</option>'
                     for u in HL_CUT_UNITS)
+    corr_name = corrections.resolve(p.get("corr_profile"), p.get("corr_a"), p.get("corr_b"),
+                                    p.get("corr_c"))["name"]
     return f"""
   <div id="simModal" class="sim-modal" onclick="if(event.target===this) simClose()">
    <div class="sim-dialog sim-row" role="dialog" aria-modal="true" aria-labelledby="simTitle">
@@ -584,6 +595,8 @@ def sim_panel_html():
       {txt("ref_name", 90, "Reference ion, e.g. 208Pb80+")}
       <label>h</label>
       {txt("ref_harmonic", 44, "Harmonic of the reference peak")}
+      <span style="text-transform:none;">other h ±</span>
+      {txt("ref_search_hz", 44, "Each harmonic's lines are placed from the reference ion's own peak in that harmonic: nearest peak to f_ref/h_ref·h within ± this (Hz). 0 = off")}
     </div>
     <div class="opt-grp">
       <span>Z</span>{txt("z_lims", 64, "Z min, max")}
@@ -604,7 +617,7 @@ def sim_panel_html():
       <input type="checkbox" id="sim_correction_enabled" {chk("correction_enabled")}>
       <label for="sim_correction_enabled">correction</label>
       <select id="sim_corr_profile" onchange="corrPick()" onfocus="corrRefresh()" style="max-width:200px;"
-              title="Correction profile (saved fits of the 2nd-order correction); picking one fills a, b, c"></select>
+              title="Correction profile (saved fits of the 2nd-order correction, possibly one per harmonic); picking one fills a, b, c with its general values"><option value="{esc(corr_name)}" selected>{esc(corr_name)}</option></select>
       <span>a</span>{txt("corr_a", 150, "a")}
       <span>b</span>{txt("corr_b", 150, "b")}
       <span>c</span>{txt("corr_c", 150, "c")}
@@ -709,16 +722,23 @@ var SIM_TRACES = [2, 3, 4, 5, 6, 7];  // heatPlot: outlines (2-4) then white lin
                                       // for normal, excluded, reference
 var SIM_KEYS = ['ref_name', 'ref_harmonic', 'z_lims', 'n_lims', 'el1', 'el2', 'mq_width',
                 'gamma_t', 'harmonics', 'corr_a', 'corr_b', 'corr_c', 'min_half_life',
-                'min_half_life_unit'];
+                'min_half_life_unit', 'corr_profile', 'ref_search_hz'];
 var SIM_CHECKS = ['show', 'show_excluded', 'correction_enabled', 'exclude_unknown_hl'];
 
 // ── Correction profiles (core/corrections.py) ───────────────────────────────
-// The dropdown shows the profile whose a, b, c equal the boxes ('custom'
-// otherwise); picking a profile fills a, b, c.
+// The profile name is the setting; picking a profile fills a, b, c with its
+// general values and locks them ('custom' unlocks them).
 var CORR_PROFILES = [];
+function corrLock(locked) {
+  ['corr_a', 'corr_b', 'corr_c'].forEach(function(k) {
+    var el = document.getElementById('sim_' + k);
+    el.disabled = locked; el.style.opacity = locked ? 0.6 : 1;
+  });
+}
 async function corrRefresh() {
   var q = new URLSearchParams();
-  ['corr_a', 'corr_b', 'corr_c', 'ref_name', 'ref_harmonic', 'gamma_t'].forEach(function(k) {
+  ['corr_a', 'corr_b', 'corr_c', 'ref_name', 'ref_harmonic', 'gamma_t', 'harmonics',
+   'corr_profile'].forEach(function(k) {
     q.set(k, document.getElementById('sim_' + k).value);
   });
   try {
@@ -734,12 +754,24 @@ async function corrRefresh() {
       sel.appendChild(o);
     });
     sel.value = d.match || d.custom;
+    var pm = d.profiles.find(function(x) { return x.name === sel.value; });
+    if (pm) {                    // the boxes show the profile's general a, b, c
+      document.getElementById('sim_corr_a').value = pm.a_text;
+      document.getElementById('sim_corr_b').value = pm.b_text;
+      document.getElementById('sim_corr_c').value = pm.c_text;
+    }
+    corrLock(sel.value !== d.custom);
     var info = document.getElementById('sim_corr_info');
     info.innerHTML = '';
-    d.info.forEach(function(line, i) {
+    d.info.forEach(function(line) {
       var div = document.createElement('div');
-      div.textContent = (i > 0 ? '⚠ ' : '') + line;
-      if (i > 0) div.style.color = '#fbbf24';
+      div.textContent = line;
+      info.appendChild(div);
+    });
+    (d.warnings || []).forEach(function(line) {
+      var div = document.createElement('div');
+      div.textContent = '⚠ ' + line;
+      div.style.color = '#fbbf24';
       info.appendChild(div);
     });
   } catch (e) {
@@ -757,10 +789,11 @@ function corrPick() {
   corrRefresh();
 }
 document.addEventListener('DOMContentLoaded', function() {
-  ['corr_a', 'corr_b', 'corr_c', 'ref_name', 'ref_harmonic', 'gamma_t'].forEach(function(k) {
+  ['corr_a', 'corr_b', 'corr_c', 'ref_name', 'ref_harmonic', 'gamma_t', 'harmonics'].forEach(function(k) {
     var el = document.getElementById('sim_' + k);
     if (el) el.addEventListener('change', corrRefresh);
   });
+  corrRefresh();
 });
 
 function _simStatus(msg, kind) {
@@ -801,7 +834,9 @@ async function runSim() {
     _renderFull();
     _simStatus('✓ ref ' + d.ref_name + ' h' + d.ref_harmonic + ' = ' +
                d.ref_freq.toLocaleString('en-GB', {maximumFractionDigits: 1}) + ' Hz · ' +
-               d.lines.length + ' lines across the whole file', 'ok');
+               d.lines.length + ' lines across the whole file' +
+               (d.warnings && d.warnings.length ? ' · ⚠ ' + d.warnings.join(' · ⚠ ') : ''),
+               d.warnings && d.warnings.length ? 'warn' : 'ok');
   } catch (e) {
     if (seq === _simSeq) _simStatus('✗ ' + e.message, 'err');
   }
@@ -2851,19 +2886,25 @@ def serve(html, state):
                 def arg(k):
                     return q.get(k, [""])[0]
                 profs = corrections.load_profiles()
-                name = corrections.match(arg("corr_a"), arg("corr_b"), arg("corr_c"), profiles=profs)
-                p = next((x for x in profs if x["name"] == name), None)
-                info = (["Values typed in (no profile)."] if p is None else
-                        [corrections.describe(p)]
-                        + corrections.warnings(p, arg("ref_name"), arg("ref_harmonic"),
-                                               arg("gamma_t")))
+                r = corrections.resolve(arg("corr_profile"), arg("corr_a"), arg("corr_b"),
+                                        arg("corr_c"), profiles=profs)
+                p, name = r["profile"], r["name"]
+                try:
+                    hs = physics.canonical("harmonics", arg("harmonics"))
+                except (TypeError, ValueError):
+                    hs = None
+                info = (["Values typed in (no profile), used for every harmonic."] if p is None else
+                        [corrections.describe(p)] + corrections.coefficient_lines(p))
+                warns = ([] if p is None else
+                         corrections.warnings(p, arg("ref_name"), arg("ref_harmonic"),
+                                              arg("gamma_t"), harmonics=hs))
                 self._send(200, {
                     "profiles": [{"name": x["name"], "describe": corrections.describe(x),
                                   "a_text": physics._fmt_num(x["a"]),
                                   "b_text": physics._fmt_num(x["b"]),
                                   "c_text": physics._fmt_num(x["c"])} for x in profs],
                     "match": name, "custom": corrections.CUSTOM,
-                    "custom_label": corrections.CUSTOM_LABEL, "info": info})
+                    "custom_label": corrections.CUSTOM_LABEL, "info": info, "warnings": warns})
 
             elif url.path == "/get-pref":
                 key = q.get("key", [""])[0]

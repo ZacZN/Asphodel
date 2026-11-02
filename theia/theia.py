@@ -366,9 +366,8 @@ def analyse_spectrum(ff, pp, s, predicted_ref):
     allowed = hl_allowed(ion_db, s)
     sims = matches = None
     if ref_used is not None:
-        sims = simulate_frequencies(ion_db, ref_mq, ref_used, s["ref_harmonic"], s["gamma_t"],
-                                    s["harmonics"], s["correction_enabled"],
-                                    s["corr_a"], s["corr_b"], s["corr_c"])
+        # every harmonic from the reference ion's own peak in it, with its own correction
+        sims, _ref_h, _ = physics.simulate_spectrum(ion_db, ref_mq, ref_used, s, ff, pp)
         lo, hi = ff.min() - s["match_tol_hz"], ff.max() + s["match_tol_hz"]
         sims = sims[(sims["f_sim"] >= lo) & (sims["f_sim"] <= hi)].reset_index(drop=True)
         # ions excluded by the half-life cut are simulated (and drawn) but
@@ -415,6 +414,8 @@ DEFAULTS = dict(
     corr_a             = 0.0,
     corr_b             = 0.0,
     corr_c             = 0.0,
+    corr_profile       = "",
+    ref_search_hz      = 0.0,
     noise_block_hz     = 2000,
     noise_cut_factor   = 0,
     k_prom             = 5.0,
@@ -515,6 +516,15 @@ def parse_settings(raw):
     s["corr_a"] = _f(raw.get("corr_a"), "a", 0)
     s["corr_b"] = _f(raw.get("corr_b"), "b", 0)
     s["corr_c"] = _f(raw.get("corr_c"), "c", 0)
+    # correction profile (name) -> general a, b, c and per-harmonic a, b, c.
+    # Stored settings of a scan keep the per-harmonic values they were run with.
+    s["corr_profile"] = str(raw.get("corr_profile") or "").strip()
+    if isinstance(raw.get("corr_by_h"), dict):
+        s["corr_by_h"] = {str(k): [float(x) for x in v] for k, v in raw["corr_by_h"].items()}
+    else:
+        physics.resolve_correction(s)
+    # reference peak search in the other harmonics; missing (scans from before) = off
+    s["ref_search_hz"] = _f(raw.get("ref_search_hz"), "Reference search in other harmonics", 0)
     s["noise_block_hz"] = _f(raw.get("noise_block_hz"), "Noise block", 0)
     s["noise_cut_factor"] = _f(raw.get("noise_cut_factor"), "Noise cutoff factor", 0)
     s["k_prom"] = _f(raw.get("k_prom"), "Prominence threshold", 0)
@@ -1090,23 +1100,32 @@ FB_HIDDEN = {**FB_SHOWN, "display": "none"}
 # selects the matching profile (or "custom").
 # ---------------------------------------------------------------------------
 
-def corr_profile_state(a, b, c, ref_name=None, ref_h=None, gamma_t=None, ref_f=None):
-    """(dropdown value, options, info children) for these a, b, c and settings."""
+def corr_profile_state(name, a, b, c, ref_name=None, ref_h=None, gamma_t=None, ref_f=None,
+                       harmonics=None):
+    """(dropdown value, options, info children, boxes locked, profile) for the
+    stored profile name and these a, b, c ('' = the profile matching a, b, c)."""
     profs = corrections.load_profiles()
-    match = corrections.match(a, b, c, profiles=profs)
-    p = next((q for q in profs if q["name"] == match), None)
+    r = corrections.resolve(name, a, b, c, profiles=profs)
+    p = r["profile"]
     if p is None:
-        info = "Values typed in (no profile)."
+        info = ("The stored profile no longer exists. " if r["missing"] else "") + \
+            "Values typed in (no profile), used for every harmonic."
     else:
-        warn = corrections.warnings(p, ref_name, ref_h, gamma_t, ref_f, a, b, c)
-        info = [html.Div(corrections.describe(p))] + [
-            html.Div("⚠ " + w, style={"color": "#b45309"}) for w in warn]
-    return match or corrections.CUSTOM, corrections.options(profs), info
+        try:
+            hs = physics.canonical("harmonics", harmonics) if harmonics not in (None, "") else None
+        except (TypeError, ValueError):
+            hs = None
+        warn = corrections.warnings(p, ref_name, ref_h, gamma_t, ref_f, p["a"], p["b"], p["c"],
+                                    harmonics=hs)
+        info = ([html.Div(corrections.describe(p))]
+                + [html.Div(t) for t in corrections.coefficient_lines(p)]
+                + [html.Div("⚠ " + w, style={"color": "#b45309"}) for w in warn])
+    return r["name"], corrections.options(profs), info, p is not None, p
 
 
-def corr_profile_ui(prefix, a=None, b=None, c=None, **settings):
+def corr_profile_ui(prefix, name=None, a=None, b=None, c=None, **settings):
     """Profile dropdown + info line for the a, b, c boxes with id prefix."""
-    value, opts, info = corr_profile_state(a, b, c, **settings)
+    value, opts, info, _, _ = corr_profile_state(name, a, b, c, **settings)
     return html.Div([
         html.Label("Correction profile", style=LABEL_STYLE),
         dcc.Dropdown(id=f"{prefix}corr_profile", options=opts, value=value, clearable=False,
@@ -1117,9 +1136,11 @@ def corr_profile_ui(prefix, a=None, b=None, c=None, **settings):
 
 def register_corr_profile(prefix, as_text, has_ref_freq):
     """Callback linking the profile dropdown and the a, b, c boxes of prefix.
+    The profile *name* is the setting; picking a profile fills a, b, c with
+    its general values and locks them; 'custom' unlocks them.
     as_text: the boxes are text inputs (else number inputs)."""
     ref_inputs = [Input(f"{prefix}ref_name", "value"), Input(f"{prefix}ref_harmonic", "value"),
-                  Input(f"{prefix}gamma_t", "value")]
+                  Input(f"{prefix}gamma_t", "value"), Input(f"{prefix}harmonics", "value")]
     if has_ref_freq:
         ref_inputs.append(Input(f"{prefix}ref_frequency", "value"))
 
@@ -1127,7 +1148,9 @@ def register_corr_profile(prefix, as_text, has_ref_freq):
         Output(f"{prefix}corr_a", "value", allow_duplicate=True),
         Output(f"{prefix}corr_b", "value", allow_duplicate=True),
         Output(f"{prefix}corr_c", "value", allow_duplicate=True),
-        Output(f"{prefix}corr_profile", "value"),
+        Output(f"{prefix}corr_a", "disabled"),
+        Output(f"{prefix}corr_b", "disabled"),
+        Output(f"{prefix}corr_c", "disabled"),
         Output(f"{prefix}corr_profile", "options"),
         Output(f"{prefix}corr_info", "children"),
         Input(f"{prefix}corr_profile", "value"),
@@ -1137,18 +1160,18 @@ def register_corr_profile(prefix, as_text, has_ref_freq):
         *ref_inputs,
         prevent_initial_call=True,
     )
-    def _corr_profile(name, a, b, c, ref_name, ref_h, gamma_t, ref_f=None):
+    def _corr_profile(name, a, b, c, ref_name, ref_h, gamma_t, harmonics, ref_f=None):
         nu = dash.no_update
+        if not name:                      # not filled in yet (PID popup closed)
+            return nu, nu, nu, nu, nu, nu, nu, nu
+        value, opts, info, locked, p = corr_profile_state(name, a, b, c, ref_name, ref_h,
+                                                          gamma_t, ref_f, harmonics)
         out = [nu, nu, nu]
-        trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
-        if trig.startswith(f"{prefix}corr_profile.") and name != corrections.CUSTOM:
-            p = corrections.get_profile(name)
-            if p is not None:
-                a, b, c = p["a"], p["b"], p["c"]
-                out = ([physics._fmt_num(v) for v in (a, b, c)] if as_text
-                       else [float(v) for v in (a, b, c)])
-        value, opts, info = corr_profile_state(a, b, c, ref_name, ref_h, gamma_t, ref_f)
-        return (*out, value if value != name else nu, opts, info)
+        if p is not None and not all(corrections._same(x, y) for x, y in
+                                     zip((a, b, c), (p["a"], p["b"], p["c"]))):
+            out = ([physics._fmt_num(v) for v in (p["a"], p["b"], p["c"])] if as_text
+                   else [float(v) for v in (p["a"], p["b"], p["c"])])
+        return (*out, locked, locked, locked, opts, info)
 
 
 sidebar = html.Div([
@@ -1173,6 +1196,9 @@ sidebar = html.Div([
     check("Track: centre next search on last found ref", "ref_tracking"),
     check("If not found, use predicted position", "use_predicted",
           help="Otherwise the spectrum is stored without identifications"),
+    inp("Ref. peak search in the other harmonics ± (Hz)", "ref_search_hz", True,
+        help="Each harmonic's lines are placed from the reference ion's own peak in that "
+             "harmonic (nearest to f_ref/h_ref·h). 0 = off"),
 
     *section("Ion selection"),
     inp("Z limits  [min, max]", "z_lims"),
@@ -1187,8 +1213,9 @@ sidebar = html.Div([
 
     *section("Frequency correction"),
     check("Second order correction", "correction_enabled"),
-    corr_profile_ui("s-", CFG["corr_a"], CFG["corr_b"], CFG["corr_c"], ref_name=CFG["ref_name"],
-                    ref_h=CFG["ref_harmonic"], gamma_t=CFG["gamma_t"], ref_f=CFG["ref_frequency"]),
+    corr_profile_ui("s-", CFG["corr_profile"], CFG["corr_a"], CFG["corr_b"], CFG["corr_c"],
+                    ref_name=CFG["ref_name"], ref_h=CFG["ref_harmonic"], gamma_t=CFG["gamma_t"],
+                    ref_f=CFG["ref_frequency"], harmonics=CFG["harmonics"]),
     inp("a  (f² coefficient)", "corr_a", True),
     inp("b  (f coefficient)", "corr_b", True),
     inp("c  (constant)", "corr_c", True),
@@ -1666,12 +1693,13 @@ PID_FIELDS = [   # key, label
     ("el1", "el1  [A, Z]"), ("el2", "el2  [A, Z]"),
     ("mq_width", "m/q window (± value)"), ("gamma_t", "γ_t"),
     ("harmonics", "Harmonics (comma-separated)"),
+    ("ref_search_hz", "Ref. peak search, other harmonics ± (Hz)  [0 = off]"),
     ("corr_a", "a  (f² coefficient)"), ("corr_b", "b  (f coefficient)"),
     ("corr_c", "c  (constant)"),
     ("min_half_life", "Exclude half-life below  [0 = off]"),
 ]
 PID_KEYS = [k for k, _ in PID_FIELDS] + ["min_half_life_unit", "correction_enabled",
-                                         "exclude_unknown_hl"]
+                                         "exclude_unknown_hl", "corr_profile"]
 
 # Aligning and fitting: controls shown for the "confirmation files" source
 # only, and the row of the "single spectrum file" source
@@ -1707,12 +1735,12 @@ pid_modal = html.Div([
                       style={"fontSize": "13px", "fontWeight": "600", "marginBottom": "10px"}),
         html.Div([
             html.Div([_pid_field(k, lab) for k, lab in PID_FIELDS[:7]]),
-            html.Div([_pid_field(k, lab) for k, lab in PID_FIELDS[7:9]] + [
+            html.Div([_pid_field(k, lab) for k, lab in PID_FIELDS[7:10]] + [
                 dcc.Checklist(id="pid-correction_enabled",
                               options=[{"label": " Second order correction", "value": "on"}],
                               style={"fontSize": "13px", "marginBottom": "6px"}),
                 corr_profile_ui("pid-"),
-            ] + [_pid_field(k, lab) for k, lab in PID_FIELDS[9:12]] + [
+            ] + [_pid_field(k, lab) for k, lab in PID_FIELDS[10:13]] + [
                 html.Label("Exclude half-life below  [0 = off]", style=LABEL_STYLE),
                 html.Div([
                     dcc.Input(id="pid-min_half_life", type="text",
@@ -2366,19 +2394,24 @@ def v_get_chargestate(electrons, z_lims, n_lims, el1, el2):
 
 
 def v_compute_frequencies_multi(df, mq_col, ref_ion_name, ref_freq, gamma_t, harmonics,
-                                correction_enabled=False, corr_a=0.0, corr_b=0.0, corr_c=0.0):
+                                correction_enabled=False, corr_a=0.0, corr_b=0.0, corr_c=0.0,
+                                ref_rev_by_h=None, corr_by_h=None):
+    """ref_rev_by_h: {h: reference revolution frequency for that harmonic}
+    (from its own reference peak); corr_by_h: {h: (a, b, c)} (else corr_a/b/c)."""
     result = df.sort_values(mq_col).copy()
     for h in harmonics:
         ref_mq = result.loc[ref_ion_name, mq_col]
+        f_ref_h = (ref_rev_by_h or {}).get(int(h), ref_freq)
+        abc = physics._corr_for(h, corr_by_h, (corr_a, corr_b, corr_c))
 
-        def _direct(row_mq, _h=h, _ref_mq=ref_mq, _corr=correction_enabled):
+        def _direct(row_mq, _h=h, _ref_mq=ref_mq, _corr=correction_enabled, _f=f_ref_h, _abc=abc):
             if row_mq == _ref_mq:
-                f_true = ref_freq
+                f_true = _f
             else:
-                f_true = ref_freq + delta_f(ref_freq, _ref_mq, row_mq - _ref_mq, gamma_t)
+                f_true = _f + delta_f(_f, _ref_mq, row_mq - _ref_mq, gamma_t)
             # correction applied to the revolution frequency before harmonic scaling
             if _corr:
-                f_true = apply_correction(f_true, corr_a, corr_b, corr_c)
+                f_true = apply_correction(f_true, *_abc)
             return f_true * _h
 
         result[f"frequency_direct_{h}"] = result[mq_col].apply(_direct)
@@ -2421,7 +2454,8 @@ V_HIGHLIGHT_COLORS = ["#2E91E5", "#E15F99", "#1CA71C", "#FB0D0D", "#DA16FF", "#B
 def v_build_figure(file_path, spectrum_name, ref_name, ref_frequency, ref_harmonic,
                    z_lims, n_lims, el1, el2, mq_width, gamma_t, harmonics,
                    correction_enabled=False, corr_a=0.0, corr_b=0.0, corr_c=0.0,
-                   highlight_ions=None, shown_harmonics=None, lines_out=None):
+                   highlight_ions=None, shown_harmonics=None, lines_out=None,
+                   corr_by_h=None, ref_search_hz=0.0, warnings_out=None):
     """Run the full computation and return (figure, error text).
 
     shown_harmonics: harmonics to draw (None = all); set by the toggle box.
@@ -2438,13 +2472,22 @@ def v_build_figure(file_path, spectrum_name, ref_name, ref_frequency, ref_harmon
         db = sorted_db[(sorted_db["m/q"] >= mq_ref - mq_width) &
                        (sorted_db["m/q"] <= mq_ref + mq_width)]
 
-        ref_freq = ref_frequency / ref_harmonic
-        db = v_compute_frequencies_multi(db, "m/q", ref_name, ref_freq, gamma_t, harmonics,
-                                         correction_enabled=correction_enabled,
-                                         corr_a=corr_a, corr_b=corr_b, corr_c=corr_c)
-
         data = unpack_npz(file_path.rstrip("/") + "/" + spectrum_name)
         ff, pp = data["arr_0"], data["arr_1"]
+
+        # each harmonic from the reference ion's own peak in it (core/physics.py)
+        ref_freq = ref_frequency / ref_harmonic
+        fs = np.asarray(ff, dtype=float)
+        ps = np.asarray(pp, dtype=float)
+        refs, rinfo = physics.harmonic_references(fs, ps, ref_frequency, ref_harmonic, harmonics,
+                                                  ref_search_hz)
+        if warnings_out is not None:
+            warnings_out += physics.reference_warnings(rinfo, ref_name, ref_search_hz)
+        db = v_compute_frequencies_multi(db, "m/q", ref_name, ref_freq, gamma_t, harmonics,
+                                         correction_enabled=correction_enabled,
+                                         corr_a=corr_a, corr_b=corr_b, corr_c=corr_c,
+                                         ref_rev_by_h={h: f / h for h, f in refs.items()},
+                                         corr_by_h=corr_by_h)
 
         n_points = 20
         fig = go.Figure()
@@ -2572,6 +2615,8 @@ VIEWER_DEFAULTS = dict(
     corr_a             = 0.0,
     corr_b             = 0.0,
     corr_c             = 0.0,
+    corr_profile       = "",
+    ref_search_hz      = 0.0,
     highlight_ions     = "",
 )
 VIEWER_KEYS = list(VIEWER_DEFAULTS)
@@ -2646,6 +2691,9 @@ viewer_sidebar = html.Div([
     v_input("Ion name", "ref_name"),
     v_input("Frequency (Hz)", "ref_frequency", True, 1),
     v_input("Harmonic", "ref_harmonic", True, 1),
+    v_input("Ref. peak search in the other harmonics ± (Hz)", "ref_search_hz", True, "any",
+            help="Each harmonic's lines are placed from the reference ion's own peak in that "
+                 "harmonic (nearest to f_ref/h_ref·h). 0 = off"),
     *section("Ion selection"),
     v_input("Z limits  [min, max]", "z_lims"),
     v_input("N limits  [min, max]", "n_lims"),
@@ -2660,9 +2708,10 @@ viewer_sidebar = html.Div([
                   options=[{"label": " Second order correction", "value": "on"}],
                   value=VCFG["correction_enabled"], style={"fontSize": "13px", "marginBottom": "10px"}),
     html.Div([
-        corr_profile_ui("v-", VCFG["corr_a"], VCFG["corr_b"], VCFG["corr_c"],
+        corr_profile_ui("v-", VCFG["corr_profile"], VCFG["corr_a"], VCFG["corr_b"], VCFG["corr_c"],
                         ref_name=VCFG["ref_name"], ref_h=VCFG["ref_harmonic"],
-                        gamma_t=VCFG["gamma_t"], ref_f=VCFG["ref_frequency"]),
+                        gamma_t=VCFG["gamma_t"], ref_f=VCFG["ref_frequency"],
+                        harmonics=VCFG["harmonics"]),
         v_input("a  (f² coefficient)", "corr_a", True, "any"),
         v_input("b  (f coefficient)", "corr_b", True, "any"),
         v_input("c  (constant)", "corr_c", True, "any"),
@@ -3015,21 +3064,29 @@ def serve_layout():
         if comp is not None:
             setattr(comp, prop, value)
 
-    # correction profiles: options (profiles saved since the last load) and the
-    # profile matching the a, b, c shown
+    # correction profiles: options (profiles saved since the last load), the
+    # stored profile (or the one matching the a, b, c shown) and the locked boxes
+    stored_profile = {"s-": load_config().get("corr_profile"), "v-": vcfg.get("corr_profile")}
     for prefix in ("s-", "v-"):
         def val(k):
             comp = _find_component(_BASE_LAYOUT, f"{prefix}{k}")
             return None if comp is None else getattr(comp, "value", None)
-        value, opts, info = corr_profile_state(
-            val("corr_a"), val("corr_b"), val("corr_c"), val("ref_name"), val("ref_harmonic"),
-            val("gamma_t"), val("ref_frequency"))
+        value, opts, info, locked, prof = corr_profile_state(
+            stored_profile[prefix], val("corr_a"), val("corr_b"), val("corr_c"), val("ref_name"),
+            val("ref_harmonic"), val("gamma_t"), val("ref_frequency"), val("harmonics"))
         for cid, prop, v in ((f"{prefix}corr_profile", "options", opts),
                              (f"{prefix}corr_profile", "value", value),
                              (f"{prefix}corr_info", "children", info)):
             comp = _find_component(_BASE_LAYOUT, cid)
             if comp is not None:
                 setattr(comp, prop, v)
+        for k in ("corr_a", "corr_b", "corr_c"):
+            comp = _find_component(_BASE_LAYOUT, f"{prefix}{k}")
+            if comp is not None:
+                comp.disabled = locked
+                if prof is not None:          # show the profile's general a, b, c
+                    v = prof[k[-1]]
+                    comp.value = str(v) if isinstance(comp.value, str) else float(v)
     comp = _find_component(_BASE_LAYOUT, "pid-corr_profile")
     if comp is not None:
         comp.options = corrections.options()
@@ -3206,6 +3263,7 @@ app.clientside_callback(
     Input("snippet-graph", "figure"),
 )
 
+SETTING_FIELDS["corr_profile"] = ("s-corr_profile", "value")     # dropdown (corr_profile_ui)
 SETTING_KEYS = list(SETTING_FIELDS)
 SETTING_STATES = [State(cid, prop) for cid, prop in SETTING_FIELDS.values()]
 
@@ -3455,8 +3513,9 @@ def v_update_figure(*values):
     if not v["spectrum_name"]:
         return (empty_fig("No spectrum selected (no .npz files in this folder?)"), "",
                 {"src": src, "lines": []})
-    lines = []
+    lines, warns = [], []
     try:
+        corr = corrections.resolve(v.get("corr_profile"), v["corr_a"], v["corr_b"], v["corr_c"])
         fig, err = v_build_figure(
             file_path=v["file_path"] or "", spectrum_name=v["spectrum_name"] or "",
             ref_name=v["ref_name"] or "", ref_frequency=float(v["ref_frequency"] or 0),
@@ -3466,11 +3525,14 @@ def v_update_figure(*values):
             mq_width=float(v["mq_width"] or 0.01), gamma_t=float(v["gamma_t"] or 1.399),
             harmonics=_v_ints(v["harmonics"]),
             correction_enabled=bool(v["correction_enabled"]),
-            corr_a=float(v["corr_a"] or 0), corr_b=float(v["corr_b"] or 0),
-            corr_c=float(v["corr_c"] or 0),
+            corr_a=float(corr["general"][0]), corr_b=float(corr["general"][1]),
+            corr_c=float(corr["general"][2]), corr_by_h=corr["by_h"],
+            ref_search_hz=float(v.get("ref_search_hz") or 0),
             highlight_ions=v_parse_highlight_ions(v["highlight_ions"] or ""),
             shown_harmonics=None if shown is None else [int(h) for h in shown],
-            lines_out=lines)
+            lines_out=lines, warnings_out=warns)
+        if warns and not err:
+            err = "\n".join("⚠ " + w for w in warns)
         return fig, err, {"src": src, "lines": lines}
     except Exception as exc:
         return empty_fig(), f"Parse error: {exc}", {"src": src, "lines": []}
@@ -3971,9 +4033,7 @@ def show_snippet(idx, half_width, show_excluded, rows, path):
         peaks = db_query(path, "SELECT freq, power, prominence, snr, kind FROM peaks WHERE spectrum_id=?",
                          (int(row["spectrum_id"]),))
         ion_db, ref_mq = build_ion_database(*s["ion_key"])
-        sims = simulate_frequencies(ion_db, ref_mq, float(row["ref_found"]), s["ref_harmonic"],
-                                    s["gamma_t"], s["harmonics"], s["correction_enabled"],
-                                    s["corr_a"], s["corr_b"], s["corr_c"])
+        sims, _, _ = physics.simulate_spectrum(ion_db, ref_mq, float(row["ref_found"]), s, ff, pp)
         hits = db_query(path, "SELECT ion, harmonic FROM identifications WHERE spectrum_id=?",
                         (int(row["spectrum_id"]),))
         w = float(half_width or 1000)
@@ -4651,13 +4711,20 @@ def pid_overrides(store, source):
 
 
 def pid_settings(files, overrides, source="sum"):
-    """Parsed settings for the simulated lines: base settings + overrides."""
-    return parse_settings({**pid_base(source, files), **(overrides or {})})
+    """Parsed settings for the simulated lines: base settings + overrides.  If
+    the correction is edited, the per-harmonic values stored with the base
+    settings are dropped (they come from the profile chosen)."""
+    raw = {**pid_base(source, files), **(overrides or {})}
+    if overrides and any(k in overrides for k in ("corr_profile", "corr_a", "corr_b", "corr_c")):
+        raw.pop("corr_by_h", None)
+    return parse_settings(raw)
 
 
 def _pid_display(raw, key):
     """A settings value as shown in the popup's fields."""
     v = raw.get(key)
+    if key == "corr_profile":
+        return corrections.resolve(v, raw.get("corr_a"), raw.get("corr_b"), raw.get("corr_c"))["name"]
     if key in ("correction_enabled", "exclude_unknown_hl"):
         return ["on"] if (v and v != []) else []
     if key == "min_half_life_unit":
@@ -4686,9 +4753,7 @@ def sum_sim_traces(ff, pp, files, include_unsure, overrides, key=None, source="s
     k = int(np.nanargmax(pp))
     ref_f = float(ff[k])
     ion_db, ref_mq = build_ion_database(*s["ion_key"])
-    sims = simulate_frequencies(ion_db, ref_mq, ref_f, s["ref_harmonic"], s["gamma_t"],
-                                s["harmonics"], s["correction_enabled"],
-                                s["corr_a"], s["corr_b"], s["corr_c"])
+    sims, _ref_h, ref_warn = physics.simulate_spectrum(ion_db, ref_mq, ref_f, s, ff, pp)
     sims = sims[(sims["f_sim"] >= ff.min()) & (sims["f_sim"] <= ff.max())].reset_index(drop=True)
     if key is not None:
         rows = sims["ion_row"].to_numpy()
@@ -4734,6 +4799,9 @@ def sum_sim_traces(ff, pp, files, include_unsure, overrides, key=None, source="s
     text = (f"Simulated lines: reference {s['ref_name']} (h={s['ref_harmonic']}) taken as the "
             f"strongest peak at {ref_f:.1f} Hz · harmonics {', '.join(map(str, s['harmonics']))}"
             f" · correction {'on' if s['correction_enabled'] else 'off'}"
+            + (f" ({s['corr_profile']})" if s["correction_enabled"]
+               and s.get("corr_profile") not in (None, "", corrections.CUSTOM) else "")
+            + "".join(f" · ⚠ {w}" for w in ref_warn)
             + (f" · half-life cut: {cut}" if cut else "") + f" · from {src}"
             + (" · dark dashed: ions in the loaded files" if source == "sum" else ""))
     return out, text
@@ -8642,10 +8710,8 @@ def refview_plot(seq, half_width, path):
         try:
             s_db = parse_settings(st)
             ion_db, ref_mq = build_ion_database(*s_db["ion_key"])
-            sims = simulate_frequencies(ion_db, ref_mq, float(found), s_db["ref_harmonic"],
-                                        s_db["gamma_t"], s_db["harmonics"],
-                                        s_db["correction_enabled"],
-                                        s_db["corr_a"], s_db["corr_b"], s_db["corr_c"])
+            sims, _, ref_warn = physics.simulate_spectrum(ion_db, ref_mq, float(found), s_db,
+                                                          ff, pp)
             sims = sims[(sims["f_sim"] >= ff.min()) & (sims["f_sim"] <= ff.max())].reset_index(drop=True)
             ids = db_query(path, "SELECT ion, harmonic FROM identifications WHERE spectrum_id = ?",
                            (int(row["spectrum_id"]),))
@@ -8656,6 +8722,7 @@ def refview_plot(seq, half_width, path):
             n_id = len(set(zip(ids["ion"], ids["harmonic"])))
             info += (f"\n{len(sims)} simulated lines from this reference "
                      f"({n_id} identified: dark dashed; no peak: light dashed)")
+            info += "".join(f"\n⚠ {w}" for w in ref_warn)
         except Exception as exc:
             info += f"\nCould not calculate simulated lines: {exc}"
     else:

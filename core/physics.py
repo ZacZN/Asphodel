@@ -4,6 +4,10 @@ Shared physics for the Asphodel suite.
 1. Ion-frequency simulation (moved here from Theia, theia/theia.py; plot_spectrogram.py
    had a port of the same code):  build_ion_database, simulate_frequencies,
    delta_f, apply_correction, half-life helpers and the hover labels.
+   Every harmonic is placed from the reference ion's own peak in that
+   harmonic (harmonic_references, window ref_search_hz) and gets its own
+   2nd-order correction if the profile has one (simulate_spectrum,
+   resolve_correction).
 
 2. Shared physics settings per experiment, in data/<exp>/settings/physics.json.
    They are the defaults for every tool; a tool's own settings file keeps only
@@ -208,21 +212,156 @@ def build_ion_database(z_lims, n_lims, el1, el2, ref_name, mq_width):
     return db.reset_index(drop=True), float(mq_ref)
 
 
+def _corr_for(h, corr_by_h, general):
+    """(a, b, c) for harmonic h: its own entry in corr_by_h (keys int or str), else general."""
+    if corr_by_h:
+        v = corr_by_h.get(int(h), corr_by_h.get(str(int(h))))
+        if v is not None:
+            return tuple(float(x) for x in v)
+    return general
+
+
 def simulate_frequencies(ion_db, ref_mq, ref_obs_freq, ref_harmonic, gamma_t, harmonics,
-                         correction_enabled=False, corr_a=0.0, corr_b=0.0, corr_c=0.0):
+                         correction_enabled=False, corr_a=0.0, corr_b=0.0, corr_c=0.0,
+                         ref_by_h=None, corr_by_h=None):
     """Vectorised version of viewer.compute_frequencies_multi.
+
+    ref_by_h: {harmonic: observed frequency of the reference ion at that
+    harmonic} (from harmonic_references); a harmonic not in it is placed from
+    ref_obs_freq / ref_harmonic, as before.  Each harmonic's lines are
+    simulated from its own reference revolution frequency.
+    corr_by_h: {harmonic: (a, b, c)}; harmonics not in it use corr_a, corr_b, corr_c.
 
     Returns a DataFrame with one row per (ion, harmonic): ion_row, harmonic, f_sim.
     """
-    ref_rev = ref_obs_freq / ref_harmonic
     mq = ion_db["m/q"].to_numpy(dtype=float)
-    f_true = ref_rev + delta_f(ref_rev, ref_mq, mq - ref_mq, gamma_t)
-    if correction_enabled:
-        f_true = apply_correction(f_true, corr_a, corr_b, corr_c)
     rows = np.arange(len(ion_db))
-    out = [pd.DataFrame({"ion_row": rows, "harmonic": int(h), "f_sim": f_true * h})
-           for h in harmonics]
+    general = (corr_a, corr_b, corr_c)
+    out = []
+    for h in harmonics:
+        h = int(h)
+        f_h = (ref_by_h or {}).get(h)
+        ref_rev = (float(f_h) / h) if f_h is not None else ref_obs_freq / ref_harmonic
+        f_true = ref_rev + delta_f(ref_rev, ref_mq, mq - ref_mq, gamma_t)
+        if correction_enabled:
+            f_true = apply_correction(f_true, *_corr_for(h, corr_by_h, general))
+        out.append(pd.DataFrame({"ion_row": rows, "harmonic": h, "f_sim": f_true * h}))
     return pd.concat(out, ignore_index=True)
+
+
+# ---------------------------------------------------------------------------
+# Reference peak of every harmonic
+# ---------------------------------------------------------------------------
+# The reference ion's line at harmonic h is looked for in the spectrum near
+# f_ref / h_ref * h: the strongest bin within ±window, refined with a 3-point
+# parabola.  It counts as found only if that bin is a local maximum inside
+# the window (a maximum on the window edge is the flank of something else).
+# Not found -> the predicted position is used, with a warning.
+
+def parabolic_peak(ff, pp, i):
+    """Sub-bin position of the maximum at bin i (3-point parabola); ff[i] at an edge."""
+    if i <= 0 or i >= len(pp) - 1:
+        return float(ff[i])
+    y0, y1, y2 = float(pp[i - 1]), float(pp[i]), float(pp[i + 1])
+    den = y0 - 2 * y1 + y2
+    if not np.isfinite(den) or den >= 0:
+        return float(ff[i])
+    d = 0.5 * (y0 - y2) / den                     # in bins, |d| <= 0.5
+    step = 0.5 * (float(ff[i + 1]) - float(ff[i - 1]))
+    return float(ff[i]) + float(np.clip(d, -0.5, 0.5)) * step
+
+
+def peak_near(ff, pp, centre, window_hz):
+    """(frequency, bin) of the strongest local maximum within centre ± window_hz,
+    or (None, None).  ff must be sorted."""
+    if ff is None or pp is None or not len(ff) or window_hz <= 0:
+        return None, None
+    lo = int(np.searchsorted(ff, centre - window_hz, side="left"))
+    hi = int(np.searchsorted(ff, centre + window_hz, side="right"))
+    if hi - lo < 3:
+        return None, None
+    seg = np.asarray(pp[lo:hi], dtype=float)
+    if not np.isfinite(seg).any():
+        return None, None
+    k = int(np.nanargmax(seg))
+    if k == 0 or k == len(seg) - 1:               # on the window edge: no peak here
+        return None, None
+    i = lo + k
+    return parabolic_peak(ff, pp, i), i
+
+
+def harmonic_references(ff, pp, ref_obs_freq, ref_harmonic, harmonics, window_hz):
+    """Observed frequency of the reference ion at every harmonic.
+
+    Returns ({h: frequency}, {h: info}).  The reference harmonic is
+    ref_obs_freq itself.  Other harmonics: peak_near(f_ref/h_ref*h, window).
+    info: {"predicted", "f", "found" (True / False / None = search off)}.
+    window_hz <= 0 or no spectrum: search off, everything predicted (old
+    behaviour)."""
+    refs, info = {}, {}
+    ref_harmonic = int(ref_harmonic)
+    search = window_hz is not None and float(window_hz) > 0 and ff is not None and pp is not None
+    if search:
+        order = None
+        if np.any(np.diff(ff) < 0):
+            order = np.argsort(ff)
+            ff, pp = np.asarray(ff)[order], np.asarray(pp)[order]
+    for h in harmonics:
+        h = int(h)
+        pred = ref_obs_freq / ref_harmonic * h
+        if h == ref_harmonic:
+            refs[h] = float(ref_obs_freq)
+            info[h] = {"predicted": float(pred), "f": float(ref_obs_freq), "found": True}
+            continue
+        if not search:
+            refs[h] = float(pred)
+            info[h] = {"predicted": float(pred), "f": float(pred), "found": None}
+            continue
+        f, _ = peak_near(ff, pp, pred, float(window_hz))
+        refs[h] = float(f) if f is not None else float(pred)
+        info[h] = {"predicted": float(pred), "f": refs[h], "found": f is not None}
+    return refs, info
+
+
+def reference_warnings(info, ref_name, window_hz):
+    """Warnings for the harmonics whose reference peak was not found."""
+    return [f"h{h}: no {ref_name} peak within ±{float(window_hz):g} Hz of {d['predicted']:.1f} Hz; "
+            f"the predicted position is used" for h, d in sorted(info.items()) if d["found"] is False]
+
+
+def simulate_spectrum(ion_db, ref_mq, ref_obs_freq, s, ff=None, pp=None):
+    """simulate_frequencies for a tool's parsed settings s, with the
+    reference searched in every harmonic of the spectrum (ff, pp) and the
+    per-harmonic correction.
+
+    s: ref_name, ref_harmonic, gamma_t, harmonics, correction_enabled,
+    corr_a/b/c (general), corr_by_h ({h: (a, b, c)}, optional),
+    ref_search_hz (optional; 0 / missing = search off).
+    Returns (sims, info, warnings)."""
+    window = float(s.get("ref_search_hz") or 0)
+    refs, info = harmonic_references(ff, pp, ref_obs_freq, s["ref_harmonic"], s["harmonics"],
+                                     window)
+    sims = simulate_frequencies(ion_db, ref_mq, ref_obs_freq, s["ref_harmonic"], s["gamma_t"],
+                                s["harmonics"], s["correction_enabled"],
+                                s["corr_a"], s["corr_b"], s["corr_c"],
+                                ref_by_h=refs, corr_by_h=s.get("corr_by_h"))
+    return sims, info, reference_warnings(info, s.get("ref_name", "reference"), window)
+
+
+def resolve_correction(s, exp=None):
+    """Fill s["corr_a/b/c"] (general) and s["corr_by_h"] ({"h": [a, b, c]},
+    JSON-safe) from s["corr_profile"] and the a, b, c boxes.  Returns s and a
+    list of warnings (e.g. the stored profile no longer exists)."""
+    from . import corrections                # corrections imports physics lazily
+    r = corrections.resolve(s.get("corr_profile"), s.get("corr_a"), s.get("corr_b"),
+                            s.get("corr_c"), exp=exp)
+    s["corr_profile"] = r["name"]
+    s["corr_a"], s["corr_b"], s["corr_c"] = (float(x) for x in r["general"])
+    s["corr_by_h"] = {str(h): [float(x) for x in v] for h, v in r["by_h"].items()}
+    warn = []
+    if r["missing"]:
+        warn.append("the stored correction profile no longer exists; the a, b, c boxes are used")
+    return s, warn
 
 
 # ===========================================================================
@@ -248,6 +387,12 @@ BUILTIN_PHYSICS = {
     "corr_a":             2.8498393862845746e-07,
     "corr_b":             -1.0910358215490124,
     "corr_c":             1044186.4522976408,
+    # correction profile name (core/corrections.py); "" = the profile matching
+    # corr_a/b/c (settings from before names were stored)
+    "corr_profile":       "",
+    # ± window (Hz) for the reference ion's peak in the other harmonics
+    # (harmonic_references); 0 = off (one reference for all harmonics)
+    "ref_search_hz":      100.0,
     "min_half_life":      1.0,
     "min_half_life_unit": "ms",
     "exclude_unknown_hl": False,
@@ -258,7 +403,7 @@ _INT_LIST_KEYS = {"harmonics", "z_lims", "n_lims", "el1", "el2"}
 _BOOL_KEYS = {"correction_enabled", "exclude_unknown_hl"}
 _INT_KEYS = {"ref_harmonic"}
 _FLOAT_KEYS = {"ref_frequency", "gamma_t", "mq_width", "corr_a", "corr_b", "corr_c",
-               "min_half_life"}
+               "min_half_life", "ref_search_hz"}
 
 
 def canonical(key, value):
