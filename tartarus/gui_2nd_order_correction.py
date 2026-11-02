@@ -88,6 +88,7 @@ MIN_POINTS = 3              # assigned ions for a fit (2 parameters + 1 dof)
 Y_TOP = 0.86                # top of the spectrum (paper); the marker strip is above it
 MAX_SHAPES = 150            # draggable lines at once (zoom in for more)
 MAX_LABELS = 60             # labels drawn (in view)
+MAX_HOVER_LINES = 600       # lines in view that get a tooltip along their height
 NEW_PROFILE = "__new__"
 
 TOOL_DEFAULTS = {
@@ -394,8 +395,11 @@ def overlay(s, state, m, view, mode):
         traces.append(go.Scattergl(x=X, y=Y, yaxis="y3", mode="lines", line=style, name=name,
                                    hoverinfo="skip", showlegend=False,
                                    connectgaps=False).to_plotly_json())
-    hov = [f"{hv}<br>Harmonic: {r.h}<br>f_sim = {r.f_sim:,.1f} Hz (own reference, uncorrected)"
-           + (f"<br>shown at {r.f_show:,.1f} Hz" if not r.is_ref and not r.assigned else "")
+    # same tooltip as the simulated lines in Theia's Viewer / the spectrogram
+    # (ion, m.e., T½, E_x, decay, harmonic, f_sim), then this tool's extras
+    hov = [f"{hv}<br>Harmonic: {r.h}<br>f_sim = {r.f_sim:,.1f} Hz"
+           + (f"<br>shown at {r.f_show:,.1f} Hz" if not r.is_ref and not r.assigned
+              and abs(r.f_show - r.f_sim) > 0.05 else "")
            + (f"<br><b>assigned: f_exp = {r.f_exp:,.1f} Hz</b>" if r.assigned else "")
            + ("<br><b>reference line</b>" if r.is_ref else "")
            for hv, r in zip(lines["hover"], lines.itertuples(index=False))]
@@ -427,6 +431,20 @@ def overlay(s, state, m, view, mode):
                         font=dict(size=11, color="black" if r.key == sel else
                                   (ACCENT if r.is_ref else ASSIGNED_COL)),
                         bgcolor="rgba(255,255,255,0.8)"))
+    # tooltips along the whole height of the lines in view: one invisible bar
+    # per line (hover anywhere on the bar; one label per line, not one per
+    # point, so the patch stays small).  ~8 px wide at a 1000 px plot.
+    span = (view[1] - view[0]) if view else float(m["ff"][-1] - m["ff"][0])
+    hv_in = in_view if in_view.sum() <= MAX_HOVER_LINES else np.zeros(len(lines), dtype=bool)
+    if not hv_in.any() and in_view.sum() > MAX_HOVER_LINES:
+        note = (note + " " if note else "") + (f"Zoom in for the tooltips on the lines "
+                                                f"(at most {MAX_HOVER_LINES} in view).")
+    idx = np.where(hv_in)[0]
+    traces.append(go.Bar(
+        x=lines["f_show"].to_numpy()[idx].tolist(), y=[1.0] * len(idx),
+        width=[span / 1000.0 * 8] * len(idx), yaxis="y3", name="line tooltips",
+        hovertext=[hov[i] for i in idx], hoverinfo="text", showlegend=False,
+        marker=dict(color="rgba(0,0,0,0)", line=dict(width=0))).to_plotly_json())
     return traces, shapes, ann, keys, note
 
 
@@ -442,6 +460,7 @@ def figure(s, state, m, view, mode):
     fig.update_layout(
         shapes=shapes, annotations=ann, template="plotly_white", dragmode="pan",
         hovermode="closest", hoverdistance=12, font=dict(size=16), height=660,
+        barmode="overlay", bargap=0,
         showlegend=False, margin=dict(l=70, r=20, t=20, b=50),
         xaxis=dict(title="Frequency (Hz)", tickformat=".0f"),
         yaxis=dict(title="Schottky power (a.u.)", domain=[0, Y_TOP]),
@@ -917,6 +936,29 @@ app.clientside_callback(
                 readout.style.display = 'block';
             });
             gd.addEventListener('mouseleave', function() { readout.style.display = 'none'; });
+            // the draggable lines (shapes) take the mouse, so Plotly would not show
+            // their tooltip: show the line's tooltip (invisible bar) by hand
+            var lastShape = null;
+            gd.addEventListener('mousemove', function(evt) {
+                var el = evt.target.closest && evt.target.closest('.shapelayer path');
+                if (!el) { lastShape = null; return; }
+                var g = el.closest('[data-index]');
+                if (!g) return;
+                var i = Number(g.getAttribute('data-index'));
+                var shp = (gd.layout.shapes || [])[i];
+                if (!shp) return;
+                var fd = gd._fullData || [], ti = -1;
+                for (var k = 0; k < fd.length; k++) if (fd[k].name === 'line tooltips') { ti = k; break; }
+                if (ti < 0 || !fd[ti].x || !fd[ti].x.length) return;
+                var xs = fd[ti].x, best = 0, bd = Infinity;
+                for (var j = 0; j < xs.length; j++) {
+                    var d = Math.abs(xs[j] - shp.x0);
+                    if (d < bd) { bd = d; best = j; }
+                }
+                if (lastShape === i) return;
+                lastShape = i;
+                try { Plotly.Fx.hover(gd, [{curveNumber: ti, pointNumber: best}], 'xy3'); } catch (e) {}
+            });
             soon();
         }
         setup();
