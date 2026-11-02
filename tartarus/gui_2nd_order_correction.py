@@ -544,40 +544,119 @@ REF_PEAK_TEXT = {True: "peak found", False: "predicted (no peak)", None: "f_ref/
                  "moved": "moved by hand"}
 
 
+# matplotlib's default colours, as in tartarus/new_2nd_order_correction_plot.py
+MPL_C0, MPL_C1, MPL_C3 = "#1f77b4", "#ff7f0e", "#d62728"
+
+
+def pretty_ion_html(name):
+    """'208Pb80+' -> <sup>208</sup>Pb<sup>80+</sup>, 'm170Tm66+' -> <sup>170m</sup>Tm<sup>66+</sup>
+    (as pretty_ion in the old script)."""
+    mt = re.fullmatch(r"([a-z]?)(\d+)([A-Za-z]+)(\d+[+-])", str(name))
+    if not mt:
+        return str(name)
+    iso, A, el, q = mt.groups()
+    return f"<sup>{A}{iso}</sup>{el}<sup>{q}</sup>"
+
+
 def fit_figure(r):
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.72, 0.28],
-                        vertical_spacing=0.04)
-    x = np.array([p["x"] for p in r["points"]])
-    y = np.array([p["y"] for p in r["points"]])
-    names = [p["ion"] for p in r["points"]]
-    fig.add_trace(go.Scatter(x=x.tolist(), y=y.tolist(), mode="markers", text=names,
-                             name="data", marker=dict(color=LINE_COL, size=9),
+    """The fit of one harmonic in the style of the old script's figure
+    (new_2nd_order_correction_plot.draw_figure): data C0, anchored fit C1,
+    red star anchor, labels with leader lines, coefficient box, residuals."""
+    pts = r["points"]
+    names = [r["ref_name"]] + [p["ion"] for p in pts]
+    x = np.array([r["x0"]] + [p["x"] for p in pts], float)
+    y = np.array([0.0] + [p["y"] for p in pts], float)
+    resid = np.array([0.0] + [p["resid"] for p in pts], float)
+    (a, b, c), (da, db, dc) = r["abc"], r["abc_unc"]
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25],
+                        vertical_spacing=0.0)
+    # fit curve, then data, then anchor (as the old figure's z-order)
+    pad = 0.05 * (x.max() - x.min() or 1)
+    xx = np.linspace(x.min() - pad, x.max() + pad, 500)
+    fig.add_trace(go.Scatter(x=xx.tolist(), y=(r["s1"] * (xx - r["x0"])
+                                               + r["s2"] * (xx - r["x0"]) ** 2).tolist(),
+                             mode="lines", line=dict(color=MPL_C1, width=2),
+                             name="Anchored 2nd-order fit (unweighted)", hoverinfo="skip",
+                             legendrank=3),
+                  row=1, col=1)
+    fig.add_trace(go.Scatter(x=x[1:].tolist(), y=y[1:].tolist(), mode="markers", name="Data", legendrank=1,
+                             text=names[1:], marker=dict(color=MPL_C0, size=9),
                              hovertemplate="%{text}<br>f_sim = %{x:.3f} Hz<br>"
                                            "f_diff = %{y:.3f} Hz<extra></extra>"), row=1, col=1)
-    lo, hi = min(x.min(), r["x0"]), max(x.max(), r["x0"])
-    pad = 0.05 * (hi - lo or 1)
-    xx = np.linspace(lo - pad, hi + pad, 300)
-    fig.add_trace(go.Scatter(x=xx.tolist(),
-                             y=(r["s1"] * (xx - r["x0"]) + r["s2"] * (xx - r["x0"]) ** 2).tolist(),
-                             mode="lines", line=dict(color=ACCENT, width=2), name="fit",
-                             hoverinfo="skip"), row=1, col=1)
-    fig.add_trace(go.Scatter(x=[r["x0"]], y=[0], mode="markers", name="anchor",
-                             marker=dict(symbol="star", size=16, color=ACCENT,
-                                         line=dict(color="black", width=1)),
+    fig.add_trace(go.Scatter(x=[r["x0"]], y=[0], mode="markers",
+                             name=f"Anchor ({pretty_ion_html(r['ref_name'])}, "
+                                  f"f<sub>exp</sub> = {r['ref_f_h']!r} Hz)",
+                             marker=dict(symbol="star", size=20, color=MPL_C3), legendrank=2,
                              hovertemplate="anchor (reference line)<br>x0 = %{x:.3f} Hz"
                                            "<extra></extra>"), row=1, col=1)
-    fig.add_trace(go.Scatter(x=x.tolist(), y=[p["resid"] for p in r["points"]], mode="markers",
-                             marker=dict(color=LINE_COL, size=8), showlegend=False, text=names,
+    # residuals
+    fig.add_trace(go.Scatter(x=x[1:].tolist(), y=resid[1:].tolist(), mode="markers",
+                             marker=dict(color=MPL_C0, size=9), showlegend=False, text=names[1:],
                              hovertemplate="%{text}<br>residual = %{y:.3f} Hz<extra></extra>"),
                   row=2, col=1)
-    fig.add_hline(y=0, line=dict(color="grey", width=1, dash="dash"), row=1, col=1)
-    fig.add_hline(y=0, line=dict(color=ACCENT, width=1), row=2, col=1)
-    fig.update_layout(template="plotly_white", height=600, font=dict(size=15),
-                      margin=dict(l=70, r=20, t=30, b=50), legend=dict(orientation="v"),
-                      title=dict(text=f"h{r['h']}", x=0.01, font=dict(size=16)))
-    fig.update_yaxes(title_text="f_diff = f_exp,true − f_sim,true (Hz)", row=1, col=1)
+    fig.add_trace(go.Scatter(x=[r["x0"]], y=[0], mode="markers", showlegend=False,
+                             marker=dict(symbol="star", size=20, color=MPL_C3), hoverinfo="skip"),
+                  row=2, col=1)
+    fig.add_hline(y=0, line=dict(color="grey", width=0.8, dash="dash"), row=1, col=1)
+    fig.add_hline(y=0, line=dict(color=MPL_C1, width=1.5), row=2, col=1)
+
+    # labels: nearby points in clusters, upper half above-left of the line and
+    # the rest below-right, each with a leader line (same offsets as the old
+    # script, in pixels instead of points)
+    ann = []
+    xr, yr = np.ptp(x) or 1.0, np.ptp(y) or 1.0
+    order = np.argsort(x)
+    clusters, cur = [], [order[0]]
+    for i in order[1:]:
+        j = cur[-1]
+        if abs(x[i] - x[j]) < 0.02 * xr and abs(y[i] - y[j]) < 0.05 * yr:
+            cur.append(i)
+        else:
+            clusters.append(cur)
+            cur = [i]
+    clusters.append(cur)
+    lab = dict(xref="x", yref="y", showarrow=True, arrowhead=0, arrowwidth=1.2,
+               arrowcolor="black", standoff=3, font=dict(size=14, color="black"))
+    for cl in clusters:
+        cl = sorted(cl, key=lambda k: y[k])
+        n_above = (len(cl) + 1) // 2 if len(cl) > 1 else 0
+        above, below = cl[len(cl) - n_above:], cl[:len(cl) - n_above][::-1]
+        above = sorted(above, key=lambda k: x[k], reverse=True)
+        for i, k in enumerate(above):
+            ann.append(dict(lab, x=x[k], y=y[k], text=pretty_ion_html(names[k]),
+                            ax=-20 - 90 * i, ay=-(45 + 20 * (len(above) - 1 - i)),
+                            xanchor="center", yanchor="bottom"))
+        for i, k in enumerate(below):
+            ann.append(dict(lab, x=x[k], y=y[k], text=pretty_ion_html(names[k]),
+                            ax=40 + 20 * i, ay=30 + 34 * i, xanchor="left", yanchor="middle"))
+    # coefficient box, top left
+    box = ("Expanded: f<sub>diff</sub> = a x² + b x + c<br>"
+           f"  a = {a:.6e} ± {da:.2e} Hz⁻¹<br>"
+           f"  b = {b:.6e} ± {db:.2e}<br>"
+           f"  c = {c:.6e} ± {dc:.2e} Hz<br><br>"
+           f"RMS residual = {r['rms']:.3f} Hz").replace("  ", "&nbsp;&nbsp;")
+    ann.append(dict(xref="x domain", yref="y domain", x=0.01, y=0.98, xanchor="left",
+                    yanchor="top", showarrow=False, align="left", text=box,
+                    font=dict(family="DejaVu Sans Mono, monospace", size=14, color="black"),
+                    bgcolor="rgba(255,255,255,0.9)", bordercolor="grey", borderwidth=1,
+                    borderpad=6))
+    grid = dict(showgrid=True, gridcolor="rgba(0,0,0,0.12)", zeroline=False, showline=True,
+                linecolor="black", mirror=True, ticks="outside", tickformat=".0f")
+    fig.update_layout(template="none", plot_bgcolor="white", paper_bgcolor="white",
+                      height=700, font=dict(size=15, color="black"), annotations=ann,
+                      margin=dict(l=90, r=30, t=60, b=60),
+                      title=dict(text=f"Second-order Correction h{r['h']} "
+                                      f"(masses incl. electron binding)", x=0.5,
+                                 xanchor="center", font=dict(size=18)),
+                      legend=dict(x=0.99, y=0.27, xanchor="right", yanchor="bottom",
+                                  bgcolor="rgba(255,255,255,0.85)", bordercolor="#cccccc",
+                                  borderwidth=1))
+    fig.update_xaxes(**grid)
+    fig.update_yaxes(**{k: v for k, v in grid.items() if k != "tickformat"})
+    fig.update_yaxes(title_text="f<sub>diff</sub> = f<sub>exp,true</sub> − f<sub>sim,true</sub> (Hz)",
+                     row=1, col=1)
     fig.update_yaxes(title_text="Residual (Hz)", row=2, col=1)
-    fig.update_xaxes(title_text="f_sim,true (Hz, revolution)", tickformat=".0f", row=2, col=1)
+    fig.update_xaxes(title_text="f<sub>sim,true</sub> (Hz)", row=2, col=1)
     return fig
 
 
