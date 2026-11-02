@@ -1205,8 +1205,8 @@ def _assign(state, s, m, key, centre):
     r = lines.loc[key]
     f, _ = physics.peak_near(m["ff"], m["pp"], centre, s["peak_window_hz"], climb=True)
     if f is None:
-        return (f"No peak found from {centre:,.1f} Hz (searched ±{s['peak_window_hz']:g} Hz, "
-                f"then uphill up to {10 * s['peak_window_hz']:g} Hz away).")
+        return (f"No peak found uphill from {centre:,.1f} Hz within "
+                f"{10 * s['peak_window_hz']:g} Hz.")
     if r["is_ref"]:
         if int(r["h"]) == s["ref_harmonic"]:
             return "The reference line of the reference harmonic is the anchor (strongest peak)."
