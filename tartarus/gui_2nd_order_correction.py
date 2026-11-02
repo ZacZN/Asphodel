@@ -1072,10 +1072,10 @@ def draw(state, view, mode, *values):
             txt.append(f" · assigned to {r['f_exp']:,.1f} Hz "
                        f"(f_exp − f_sim = {r['f_exp'] - r['f_sim']:+.1f} Hz)")
         else:
-            f, _ = physics.peak_near(m["ff"], m["pp"], r["f_show"], s["peak_window_hz"])
+            f, _ = physics.peak_near(m["ff"], m["pp"], r["f_show"], s["peak_window_hz"], climb=True)
             txt.append(f" · shown at {r['f_show']:,.1f} Hz · nearest peak "
-                       + (f"{f:,.1f} Hz" if f is not None else
-                          f"none within ±{s['peak_window_hz']:g} Hz"))
+                       + (f"{f:,.1f} Hz ({f - r['f_show']:+.1f} Hz)" if f is not None else
+                          "none found"))
     else:
         txt = "No line selected."
     rows = []
@@ -1131,7 +1131,7 @@ def _drag(moved, keys, state, s, m, mode):
             if h == s["ref_harmonic"]:
                 msg = f"The reference line h{h} is the strongest peak and stays fixed."
             elif mode == "one":
-                f, _ = physics.peak_near(m["ff"], m["pp"], x_new, s["peak_window_hz"])
+                f, _ = physics.peak_near(m["ff"], m["pp"], x_new, s["peak_window_hz"], climb=True)
                 state.setdefault("ref_override", {})[str(h)] = float(f if f is not None else x_new)
                 msg = (f"Reference line h{h} moved to " + (f"the peak at {f:,.1f} Hz" if f is not None
                                                            else f"{x_new:,.1f} Hz (no peak there)"))
@@ -1159,9 +1159,10 @@ def _assign(state, s, m, key, centre):
     if key not in lines.index:
         return "The selected line is not in the simulation."
     r = lines.loc[key]
-    f, _ = physics.peak_near(m["ff"], m["pp"], centre, s["peak_window_hz"])
+    f, _ = physics.peak_near(m["ff"], m["pp"], centre, s["peak_window_hz"], climb=True)
     if f is None:
-        return f"No peak within ±{s['peak_window_hz']:g} Hz of {centre:,.1f} Hz."
+        return (f"No peak found from {centre:,.1f} Hz (searched ±{s['peak_window_hz']:g} Hz, "
+                f"then uphill up to {10 * s['peak_window_hz']:g} Hz away).")
     if r["is_ref"]:
         if int(r["h"]) == s["ref_harmonic"]:
             return "The reference line of the reference harmonic is the anchor (strongest peak)."

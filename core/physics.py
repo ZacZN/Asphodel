@@ -271,22 +271,52 @@ def parabolic_peak(ff, pp, i):
     return float(ff[i]) + float(np.clip(d, -0.5, 0.5)) * step
 
 
-def peak_near(ff, pp, centre, window_hz):
+def peak_near(ff, pp, centre, window_hz, climb=False, max_travel_hz=None):
     """(frequency, bin) of the strongest local maximum within centre ± window_hz,
-    or (None, None).  ff must be sorted."""
-    if ff is None or pp is None or not len(ff) or window_hz <= 0:
+    or (None, None).  ff must be sorted.
+
+    The window is widened to at least ±3 bins.
+    climb=False: a maximum on the window edge does not count (it is the flank
+    of something outside the window).
+    climb=True: from the strongest bin in the window, keep moving to the
+    strongest bin within ± window_hz of the current one until it no longer
+    moves (a local maximum on the scale of the window, so noise on a broad
+    peak's flank does not stop it).  Gives up beyond max_travel_hz from centre
+    (default 10 windows)."""
+    if ff is None or pp is None or len(ff) < 3 or window_hz <= 0:
         return None, None
-    lo = int(np.searchsorted(ff, centre - window_hz, side="left"))
-    hi = int(np.searchsorted(ff, centre + window_hz, side="right"))
-    if hi - lo < 3:
+    pp = np.asarray(pp, dtype=float)
+    # at least ±3 bins: with 2^17 bins over 10 MHz a bin is 76 Hz, so ±100 Hz
+    # alone holds only 2-3 bins and the maximum is nearly always on the edge
+    k = int(np.clip(np.searchsorted(ff, centre), 1, len(ff) - 1))
+    window_hz = max(float(window_hz), 3.0 * abs(float(ff[k]) - float(ff[k - 1])))
+
+    def best_in(c):
+        lo = int(np.searchsorted(ff, c - window_hz, side="left"))
+        hi = int(np.searchsorted(ff, c + window_hz, side="right"))
+        if hi - lo < 3:
+            return None, lo, hi
+        seg = pp[lo:hi]
+        if not np.isfinite(seg).any():
+            return None, lo, hi
+        return lo + int(np.nanargmax(seg)), lo, hi
+
+    i, lo, hi = best_in(centre)
+    if i is None:
         return None, None
-    seg = np.asarray(pp[lo:hi], dtype=float)
-    if not np.isfinite(seg).any():
+    if climb:
+        limit = float(max_travel_hz) if max_travel_hz is not None else 10.0 * window_hz
+        for _ in range(10000):
+            j, lo, hi = best_in(float(ff[i]))
+            if j is None or j == i:
+                break
+            i = j
+            if abs(float(ff[i]) - centre) > limit:
+                return None, None
+        if i == 0 or i == len(pp) - 1:           # spectrum edge, not a peak
+            return None, None
+    elif i == lo or i == hi - 1:                 # on the window edge: no peak here
         return None, None
-    k = int(np.nanargmax(seg))
-    if k == 0 or k == len(seg) - 1:               # on the window edge: no peak here
-        return None, None
-    i = lo + k
     return parabolic_peak(ff, pp, i), i
 
 
