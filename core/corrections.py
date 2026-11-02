@@ -208,7 +208,11 @@ def describe(p):
     per_h = sorted(int(h) for h in (p.get("per_harmonic") or {}))
     if per_h:
         hs = ", ".join(f"h{h}" for h in per_h)
-        return (f"per-harmonic profile ({hs}; other harmonics use the h{f.get('ref_harmonic')} fit) · "
+        rh = f.get("ref_harmonic")
+        other = (f"the h{rh} fit" if rh is not None and int(rh) in per_h else
+                 "the general a, b, c" if any(p.get(k) for k in ("a", "b", "c")) else
+                 "no correction (general a, b, c = 0)")
+        return (f"per-harmonic profile ({hs}; other harmonics use {other}) · "
                 f"ref {f.get('ref_ion')} · γ_t {f.get('gamma_t')} · "
                 + ("weighted" if f.get("weighted") else "unweighted")
                 + f" · masses: {f.get('mass_model')}")
@@ -317,7 +321,7 @@ def warnings(profile, ref_name=None, ref_harmonic=None, gamma_t=None, ref_freque
             other = []
         if other:
             out.append("no own correction for " + ", ".join(f"h{x}" for x in other)
-                       + f": the general (h{f.get('ref_harmonic')}) a, b, c is used")
+                       + ": the profile's general a, b, c is used")
     fr = _num(ref_frequency)
     vals = [_num(x) for x in (a, b, c)]
     if fr and h and None not in vals:
