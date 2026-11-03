@@ -70,8 +70,8 @@ TOOLS = {
                         "Exponential / Bateman / joint fits and half-lives.", False),
     "sum_spectra":     ("Tartarus", "Sum spectra", "tartarus/sum_spectra.py",
                         "Sum all 1-D spectra of a folder (raw and drift-aligned).", False),
-    "correction_plot": ("Tartarus", "2nd-order correction", "tartarus/new_2nd_order_correction_plot.py",
-                        "f_diff vs f_sim from a RionID table and the 2nd-order polynomial fit.", False),
+    # (tartarus/new_2nd_order_correction_plot.py has no card any more: the GUI
+    #  correction tool replaces it and opens its figure with its "Plot" button)
     "gui_correction":  ("Tartarus", "GUI Second Order Correction", "tartarus/gui_2nd_order_correction.py",
                         "Simulated lines on a spectrum (strongest peak = reference): drag them into "
                         "place, assign peaks, fit and save a correction per harmonic.", True),
@@ -383,7 +383,6 @@ def _files_in(group, kinds, patterns):
 def tool_forms():
     """Small forms for the command-line tools.  Folders and files come from the
     connected folders (Folders section below)."""
-    xlsx = _files_in("data", ["rionid"], ["*.xls*"])
     schemes = _files_in("data", ["levelschemes"], ["*.json"])
     lbl = lambda t: html.Label(t, className="flabel")
     return {
@@ -395,13 +394,6 @@ def tool_forms():
             dcc.Dropdown(id="ss-out", options=_folder_opts("data", "summed_1d"), clearable=False,
                          value=paths.summed_1d()),
             html.Button("Run", id="ss-run", className="btn primary small", n_clicks=0),
-        ], className="form"),
-        "correction_plot": html.Div([
-            lbl("RionID table"),
-            dcc.Dropdown(id="cp-file", options=xlsx, clearable=False,
-                         value=xlsx[0]["value"] if xlsx else None),
-            lbl("Sheet"), dcc.Input(id="cp-sheet", type="text", value="New2ndOrderCorrection", className="wide"),
-            html.Button("Run", id="cp-run", className="btn primary small", n_clicks=0),
         ], className="form"),
         "levelschemer": html.Div([
             lbl("Open a scheme"),
@@ -1051,14 +1043,13 @@ def redraw_folders(_ver, ids):
 
 @app.callback(
     Output("msg", "children", allow_duplicate=True),
-    Input("ss-run", "n_clicks"), Input("cp-run", "n_clicks"),
+    Input("ss-run", "n_clicks"),
     Input("ls-run", "n_clicks"),
     State("ss-in", "value"), State("ss-out", "value"),
-    State("cp-file", "value"), State("cp-sheet", "value"),
     State("ls-file", "value"),
     prevent_initial_call=True,
 )
-def run_forms(_s, _c, _l, ss_in, ss_out, cp_file, cp_sheet, ls_file):
+def run_forms(_s, _l, ss_in, ss_out, ls_file):
     """The 'Run' buttons of the tool forms."""
     t = ctx.triggered_id
     try:
@@ -1066,10 +1057,6 @@ def run_forms(_s, _c, _l, ss_in, ss_out, cp_file, cp_sheet, ls_file):
             if not ss_in or not ss_out:
                 return "⚠ Sum spectra: give the input and output folders."
             return start_tool("sum_spectra", [os.path.expanduser(ss_in), os.path.expanduser(ss_out)])
-        if t == "cp-run":
-            if not cp_file:
-                return "⚠ No RionID table in the connected RionID folders (Folders below)."
-            return start_tool("correction_plot", [cp_file, cp_sheet or "New2ndOrderCorrection"])
         if t == "ls-run":
             if not ls_file:
                 return "⚠ No scheme files in the connected level-scheme folders (Folders below)."
