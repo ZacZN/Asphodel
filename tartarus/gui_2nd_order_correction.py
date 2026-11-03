@@ -14,10 +14,10 @@ One harmonic is worked on at a time.
     within ± ref_search_hz; core.physics.harmonic_references).  No correction
     is applied to the lines: they are what the correction is fitted against.
 2.  Drag the lines into place (zoom in first: lines can be dragged when at
-    most MAX_SHAPES are in view).  "Stretch all": dragging a line stretches
-    all lines of the harmonic about its reference line, which stays fixed.
-    "Move one line": the dragged line moves on its own; the reference line of
-    a harmonic other than the reference harmonic can be dragged onto its peak.
+    most MAX_SHAPES are in view): dragging a line stretches all lines of the
+    harmonic about its reference line, which stays fixed.  The reference line
+    of another harmonic is put on its peak by selecting it and clicking the
+    peak (or "Assign to nearest peak").
 3.  Assign peaks: click the ▼ marker above a line to select it, then click on
     its peak in the spectrum (or "Assign to nearest peak").  f_exp is the
     highest bin within ± the peak window, refined with a 3-point parabola.
@@ -387,7 +387,7 @@ LINE_GROUPS = [   # name, line style (WebGL traces 1..5)
 ]
 
 
-def overlay(s, state, m, view, mode):
+def overlay(s, state, m, view):
     """The parts of the plot that change: line traces (WebGL, one per group),
     the ▼ marker trace (WebGL), the draggable lines in view (shapes) and the
     labels.  Returns (traces, shapes, annotations, shape keys, note)."""
@@ -398,8 +398,7 @@ def overlay(s, state, m, view, mode):
         w = view[1] - view[0]
         in_view = ((lines["f_show"] >= view[0] - 0.05 * w)
                    & (lines["f_show"] <= view[1] + 0.05 * w)).to_numpy()
-    movable = (~lines["assigned"] & (~lines["is_ref"] | ((mode == "one")
-                                                        & (m["h"] != s["ref_harmonic"])))).to_numpy()
+    movable = (~lines["assigned"] & ~lines["is_ref"]).to_numpy()
     cand = in_view & movable
     note = ""
     if cand.sum() > MAX_SHAPES:
@@ -475,9 +474,9 @@ def overlay(s, state, m, view, mode):
     return traces, shapes, ann, keys, note
 
 
-def figure(s, state, m, view, mode):
+def figure(s, state, m, view):
     """Full plot: spectrum (trace 0, no hover) + overlay."""
-    traces, shapes, ann, keys, note = overlay(s, state, m, view, mode)
+    traces, shapes, ann, keys, note = overlay(s, state, m, view)
     fig = go.Figure()
     # no Plotly hover on the spectrum: the readout shows f and P
     fig.add_trace(go.Scattergl(x=m["ff"], y=m["pp"], mode="lines", name="Spectrum",
@@ -912,10 +911,8 @@ def serve_layout():
                 html.Div("Each harmonic keeps its own stretch, moved lines, assignments and fit.",
                          className="note"),
                 html.H3("Dragging"),
-                dcc.RadioItems(id="g-mode", value="stretch", options=[
-                    {"label": " Stretch all about the reference", "value": "stretch"},
-                    {"label": " Move one line", "value": "one"}],
-                    labelStyle={"display": "block"}),
+                html.Div("Drag a line to stretch all lines of this harmonic about the "
+                         "reference line.", className="note"),
                 html.Div(id="g-stretch", className="note"),
                 html.Button("Lines to corrected positions", id="g-tocorr", className="btn",
                             n_clicks=0, title="After Calculate: put this harmonic's lines back "
@@ -1173,10 +1170,10 @@ app.clientside_callback(
     Output("g-info", "children"), Output("g-warn", "children"), Output("g-sel", "children"),
     Output("g-table", "data"), Output("g-stretch", "children"), Output("g-sig", "data"),
     Output("g-assign-head", "children"),
-    Input("g-state", "data"), Input("g-view", "data"), Input("g-mode", "value"), *SETTING_INPUTS,
+    Input("g-state", "data"), Input("g-view", "data"), *SETTING_INPUTS,
     State("g-sig", "data"),
 )
-def draw(state, view, mode, *values):
+def draw(state, view, *values):
     values, sig_old = values[:-1], values[-1]
     nu = dash.no_update
     if not state or not state.get("file"):
@@ -1191,14 +1188,14 @@ def draw(state, view, mode, *values):
     sig = [state["file"]]
     if sig == sig_old:
         # same spectrum: only the lines, markers and labels are sent
-        traces, shapes, ann, keys, note = overlay(s, state, m, view, mode)
+        traces, shapes, ann, keys, note = overlay(s, state, m, view)
         fig = dash.Patch()
         for j, t in enumerate(traces):
             fig["data"][1 + j] = t
         fig["layout"]["shapes"] = shapes
         fig["layout"]["annotations"] = ann
     else:
-        fig, keys, note = figure(s, state, m, view, mode)
+        fig, keys, note = figure(s, state, m, view)
     lines = m["lines"].set_index("key")
     info = (f"h{h} · reference {s['ref_name']} h{s['ref_harmonic']} = strongest peak at "
             f"{m['f_ref']:,.1f} Hz · {len(lines)} lines")
@@ -1260,7 +1257,7 @@ def _shape_moves(relayout):
     return moved
 
 
-def _drag(moved, keys, state, s, m, mode):
+def _drag(moved, keys, state, s, m):
     """Apply shape drags.  Returns a message."""
     lines = m["lines"].set_index("key")
     h = m["h"]
@@ -1283,19 +1280,9 @@ def _drag(moved, keys, state, s, m, mode):
         changed[0] = True
         ref_h = m["ref_h_f"]
         if r["is_ref"]:
-            if h == s["ref_harmonic"]:
-                msg = f"The reference line h{h} is the strongest peak and stays fixed."
-            elif mode == "one":
-                f, _ = physics.peak_near(m["ff"], m["pp"], x_new, s["peak_window_hz"], climb=True)
-                state.setdefault("ref_override", {})[str(h)] = float(f if f is not None else x_new)
-                msg = (f"Reference line h{h} moved to " + (f"the peak at {f:,.1f} Hz" if f is not None
-                                                           else f"{x_new:,.1f} Hz (no peak there)"))
+            msg = f"The reference line h{h} stays fixed."
             continue
         if r["assigned"]:
-            continue
-        if mode == "one":
-            base = ref_h + m["k"] * (r["f_base"] - ref_h)
-            state.setdefault("offsets", {})[key] = float(x_new - base)
             continue
         d = float(r["f_base"] - ref_h)
         if abs(d) < 1e-6:
@@ -1396,11 +1383,11 @@ def _assign(state, s, m, key, centre):
     Input("g-hadd", "n_clicks"), Input("g-hnew", "n_submit"),
     State("g-hnew", "value"),
     State("g-table", "data"), State("g-state", "data"), State("g-keys", "data"),
-    State("g-mode", "value"), *SETTING_STATES,
+    *SETTING_STATES,
     prevent_initial_call=True,
 )
 def update_state(drag, click, sclick, _a, _u, _d, _r, _c, _ts, _undo_n, _tocorr, file, _hs, _hd, _ha, _hn, hnew,
-                 table, state, keys, mode, *values):
+                 table, state, keys, *values):
     nu = dash.no_update
     trig = ctx.triggered_id
     state = dict(state or new_state(file))
@@ -1472,7 +1459,7 @@ def update_state(drag, click, sclick, _a, _u, _d, _r, _c, _ts, _undo_n, _tocorr,
     h = m["h"]
     msg = ""
     if moved:
-        msg = _drag(moved, keys or [], state, s, m, mode)
+        msg = _drag(moved, keys or [], state, s, m)
         if msg is None:                    # nothing moved (a click on a line)
             return nu, nu, nu
     elif trig == "g-graph":
