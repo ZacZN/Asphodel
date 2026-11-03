@@ -1004,6 +1004,11 @@ def serve_layout():
                         html.Div(id="g-pmsg"),
                     ], className="body"),
                 ], className="box"),
+                html.Div([
+                    html.Div([html.Span("Corrections by harmonic"),
+                              html.Span(id="g-sum-note", className="note")], className="head"),
+                    html.Div(id="g-summary", className="body"),
+                ], className="box"),
             ], className="main"),
         ], className="wrap"),
     ])
@@ -1380,13 +1385,15 @@ def _assign(state, s, m, key, centre):
     Input("g-undo", "n_clicks"), Input("g-tocorr", "n_clicks"),
     Input("g-file", "value"),
     Input({"type": "g-hsel", "h": ALL}, "n_clicks"), Input({"type": "g-hdel", "h": ALL}, "n_clicks"),
+    Input({"type": "g-hsum", "h": ALL}, "n_clicks"),
     Input("g-hadd", "n_clicks"), Input("g-hnew", "n_submit"),
     State("g-hnew", "value"),
     State("g-table", "data"), State("g-state", "data"), State("g-keys", "data"),
     *SETTING_STATES,
     prevent_initial_call=True,
 )
-def update_state(drag, click, sclick, _a, _u, _d, _r, _c, _ts, _undo_n, _tocorr, file, _hs, _hd, _ha, _hn, hnew,
+def update_state(drag, click, sclick, _a, _u, _d, _r, _c, _ts, _undo_n, _tocorr, file, _hs, _hd, _hsum,
+                 _ha, _hn, hnew,
                  table, state, keys, *values):
     nu = dash.no_update
     trig = ctx.triggered_id
@@ -1405,12 +1412,14 @@ def update_state(drag, click, sclick, _a, _u, _d, _r, _c, _ts, _undo_n, _tocorr,
             if new.get("h") not in new["harmonics"]:
                 new["h"] = ref_h
         return new, f"Opened {os.path.basename(file)}.", new.get("h")
-    if isinstance(trig, dict) and trig.get("type") in ("g-hsel", "g-hdel"):
+    if isinstance(trig, dict) and trig.get("type") in ("g-hsel", "g-hdel", "g-hsum"):
         if not (ctx.triggered and ctx.triggered[0]["value"]) or not ref_h:
             return nu, nu, nu                # buttons just (re)drawn, not clicked
         h = int(trig["h"])
         hs = state_harmonics(state, ref_h)
-        if trig["type"] == "g-hsel":
+        if trig["type"] == "g-hsum" and h not in hs:    # from the summary: back on the list
+            state["harmonics"] = state_harmonics(dict(state, harmonics=hs + [h]), ref_h)
+        if trig["type"] in ("g-hsel", "g-hsum"):
             if h == state.get("h"):
                 return nu, nu, nu
             state["h"], state["selected"] = h, None
@@ -1546,6 +1555,66 @@ def calculate(n, state, *values):
     save_session(state)
     return (state, f"✓ h{m['h']} calculated; the lines are now at their corrected positions "
                    f"(↶ Undo last drag goes back).", n)
+
+
+def summary_table(state, target, cur_h):
+    """Rows per harmonic: this spectrum's calculated fit, and what the profile
+    chosen in 'Save into' holds for that harmonic."""
+    fits = (state or {}).get("fit") or {}
+    prof = corrections.get_profile(target) if target and target != NEW_PROFILE else None
+    per_h = (prof or {}).get("per_harmonic") or {}
+    hs = sorted({int(h) for h in fits} | {int(h) for h in per_h})
+    pname = prof["name"] if prof else None
+    head = ["Harmonic", "Ions", "a", "b", "c", "RMS (Hz, rev)", "Reference line", "Calculated",
+            f"In profile '{pname}'" if pname else "In profile"]
+    rows = []
+    for h in hs:
+        r = fits.get(str(h))
+        e = per_h.get(str(h))
+        btn = html.Button(f"h{h}", id={"type": "g-hsum", "h": h}, n_clicks=0,
+                          className="chip-h" + (" on" if h == cur_h else ""),
+                          title=f"Show h{h}", style={"border": "1px solid #999",
+                                                     "borderRadius": "12px", "cursor": "pointer"})
+        if r:
+            (a, b, c), (da, db, dc) = r["abc"], r["abc_unc"]
+            when = datetime.datetime.fromisoformat(r["time"]).strftime("%d %b %H:%M")
+            cells = [r["n"], f"{a:.6e} ± {da:.2e}", f"{b:.6e} ± {db:.2e}", f"{c:.6e} ± {dc:.2e}",
+                     f"{r['rms']:.3f}",
+                     f"{r['ref_f_h']:,.1f} Hz · {REF_PEAK_TEXT.get(r.get('ref_found'), '')}", when]
+        else:
+            cells = ["–", "not calculated for this spectrum", "", "", "", "", ""]
+        if not prof:
+            inprof = "–" if target == NEW_PROFILE else "(profile not found)"
+        elif e is None:
+            inprof = "not in the profile (uses its general a, b, c)"
+        elif r and all(corrections._same(x, y) for x, y in zip(r["abc"], (e["a"], e["b"], e["c"]))):
+            inprof = "✓ same as this fit"
+        else:
+            src = os.path.basename((e.get("fit") or {}).get("source_file") or "") or "?"
+            inprof = (f"a = {e['a']:.6e}, b = {e['b']:.6e}, c = {e['c']:.6e}"
+                      + (" (differs from this fit)" if r else "") + f" · from {src}")
+        rows.append([btn] + cells + [inprof])
+    if prof:
+        gen = ("general (other harmonics)", "", f"{prof['a']:.6e}", f"{prof['b']:.6e}",
+               f"{prof['c']:.6e}", "", "", "", corrections.describe(prof))
+        rows.append(list(gen))
+    if not rows:
+        return "No harmonic calculated for this spectrum yet."
+    return html.Table([html.Thead(html.Tr([html.Th(x) for x in head])),
+                       html.Tbody([html.Tr([html.Td(x) for x in r]) for r in rows])],
+                      className="tbl")
+
+
+@app.callback(
+    Output("g-summary", "children"), Output("g-sum-note", "children"),
+    Input("g-state", "data"), Input("g-ptarget", "value"), Input("g-pmsg", "children"),
+)
+def show_summary(state, target, _pmsg):
+    h = (state or {}).get("h")
+    note = ("this spectrum's fits; compare with the profile chosen under 'Save into'"
+            if target and target != NEW_PROFILE else
+            "this spectrum's fits; pick a profile under 'Save into' to compare")
+    return summary_table(state, target, h), note
 
 
 # Labels of the in-page fit plot: Theia's isochronicity label placement
