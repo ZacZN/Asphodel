@@ -575,18 +575,20 @@ def fit_figure(r):
     xx = np.linspace(x.min() - pad, x.max() + pad, 500)
     fig.add_trace(go.Scatter(x=xx.tolist(), y=(r["s1"] * (xx - r["x0"])
                                                + r["s2"] * (xx - r["x0"]) ** 2).tolist(),
-                             mode="lines", line=dict(color=MPL_C1, width=2),
+                             mode="lines", line=dict(color=MPL_C1, width=2), meta="fit-curve",
                              name="Anchored 2nd-order fit (unweighted)", hoverinfo="skip",
                              legendrank=3),
                   row=1, col=1)
+    labels = [pretty_ion_html(n) for n in names]
     fig.add_trace(go.Scatter(x=x[1:].tolist(), y=y[1:].tolist(), mode="markers", name="Data", legendrank=1,
-                             text=names[1:], marker=dict(color=MPL_C0, size=9),
+                             text=labels[1:], meta="fit-pts", marker=dict(color=MPL_C0, size=9),
                              hovertemplate="%{text}<br>f_sim = %{x:.3f} Hz<br>"
                                            "f_diff = %{y:.3f} Hz<extra></extra>"), row=1, col=1)
     fig.add_trace(go.Scatter(x=[r["x0"]], y=[0], mode="markers",
                              name=f"Anchor ({pretty_ion_html(r['ref_name'])}, "
                                   f"f<sub>exp</sub> = {r['ref_f_h']!r} Hz)",
                              marker=dict(symbol="star", size=20, color=MPL_C3), legendrank=2,
+                             text=[labels[0]], meta="fit-pts",
                              hovertemplate="anchor (reference line)<br>x0 = %{x:.3f} Hz"
                                            "<extra></extra>"), row=1, col=1)
     # residuals
@@ -600,42 +602,17 @@ def fit_figure(r):
     fig.add_hline(y=0, line=dict(color="grey", width=0.8, dash="dash"), row=1, col=1)
     fig.add_hline(y=0, line=dict(color=MPL_C1, width=1.5), row=2, col=1)
 
-    # labels: nearby points in clusters, upper half above-left of the line and
-    # the rest below-right, each with a leader line (same offsets as the old
-    # script, in pixels instead of points)
+    # ion labels: placed in the page so they never overlap (FIT_LABEL_JS, the
+    # placement of Theia's isochronicity labels); here only the box
     ann = []
-    xr, yr = np.ptp(x) or 1.0, np.ptp(y) or 1.0
-    order = np.argsort(x)
-    clusters, cur = [], [order[0]]
-    for i in order[1:]:
-        j = cur[-1]
-        if abs(x[i] - x[j]) < 0.02 * xr and abs(y[i] - y[j]) < 0.05 * yr:
-            cur.append(i)
-        else:
-            clusters.append(cur)
-            cur = [i]
-    clusters.append(cur)
-    lab = dict(xref="x", yref="y", showarrow=True, arrowhead=0, arrowwidth=1.2,
-               arrowcolor="black", standoff=3, font=dict(size=14, color="black"))
-    for cl in clusters:
-        cl = sorted(cl, key=lambda k: y[k])
-        n_above = (len(cl) + 1) // 2 if len(cl) > 1 else 0
-        above, below = cl[len(cl) - n_above:], cl[:len(cl) - n_above][::-1]
-        above = sorted(above, key=lambda k: x[k], reverse=True)
-        for i, k in enumerate(above):
-            ann.append(dict(lab, x=x[k], y=y[k], text=pretty_ion_html(names[k]),
-                            ax=-20 - 90 * i, ay=-(45 + 20 * (len(above) - 1 - i)),
-                            xanchor="center", yanchor="bottom"))
-        for i, k in enumerate(below):
-            ann.append(dict(lab, x=x[k], y=y[k], text=pretty_ion_html(names[k]),
-                            ax=40 + 20 * i, ay=30 + 34 * i, xanchor="left", yanchor="middle"))
     # coefficient box, top left
     box = ("Expanded: f<sub>diff</sub> = a x² + b x + c<br>"
            f"  a = {a:.6e} ± {da:.2e} Hz⁻¹<br>"
            f"  b = {b:.6e} ± {db:.2e}<br>"
            f"  c = {c:.6e} ± {dc:.2e} Hz<br><br>"
            f"RMS residual = {r['rms']:.3f} Hz").replace("  ", "&nbsp;&nbsp;")
-    ann.append(dict(xref="x domain", yref="y domain", x=0.01, y=0.98, xanchor="left",
+    # box and legend to the right of the plot, so they never hide a point
+    ann.append(dict(xref="paper", yref="y domain", x=1.02, y=0.62, xanchor="left",
                     yanchor="top", showarrow=False, align="left", text=box,
                     font=dict(family="DejaVu Sans Mono, monospace", size=14, color="black"),
                     bgcolor="rgba(255,255,255,0.9)", bordercolor="grey", borderwidth=1,
@@ -644,11 +621,11 @@ def fit_figure(r):
                 linecolor="black", mirror=True, ticks="outside", tickformat=".0f")
     fig.update_layout(template="none", plot_bgcolor="white", paper_bgcolor="white",
                       height=700, font=dict(size=15, color="black"), annotations=ann,
-                      margin=dict(l=90, r=30, t=60, b=60),
+                      margin=dict(l=90, r=380, t=60, b=60),
                       title=dict(text=f"Second-order Correction h{r['h']} "
                                       f"(masses incl. electron binding)", x=0.5,
                                  xanchor="center", font=dict(size=18)),
-                      legend=dict(x=0.99, y=0.27, xanchor="right", yanchor="bottom",
+                      legend=dict(x=1.02, y=1.0, xanchor="left", yanchor="top",
                                   bgcolor="rgba(255,255,255,0.85)", bordercolor="#cccccc",
                                   borderwidth=1))
     fig.update_xaxes(**grid)
@@ -855,6 +832,7 @@ def serve_layout():
         dcc.Store(id="g-pconfirm", data=None),
         dcc.Store(id="g-hcur", data=h),          # harmonic shown (for the fit panel)
         html.Div(id="_g-hook", style={"display": "none"}),
+        html.Div(id="_g-fit-label-hook", style={"display": "none"}),
         html.Div(id="g-readout"),
         html.Div([html.H1(APP_NAME), html.Span(f"experiment {paths.experiment()}", className="exp")],
                  className="top"),
@@ -1522,6 +1500,316 @@ def calculate(n, state, *values):
     save_session(state)
     return (state, f"✓ h{m['h']} calculated; the lines are now at their corrected positions "
                    f"(↶ Undo last drag goes back).", n)
+
+
+# Labels of the in-page fit plot: Theia's isochronicity label placement
+# (candidate spots, overlap / arrow-crossing costs, simulated annealing with
+# fixed seeds), re-run after every zoom / pan / resize once the view is still;
+# styled like the matplotlib figure (black text and leader lines, no box).
+FIT_LABEL_JS = r"""
+function(fig) {
+    var ANG = [45, 135, -45, -135, 90, -90, 0, 180,
+               67.5, 112.5, -67.5, -112.5, 22.5, 157.5, -22.5, -157.5,
+               33.75, 56.25, 123.75, 146.25, -33.75, -56.25, -123.75, -146.25];
+    var RAD = [24, 34, 46, 60, 76, 94, 115, 140, 170, 210, 260, 320];
+    var FONT_PX = 14;
+    function ov(a, b) {
+        var w = Math.min(a[2], b[2]) - Math.max(a[0], b[0]);
+        var h = Math.min(a[3], b[3]) - Math.max(a[1], b[1]);
+        return (w > 0 && h > 0) ? w * h : 0;
+    }
+    // 2-px steps of the arrow (from 8 px off the point to the label box) on an error bar
+    function leaderInBars(px, py, cx, cy, box, bars) {
+        var d = Math.hypot(cx - px, cy - py);
+        if (d <= 8 || !bars.length) return 0;
+        var ux = (cx - px) / d, uy = (cy - py) / d, hits = 0;
+        for (var s = 8; s < d; s += 2) {
+            var x = px + s * ux, y = py + s * uy;
+            if (x >= box[0] && x <= box[2] && y >= box[1] && y <= box[3]) break;
+            for (var q = 0; q < bars.length; q++) {
+                var b = bars[q];
+                if (x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3]) { hits++; break; }
+            }
+        }
+        return hits;
+    }
+    // visible arrow: 5 px off the point to where it enters the label box
+    function leader(px, py, cx, cy, w, h) {
+        var dx = cx - px, dy = cy - py, hw = w / 2 + 2, hh = h / 2 + 1;
+        if (Math.abs(dx) <= hw && Math.abs(dy) <= hh) return null;
+        var s = Math.min(dx ? hw / Math.abs(dx) : Infinity, dy ? hh / Math.abs(dy) : Infinity);
+        var t0 = Math.min(5 / Math.hypot(dx, dy), 1 - s);
+        return [px + t0 * dx, py + t0 * dy, px + (1 - s) * dx, py + (1 - s) * dy];
+    }
+    // point → label centre (arrow-crossing test; conservative, as the drawn
+    // arrow stops at the box edge)
+    function toCentre(px, py, cx, cy) {
+        var d = Math.hypot(cx - px, cy - py);
+        if (d <= 5) return null;
+        return [px + 5 * (cx - px) / d, py + 5 * (cy - py) / d, cx, cy];
+    }
+    function segRect(s, r) {          // segment through rectangle (Liang–Barsky)
+        if (!s) return false;
+        var dx = s[2] - s[0], dy = s[3] - s[1], t0 = 0, t1 = 1;
+        var P = [-dx, dx, -dy, dy], Q = [s[0] - r[0], r[2] - s[0], s[1] - r[1], r[3] - s[1]];
+        for (var k = 0; k < 4; k++) {
+            if (P[k] === 0) { if (Q[k] < 0) return false; }
+            else {
+                var t = Q[k] / P[k];
+                if (P[k] < 0) t0 = Math.max(t0, t); else t1 = Math.min(t1, t);
+                if (t0 > t1) return false;
+            }
+        }
+        return true;
+    }
+    function segsCross(a, b) {
+        if (!a || !b) return false;
+        function o(ax, ay, bx, by, cx, cy) { return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax); }
+        var d1 = o(b[0], b[1], b[2], b[3], a[0], a[1]), d2 = o(b[0], b[1], b[2], b[3], a[2], a[3]);
+        var d3 = o(a[0], a[1], a[2], a[3], b[0], b[1]), d4 = o(a[0], a[1], a[2], a[3], b[2], b[3]);
+        return d1 * d2 < 0 && d3 * d4 < 0;
+    }
+    function nearSeg(qx, qy, s) {
+        if (!s) return false;
+        var vx = s[2] - s[0], vy = s[3] - s[1], L2 = vx * vx + vy * vy;
+        var t = L2 === 0 ? 0 : Math.min(Math.max(((qx - s[0]) * vx + (qy - s[1]) * vy) / L2, 0), 1);
+        return Math.hypot(qx - (s[0] + t * vx), qy - (s[1] + t * vy)) < 7;
+    }
+    // same method as place_labels() in Python: candidate spots per label,
+    // own cost + pair costs, simulated annealing with a fixed seed, polish
+    function place(pts, sizes, obst, rect, bars) {
+        var n = pts.length;
+        if (!n) return [];
+        var cands = [];
+        for (var i = 0; i < n; i++) {
+            var px = pts[i][0], py = pts[i][1], w = sizes[i][0], h = sizes[i][1], lst = [];
+            RAD.forEach(function(r) {
+                ANG.forEach(function(a) {
+                    var cx = px + r * Math.cos(a * Math.PI / 180), cy = py - r * Math.sin(a * Math.PI / 180);
+                    var box = [cx - w / 2 - 2, cy - h / 2 - 1, cx + w / 2 + 2, cy + h / 2 + 1];
+                    var area = (box[2] - box[0]) * (box[3] - box[1]);
+                    var u = 0.6 * r + 60 * (area - ov(box, rect));
+                    for (var o = 0; o < obst.length; o++)
+                        u += (obst[o].length > 4 ? obst[o][4] : 4) * ov(box, obst[o]);
+                    u += 150 * leaderInBars(px, py, cx, cy, box, bars);
+                    var lead = leader(px, py, cx, cy, w, h);
+                    for (var k = 0; k < n; k++)   // (points under this point's own marker are unavoidable)
+                        if (k !== i && Math.hypot(pts[k][0] - px, pts[k][1] - py) > 8 &&
+                            nearSeg(pts[k][0], pts[k][1], lead)) u += 300;
+                    var env = [Math.min(box[0], px), Math.min(box[1], py), Math.max(box[2], px), Math.max(box[3], py)];
+                    lst.push([u, [cx, cy], box, lead, toCentre(px, py, cx, cy), env]);
+                });
+            });
+            lst.sort(function(p, q) { return p[0] - q[0]; });
+            cands.push(lst.slice(0, 120));
+        }
+        var cache = new Map();
+        function pair(i, a, j, b) {
+            var key = i < j ? ((i * 1000 + a) * 100000 + j * 1000 + b) : ((j * 1000 + b) * 100000 + i * 1000 + a);
+            var v = cache.get(key);
+            if (v !== undefined) return v;
+            var A = cands[i][a], B = cands[j][b], ea = A[5], eb = B[5];
+            v = 0;
+            if (!(ea[2] < eb[0] || eb[2] < ea[0] || ea[3] < eb[1] || eb[3] < ea[1])) {
+                v += 20 * ov(A[2], B[2]);
+                if (segRect(A[3], B[2]) || segRect(B[3], A[2])) v += 6000;
+                if (segsCross(A[4], B[4])) v += 6000;
+            }
+            cache.set(key, v);
+            return v;
+        }
+        var env = cands.map(function(L) {
+            var e = [Infinity, Infinity, -Infinity, -Infinity];
+            L.forEach(function(c) { e[0] = Math.min(e[0], c[5][0]); e[1] = Math.min(e[1], c[5][1]);
+                                    e[2] = Math.max(e[2], c[5][2]); e[3] = Math.max(e[3], c[5][3]); });
+            return e;
+        });
+        var nb = [];
+        for (var i = 0; i < n; i++) {
+            nb.push([]);
+            for (var j = 0; j < n; j++)
+                if (j !== i && !(env[i][2] < env[j][0] || env[j][2] < env[i][0] ||
+                                 env[i][3] < env[j][1] || env[j][3] < env[i][1])) nb[i].push(j);
+        }
+        var cur = new Array(n).fill(0);
+        function local(i, a) {
+            var c = cands[i][a][0];
+            for (var q = 0; q < nb[i].length; q++) c += pair(i, a, nb[i][q], cur[nb[i][q]]);
+            return c;
+        }
+        function total() {
+            var t = 0;
+            for (var i = 0; i < n; i++) {
+                t += cands[i][cur[i]][0];
+                for (var q = 0; q < nb[i].length; q++) t += 0.5 * pair(i, cur[i], nb[i][q], cur[nb[i][q]]);
+            }
+            return t;
+        }
+        var seed;                             // fixed seeds: same view, same layout
+        function rnd() {                      // mulberry32
+            seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+            var t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+            t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+            return ((t ^ t >>> 14) >>> 0) / 4294967296;
+        }
+        // several annealing runs, keep the layout with the lowest cost
+        var iters = Math.min(25000, 700 * n), T0 = 3000, T1 = 5, bestLayout = null, bestCost = Infinity;
+        for (var run = 0; run < 4; run++) {
+            seed = 12345 + run;
+            cur = new Array(n).fill(0);
+            var tot = 0, bestTot = 0, best = cur.slice();
+            for (var it = 0; it < iters; it++) {
+                var T = T0 * Math.pow(T1 / T0, it / iters);
+                var i = Math.floor(rnd() * n), a = Math.floor(rnd() * cands[i].length);
+                if (a === cur[i]) continue;
+                var d = local(i, a) - local(i, cur[i]);
+                if (d < 0 || rnd() < Math.exp(-d / T)) {
+                    cur[i] = a; tot += d;
+                    if (tot < bestTot - 1e-9) { bestTot = tot; best = cur.slice(); }
+                }
+            }
+            cur = best;
+            for (var r5 = 0; r5 < 5; r5++) {  // polish: best spot for each label
+                var changed = false;
+                for (var i = 0; i < n; i++) {
+                    var bi = cur[i], bc = local(i, cur[i]);
+                    for (var a = 0; a < cands[i].length; a++) { var c = local(i, a); if (c < bc - 1e-9) { bc = c; bi = a; } }
+                    if (bi !== cur[i]) { cur[i] = bi; changed = true; }
+                }
+                if (!changed) break;
+            }
+            var tc = total();
+            if (tc < bestCost) { bestCost = tc; bestLayout = cur.slice(); }
+        }
+        cur = bestLayout;
+        return cur.map(function(a, i) { return [cands[i][a][1][0] - pts[i][0], cands[i][a][1][1] - pts[i][1]]; });
+    }
+    var ctx2d = document.createElement('canvas').getContext('2d');
+    function textW(t, font) {
+        // ion names are HTML (<sup>A</sup>El<sup>q+</sup>): superscripts at 70 %
+        ctx2d.font = font;
+        var w = 0, parts = String(t).split(/(<sup>.*?<\/sup>)/);
+        parts.forEach(function(p) {
+            if (!p) return;
+            var m = p.match(/^<sup>(.*)<\/sup>$/);
+            w += m ? 0.7 * ctx2d.measureText(m[1]).width
+                   : ctx2d.measureText(p.replace(/<[^>]+>/g, '')).width;
+        });
+        return w;
+    }
+
+    function layoutLabels(gd) {
+        var L = gd._fullLayout;
+        if (!L || !L.xaxis || !L.yaxis || !gd.data) return;
+        var xa = L.xaxis, ya = L.yaxis;
+        var rect = [xa._offset, ya._offset, xa._offset + xa._length, ya._offset + ya._length];
+        var gr = gd.getBoundingClientRect();
+        var font = FONT_PX + 'px "Open Sans", verdana, arial, sans-serif';
+        var pts = [], sizes = [], obst = [], lab = [], bars = [];
+        gd.data.forEach(function(tr, ti) {
+            var full = gd._fullData[ti];
+            if (!full || full.visible !== true) return;
+            if (tr.meta === 'fit-curve') {
+                var step = Math.max(1, Math.floor(full.x.length / 150));
+                for (var k = 0; k < full.x.length; k += step) {
+                    var cx = xa.l2p(full.x[k]) + xa._offset, cy = ya.l2p(full.y[k]) + ya._offset;
+                    obst.push([cx - 3, cy - 3, cx + 3, cy + 3]);
+                }
+                return;
+            }
+            if (tr.meta !== 'fit-pts') return;
+            var err = (full.error_y && full.error_y.array) || [];
+            for (var k = 0; k < full.x.length; k++) {
+                var X = full.x[k], Y = full.y[k];
+                var px = xa.l2p(X) + xa._offset, py = ya.l2p(Y) + ya._offset;
+                if (!isFinite(px) || !isFinite(py)) continue;
+                obst.push([px - 7, py - 7, px + 7, py + 7]);
+                var e = err[k];
+                if (isFinite(e) && e > 0) {
+                    var y1 = ya.l2p(Y + e) + ya._offset, y2 = ya.l2p(Y - e) + ya._offset;
+                    obst.push([px - 4, Math.min(y1, y2), px + 4, Math.max(y1, y2)]);
+                    bars.push([px - 3, Math.min(y1, y2), px + 3, Math.max(y1, y2)]);
+                }
+                if (px < rect[0] || px > rect[2] || py < rect[1] || py > rect[3]) continue;
+                var t = String(full.text[k]);
+                pts.push([px, py]);
+                // text + a little white space round it (labels as in the matplotlib figure)
+                sizes.push([textW(t, font) + 8, Math.round(FONT_PX * 1.5) + 6]);
+                lab.push({x: X, y: Y, text: t});
+            }
+        });
+        // never under the parameter box or the legend
+        gd.querySelectorAll('.annotation, .legend').forEach(function(el) {
+            if (el.classList.contains('annotation') && el.getAttribute('data-index') !== null) {
+                var a = (gd.layout.annotations || [])[+el.getAttribute('data-index')];
+                if (a && a.name === 'fitlab') return;
+            }
+            var r = el.getBoundingClientRect();
+            if (r.width && r.height)
+                obst.push([r.left - gr.left, r.top - gr.top, r.right - gr.left, r.bottom - gr.top, 20]);
+        });
+        var offs = place(pts, sizes, obst, rect, bars);
+        var keep = (gd.layout.annotations || []).filter(function(a) { return a.name !== 'fitlab'; });
+        var anns = keep.concat(lab.map(function(l, i) {
+            return {x: l.x, y: l.y, xref: 'x', yref: 'y', text: l.text, name: 'fitlab',
+                    showarrow: true, ax: offs[i][0], ay: offs[i][1], arrowhead: 0,
+                    arrowwidth: 1.2, arrowcolor: '#000000', standoff: 3,
+                    font: {size: FONT_PX, color: '#000000'},
+                    bgcolor: 'rgba(255,255,255,0.75)', borderwidth: 0, borderpad: 2,
+                    captureevents: false};
+        }));
+        gd._fitLabelBusy = true;
+        Plotly.relayout(gd, {annotations: anns}).then(function() { gd._fitLabelBusy = false; },
+                                                      function() { gd._fitLabelBusy = false; });
+    }
+
+    setTimeout(function() {
+        var gd = document.querySelector('#g-fit-graph .js-plotly-plot');
+        if (!gd) return;
+        if (!gd._fitLabelHook) {
+            gd._fitLabelHook = true;
+            // Wait until the view is still: a scroll-wheel zoom is a preview
+            // that Plotly commits later, and redrawing the labels in between
+            // throws the preview away (the plot pulses in and out).  So
+            // re-place only 0.4 s after the last wheel step / view change,
+            // and never while a mouse button is held (drag-zoom / pan).
+            var timer = null, lastWheel = 0, mouseDown = false, QUIET = 400;
+            var soon = function() {
+                clearTimeout(timer);
+                timer = setTimeout(function run() {
+                    if (mouseDown || Date.now() - lastWheel < QUIET) {
+                        timer = setTimeout(run, QUIET);
+                        return;
+                    }
+                    layoutLabels(gd);
+                }, QUIET);
+            };
+            gd.addEventListener('wheel', function() { lastWheel = Date.now(); soon(); },
+                                {capture: true, passive: true});
+            gd.addEventListener('mousedown', function() { mouseDown = true; }, true);
+            window.addEventListener('mouseup', function() { if (mouseDown) { mouseDown = false; soon(); } });
+            gd.on('plotly_relayout', function(ev) {
+                if (gd._fitLabelBusy) return;
+                var keys = Object.keys(ev || {});
+                if (keys.length && keys.every(function(k) { return k.indexOf('annotations') === 0; })) return;
+                soon();
+            });
+            gd.on('plotly_restyle', soon);            // legend clicks (hide / show)
+            window.addEventListener('resize', soon);
+            gd._fitSoon = soon;
+        }
+        gd._fitSoon();
+    }, 150);
+    return window.dash_clientside.no_update;
+}
+"""
+
+app.clientside_callback(
+    FIT_LABEL_JS,
+    Output("_g-fit-label-hook", "children"),
+    Input("g-fit-graph", "figure"),
+    prevent_initial_call=True,
+)
 
 
 CORR_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
