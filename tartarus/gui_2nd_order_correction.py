@@ -558,6 +558,63 @@ def pretty_ion_html(name):
     return f"<sup>{A}{iso}</sup>{el}<sup>{q}</sup>"
 
 
+# places for the coefficient box and the legend in the main panel:
+# name -> (x, y, xanchor, yanchor) in axis-domain units
+_SPOTS = {"tl": (0.01, 0.98, "left", "top"), "tr": (0.99, 0.98, "right", "top"),
+          "bl": (0.01, 0.03, "left", "bottom"), "br": (0.99, 0.03, "right", "bottom"),
+          "tc": (0.5, 0.98, "center", "top"), "bc": (0.5, 0.03, "center", "bottom"),
+          "ml": (0.01, 0.5, "left", "middle"), "mr": (0.99, 0.5, "right", "middle")}
+BOX_FRAC = (0.30, 0.36)      # rough size of the coefficient box (fraction of the panel)
+LEGEND_FRAC = (0.34, 0.22)   # ... and of the legend
+
+
+def _spot_rect(name, frac):
+    x, y, xa, ya = _SPOTS[name]
+    w, h = frac
+    x0 = {"left": x, "right": x - w, "center": x - w / 2}[xa]
+    y0 = {"bottom": y, "top": y - h, "middle": y - h / 2}[ya]
+    return x0, y0, x0 + w, y0 + h
+
+
+def _free_corners(x, y, xx, r):
+    """Places for the coefficient box and the legend inside the main panel:
+    the spots (corners, edge centres) whose area holds the fewest data points
+    and fit curve, box first, legend not overlapping the box."""
+    yc = r["s1"] * (xx - r["x0"]) + r["s2"] * (xx - r["x0"]) ** 2
+    ally = np.concatenate([y, yc])
+    lo, hi = float(ally.min()), float(ally.max())
+    pad = 0.06 * (hi - lo or 1.0)
+    lo, hi = lo - pad, hi + pad
+    xlo, xhi = float(xx.min()), float(xx.max())
+    px = (np.asarray(x) - xlo) / (xhi - xlo or 1)
+    py = (np.asarray(y) - lo) / (hi - lo or 1)
+    cx = (xx - xlo) / (xhi - xlo or 1)
+    cy = (yc - lo) / (hi - lo or 1)
+
+    def cost(rect):
+        x0, y0, x1, y1 = rect
+        m = 0.03                                   # a little room round each point
+        pts = ((px >= x0 - m) & (px <= x1 + m) & (py >= y0 - m) & (py <= y1 + m)).sum()
+        crv = ((cx >= x0) & (cx <= x1) & (cy >= y0) & (cy <= y1)).sum()
+        return 50 * pts + crv
+
+    order = list(_SPOTS)
+    box = min(order, key=lambda c: (cost(_spot_rect(c, BOX_FRAC)), order.index(c)))
+    br = _spot_rect(box, BOX_FRAC)
+
+    def apart(c):
+        a = _spot_rect(c, LEGEND_FRAC)
+        return a[2] <= br[0] or br[2] <= a[0] or a[3] <= br[1] or br[3] <= a[1]
+
+    pref = ["br", "bl", "tr", "tl", "bc", "tc", "mr", "ml"]
+    leg = min((c for c in pref if apart(c)),
+              key=lambda c: (cost(_spot_rect(c, LEGEND_FRAC)), pref.index(c)))
+    lx, ly, lxa, lya = _SPOTS[leg]
+    # the legend is placed in paper units: the main panel is the top 75 % of the plot
+    ly = 0.25 + 0.75 * ly
+    return _SPOTS[box], (lx, ly, lxa, lya)
+
+
 def fit_figure(r):
     """The fit of one harmonic in the style of the old script's figure
     (new_2nd_order_correction_plot.draw_figure): data C0, anchored fit C1,
@@ -611,9 +668,11 @@ def fit_figure(r):
            f"  b = {b:.6e} ± {db:.2e}<br>"
            f"  c = {c:.6e} ± {dc:.2e} Hz<br><br>"
            f"RMS residual = {r['rms']:.3f} Hz").replace("  ", "&nbsp;&nbsp;")
-    # box and legend to the right of the plot, so they never hide a point
-    ann.append(dict(xref="paper", yref="y domain", x=1.02, y=0.62, xanchor="left",
-                    yanchor="top", showarrow=False, align="left", text=box,
+    # box and legend inside the plot, in the two corners with the fewest
+    # points / curve (the labels are then placed around them by FIT_LABEL_JS)
+    (bx, by, bxa, bya), (lx, ly, lxa, lya) = _free_corners(x, y, xx, r)
+    ann.append(dict(xref="x domain", yref="y domain", x=bx, y=by, xanchor=bxa,
+                    yanchor=bya, showarrow=False, align="left", text=box,
                     font=dict(family="DejaVu Sans Mono, monospace", size=14, color="black"),
                     bgcolor="rgba(255,255,255,0.9)", bordercolor="grey", borderwidth=1,
                     borderpad=6))
@@ -621,11 +680,11 @@ def fit_figure(r):
                 linecolor="black", mirror=True, ticks="outside", tickformat=".0f")
     fig.update_layout(template="none", plot_bgcolor="white", paper_bgcolor="white",
                       height=700, font=dict(size=15, color="black"), annotations=ann,
-                      margin=dict(l=90, r=380, t=60, b=60),
+                      margin=dict(l=90, r=30, t=60, b=60),
                       title=dict(text=f"Second-order Correction h{r['h']} "
                                       f"(masses incl. electron binding)", x=0.5,
                                  xanchor="center", font=dict(size=18)),
-                      legend=dict(x=1.02, y=1.0, xanchor="left", yanchor="top",
+                      legend=dict(x=lx, y=ly, xanchor=lxa, yanchor=lya, yref="paper",
                                   bgcolor="rgba(255,255,255,0.85)", bordercolor="#cccccc",
                                   borderwidth=1))
     fig.update_xaxes(**grid)
