@@ -1330,7 +1330,7 @@ FILTER_HEAD_PX = 120    # height of the filter block above the hits table
 # Run info / settings tables: long values (e.g. corr_by_h) wrap onto several
 # lines inside the table's width instead of widening it
 KV_WRAP = dict(
-    style_data={"whiteSpace": "normal", "height": "auto"},
+    style_data={"whiteSpace": "pre-line", "height": "auto"},   # pre-line: keep \n line breaks
     style_cell_conditional=[
         {"if": {"column_id": "key"}, "whiteSpace": "nowrap", "width": "1%"},
         {"if": {"column_id": "value"}, "textAlign": "left", "overflowWrap": "anywhere",
@@ -3948,9 +3948,20 @@ def refresh_db_list(_, finished, _tab, current):
     return opts, (current if current in paths else (paths[0] if paths else None))
 
 
+def _kv_value(k, v):
+    # per-harmonic corrections: one line per harmonic, "214: [a, b, c]"
+    if k == "corr_by_h" and isinstance(v, dict):
+        def _hkey(h):
+            try:
+                return (0, int(h))
+            except (TypeError, ValueError):
+                return (1, str(h))
+        return "\n".join(f"{h}: {json.dumps(v[h])}" for h in sorted(v, key=_hkey))
+    return json.dumps(v) if isinstance(v, (list, dict, bool)) else str(v)
+
+
 def _kv_rows(d):
-    return [{"key": k, "value": json.dumps(v) if isinstance(v, (list, dict, bool)) else str(v)}
-            for k, v in d.items()]
+    return [{"key": k, "value": _kv_value(k, v)} for k, v in d.items()]
 
 
 @app.callback(
