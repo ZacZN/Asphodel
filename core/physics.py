@@ -318,6 +318,60 @@ def peak_near(ff, pp, centre, window_hz, climb=False, max_travel_hz=None):
     return parabolic_peak(ff, pp, i), i
 
 
+def peak_search_explain(ff, pp, centre, window_hz):
+    """Why peak_near(..., climb=False) did or did not find a peak at centre.
+
+    Returns {"lo_hz", "hi_hz" (window actually searched, after widening to
+    >= 3 bins), "window_hz", "bin_hz", "n_bins", "f_max", "p_max" (strongest
+    bin in the window, or None), "edge" ("low" / "high" / None), "found"
+    (frequency or None), "reason" (text)}.  ff must be sorted."""
+    out = {"lo_hz": None, "hi_hz": None, "window_hz": float(window_hz or 0), "bin_hz": None,
+           "n_bins": 0, "f_max": None, "p_max": None, "edge": None, "found": None, "reason": ""}
+    if ff is None or pp is None or len(ff) < 3:
+        out["reason"] = "no spectrum"
+        return out
+    if not window_hz or window_hz <= 0:
+        out["reason"] = "search off (window 0)"
+        return out
+    ff = np.asarray(ff, dtype=float)
+    pp = np.asarray(pp, dtype=float)
+    n = len(pp)
+    k = int(np.clip(np.searchsorted(ff, centre), 1, n - 1))
+    bin_hz = abs(float(ff[k]) - float(ff[k - 1]))
+    w = max(float(window_hz), 3.0 * bin_hz)
+    lo = int(np.searchsorted(ff, centre - w, side="left"))
+    hi = int(np.searchsorted(ff, centre + w, side="right"))
+    out.update(lo_hz=float(centre - w), hi_hz=float(centre + w), window_hz=w, bin_hz=bin_hz,
+               n_bins=max(hi - lo, 0))
+    if centre - w > ff[-1] or centre + w < ff[0]:
+        out["reason"] = (f"the search window ({centre - w:,.1f} – {centre + w:,.1f} Hz) is outside "
+                         f"the spectrum ({ff[0]:,.1f} – {ff[-1]:,.1f} Hz)")
+        return out
+    if hi - lo < 3:
+        out["reason"] = f"only {hi - lo} bin(s) of the spectrum in the search window (need 3)"
+        return out
+    seg = pp[lo:hi]
+    if not np.isfinite(seg).any():
+        out["reason"] = "no valid (finite) power values in the search window"
+        return out
+    i = lo + int(np.nanargmax(seg))
+    out.update(f_max=float(ff[i]), p_max=float(pp[i]))
+    if i == lo or i == hi - 1:
+        side = "low" if i == lo else "high"
+        out["edge"] = side
+        out["reason"] = (f"the strongest bin in ±{w:.1f} Hz is on the {side}-frequency edge of the "
+                         f"window ({ff[i]:,.1f} Hz, {ff[i] - centre:+.1f} Hz from expected): the power "
+                         f"is still rising {'below' if side == 'low' else 'above'} the window, so it is "
+                         f"the flank of something outside it, not a peak inside")
+        if lo == 0 or hi == n:
+            out["reason"] += " (the window reaches the end of the spectrum)"
+        return out
+    out["found"] = parabolic_peak(ff, pp, i)
+    out["reason"] = (f"peak found at {out['found']:,.1f} Hz ({out['found'] - centre:+.1f} Hz from "
+                     f"expected)")
+    return out
+
+
 def harmonic_references(ff, pp, ref_obs_freq, ref_harmonic, harmonics, window_hz):
     """Observed frequency of the reference ion at every harmonic.
 

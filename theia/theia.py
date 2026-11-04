@@ -969,8 +969,11 @@ def _ref_table_records(rows, ref_f_label=None):
     return out
 
 
-def ref_peak_table(id_, records, columns=REF_TABLE_COLS):
-    """Small table of where the reference ion's peak is in each harmonic."""
+def ref_peak_table(id_, records, columns=REF_TABLE_COLS, mark_h=None):
+    """Small table of where the reference ion's peak is in each harmonic
+    (mark_h: harmonic whose row is outlined)."""
+    mark = ([{"if": {"filter_query": f"{{h}} = {int(mark_h)}"}, "border": f"2px solid {ACCENT}"}]
+            if mark_h is not None else [])
     return dash_table.DataTable(
         id=id_, columns=[{"name": n, "id": c} for c, n in columns], data=records, fill_width=False,
         style_table={"overflowX": "auto"}, style_header=TABLE_HEADER, style_cell=TABLE_CELL,
@@ -979,7 +982,7 @@ def ref_peak_table(id_, records, columns=REF_TABLE_COLS):
              "color": "#c0392b", "fontWeight": "600"},
             {"if": {"filter_query": '{status} = "found"', "column_id": "status"},
              "color": "#2e7d32", "fontWeight": "600"},
-            {"if": {"column_id": "status"}, "textAlign": "left"}])
+            {"if": {"column_id": "status"}, "textAlign": "left"}] + mark)
 
 # key -> (component id, property)
 SETTING_FIELDS = {}
@@ -1460,18 +1463,30 @@ results_tab = html.Div([
                     dcc.Input(id="refview-width", type="number", value=2000, min=100, debounce=True,
                               className="form-control form-control-sm", style={"width": "100px"}),
                 ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap"}),
-                dcc.Checklist(id="refview-only-notfound",
-                              options=[{"label": " Step only through spectra where the ref was not found",
-                                        "value": "on"}],
-                              value=[], inputStyle={"marginRight": "4px"},
-                              style={"fontSize": "12px", "margin": "6px 0"}),
+                html.Div([
+                    dcc.RadioItems(id="refview-mode", options=[
+                        {"label": " Step through all spectra", "value": "all"},
+                        {"label": " Only spectra where the reference was not found", "value": "notfound"},
+                        {"label": " Only harmonics where the lead peak was not found (reference found)",
+                         "value": "harm_miss"},
+                    ], value="all", inputStyle={"marginRight": "4px"},
+                        labelStyle={"display": "block"}, style={"fontSize": "12px"}),
+                    html.Div([
+                        html.Span("harmonic", style={"fontSize": "12px", "marginRight": "6px"}),
+                        dcc.Dropdown(id="refview-miss-h", options=[{"label": "all", "value": "all"}],
+                                     value="all", clearable=False,
+                                     style={"width": "170px", "fontSize": "12px"}),
+                    ], title="Harmonic(s) to step through in the 'lead peak not found' mode",
+                       style={"display": "flex", "alignItems": "flex-end", "marginLeft": "12px"}),
+                ], style={"display": "flex", "alignItems": "flex-end", "flexWrap": "wrap",
+                          "margin": "6px 0"}),
                 html.Small("Double-click the plot to see the whole spectrum", style=HELP_STYLE),
                 html.Div(id="refview-info", style={"fontSize": "12px", "color": "#333",
                                                    "whiteSpace": "pre-wrap"}),
                 html.Div(id="refview-harm", style={"margin": "4px 0 6px 0"}),
                 dcc.Graph(id="refview-graph", figure=empty_fig("Load a database"),
                           style={"height": "340px"}, config={"scrollZoom": True}),
-                dcc.Store(id="refview-seq", data=0),
+                dcc.Store(id="refview-seq", data={"seq": 0, "h": None}),
             ], className="theia-box", style={**BOX_STYLE, "marginTop": "10px"}),
         ], style={"gridColumn": "1", "gridRow": "3", "minWidth": "0"}),
         # row 3, right: peak-by-peak snippet viewer
@@ -8759,6 +8774,45 @@ def remember_dark_mode(value):
 # Callbacks — reference viewer (Results tab)
 # ===========================================================================
 
+def _refview_cur(current):
+    """refview-seq store -> (seq, h or None); older pages stored a bare seq."""
+    if isinstance(current, dict):
+        h = current.get("h")
+        return int(current.get("seq") or 0), (None if h is None else int(h))
+    return int(current or 0), None
+
+
+def harm_miss_cases(path, h="all"):
+    """(seq, harmonic) of every spectrum where the reference was found at the
+    reference harmonic but the lead peak in harmonic h (or any) was not."""
+    if not path or not _has_table(path, "ref_harmonics"):
+        return []
+    sql = ("SELECT s.seq, r.harmonic FROM ref_harmonics r JOIN spectra s USING (spectrum_id) "
+           "WHERE r.status = 'not_found' AND s.ref_status = 'found'")
+    params = ()
+    if h not in (None, "all"):
+        sql += " AND r.harmonic = ?"
+        params = (int(h),)
+    d = db_query(path, sql + " ORDER BY s.seq, r.harmonic", params)
+    return [(int(a), int(b)) for a, b in zip(d["seq"], d["harmonic"])]
+
+
+@app.callback(
+    Output("refview-miss-h", "options"),
+    Output("refview-miss-h", "value"),
+    Input("db-select", "value"),
+    State("refview-miss-h", "value"),
+)
+def refview_miss_options(path, current):
+    cases = harm_miss_cases(path) if path and os.path.exists(path) else []
+    counts = {}
+    for _, h in cases:
+        counts[h] = counts.get(h, 0) + 1
+    opts = ([{"label": f"all ({len(cases)})", "value": "all"}] +
+            [{"label": f"h{h} ({n})", "value": h} for h, n in sorted(counts.items())])
+    return opts, (current if current in [o["value"] for o in opts] else "all")
+
+
 @app.callback(
     Output("refview-seq", "data"),
     Output("refview-seq-input", "value"),
@@ -8767,22 +8821,53 @@ def remember_dark_mode(value):
     Input("refview-seq-input", "value"),
     Input("ref-graph", "clickData"),
     Input("db-select", "value"),
+    Input("refview-mode", "value"),
+    Input("refview-miss-h", "value"),
     State("refview-seq", "data"),
-    State("refview-only-notfound", "value"),
 )
-def refview_step(_p, _n, typed, click, path, current, only_nf):
-    """Work out which spectrum (seq number) the reference viewer shows."""
+def refview_step(_p, _n, typed, click, path, mode, miss_h, current):
+    """Work out which spectrum (seq number) the reference viewer shows, and
+    in the 'lead peak not found' mode which harmonic."""
     if not path or not os.path.exists(path):
-        return 0, 0
+        return {"seq": 0, "h": None}, 0
     sp = db_query(path, "SELECT seq, ref_status FROM spectra ORDER BY seq")
     if sp.empty:
-        return 0, 0
-    allowed = sp[sp["ref_status"] != "found"]["seq"].to_numpy() if only_nf else sp["seq"].to_numpy()
+        return {"seq": 0, "h": None}, 0
+    trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
+    cur, cur_h = _refview_cur(current)
+    target = None                                # a seq asked for by typing / clicking
+    if trig.startswith("ref-graph") and click and click.get("points"):
+        target = int(round(click["points"][0]["x"]))
+    elif trig.startswith("refview-seq-input") and typed is not None:
+        target = int(typed)
+
+    if mode == "harm_miss":
+        cases = harm_miss_cases(path, miss_h)
+        if not cases:                            # nothing to step through: show the note
+            return {"seq": cur, "h": None, "miss_empty": True}, cur
+        key = (cur, -1 if cur_h is None else cur_h)
+        if trig.startswith("btn-ref-next"):
+            later = [c for c in cases if c > key]
+            new = later[0] if later else cases[-1]
+        elif trig.startswith("btn-ref-prev"):
+            earlier = [c for c in cases if c < key]
+            new = earlier[-1] if earlier else cases[0]
+        elif trig.startswith("db-select"):
+            new = cases[0]
+        else:
+            # mode / harmonic changed, or a seq typed / clicked: first case at or after it
+            want = target if target is not None else cur
+            if cur_h is not None and target is None and key in cases:
+                new = key
+            else:
+                after = [c for c in cases if c[0] >= want]
+                new = after[0] if after else cases[-1]
+        return {"seq": new[0], "h": new[1]}, new[0]
+
+    allowed = sp[sp["ref_status"] != "found"]["seq"].to_numpy() if mode == "notfound" \
+        else sp["seq"].to_numpy()
     if len(allowed) == 0:
         allowed = sp["seq"].to_numpy()
-    trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
-    cur = int(current or 0)
-
     if trig.startswith("db-select"):
         new = int(allowed[0])
     elif trig.startswith("btn-ref-next"):
@@ -8791,14 +8876,12 @@ def refview_step(_p, _n, typed, click, path, current, only_nf):
     elif trig.startswith("btn-ref-prev"):
         earlier = allowed[allowed < cur]
         new = int(earlier[-1]) if len(earlier) else int(allowed[0])
-    elif trig.startswith("ref-graph") and click and click.get("points"):
-        new = int(round(click["points"][0]["x"]))
-    elif trig.startswith("refview-seq-input") and typed is not None:
-        new = int(typed)
+    elif target is not None:
+        new = target
     else:
         new = cur
     new = int(min(max(new, int(sp["seq"].min())), int(sp["seq"].max())))
-    return new, new
+    return {"seq": new, "h": None}, new
 
 
 @app.callback(
@@ -8808,14 +8891,97 @@ def refview_step(_p, _n, typed, click, path, current, only_nf):
     Input("refview-seq", "data"),
     Input("refview-width", "value"),
     Input("db-select", "value"),
+    State("refview-miss-h", "value"),
 )
-def refview_plot(seq, half_width, path):
+def refview_plot(state, half_width, path, miss_h="all"):
+    seq, h = _refview_cur(state)
+    if h is not None:
+        fig, info = _refview_miss_plot(seq, h, half_width, path, miss_h)
+        return fig, info, refview_harm_table(path, seq, [], mark_h=h)
     rows = []
     fig, info = _refview_plot(seq, half_width, path, rows)
+    if isinstance(state, dict) and state.get("miss_empty"):
+        info = ("No spectra where the reference was found but a lead peak in another harmonic "
+                "was not" + ("" if _has_table(path, "ref_harmonics") else
+                             " (not recorded in this scan: it was made before the per-harmonic "
+                             "reference search was stored)") + ".\n" + (info or ""))
     return fig, info, refview_harm_table(path, seq, rows)
 
 
-def refview_harm_table(path, seq, recalculated):
+def _refview_miss_plot(seq, h, half_width, path, miss_h="all"):
+    """Reference viewer, 'lead peak not found' mode: harmonic h of spectrum
+    seq around the expected position f_ref / h_ref * h, with the search
+    window and why the search found no peak there."""
+    if not path or not os.path.exists(path):
+        return empty_fig("Load a database"), ""
+    row = db_query(path, "SELECT s.spectrum_id, s.name, s.ref_found, r.predicted, r.status "
+                         "FROM spectra s JOIN ref_harmonics r USING (spectrum_id) "
+                         "WHERE s.seq = ? AND r.harmonic = ?", (int(seq), int(h)))
+    if row.empty:
+        return empty_fig("No such spectrum / harmonic"), ""
+    row = row.iloc[0]
+    con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    st = read_kv(con, "settings")
+    con.close()
+    h_ref = int(float(st.get("ref_harmonic") or 0))
+    ref_name = st.get("ref_name", "reference")
+    pred = float(row["predicted"])
+    window = float(st.get("ref_search_hz") or 0)
+    cases = harm_miss_cases(path, miss_h)
+    i_case = cases.index((int(seq), int(h))) + 1 if (int(seq), int(h)) in cases else 0
+
+    info = (f"Case {i_case} of {len(cases)}:  #{int(seq)}  {row['name']}  |  h{h}: {ref_name} "
+            f"not found  |  h{h_ref} reference found at {float(row['ref_found']):,.1f} Hz\n"
+            f"Expected at f_ref / {h_ref} × {h} = {pred:,.1f} Hz")
+    try:
+        ff, pp = load_spectrum(st["spectra_dir"], row["name"])
+    except Exception as exc:
+        return empty_fig(f"Could not load spectrum: {exc}"), info
+    ff = np.asarray(ff, dtype=float)
+    pp = np.asarray(pp, dtype=float)
+    if np.any(np.diff(ff) < 0):
+        o = np.argsort(ff)
+        ff, pp = ff[o], pp[o]
+    ex = physics.peak_search_explain(ff, pp, pred, window)
+    if ex["lo_hz"] is not None:
+        info += (f", searched {ex['lo_hz']:,.1f} – {ex['hi_hz']:,.1f} Hz (±{ex['window_hz']:.1f} Hz"
+                 + (f", widened from ±{window:g} Hz to 3 bins" if ex["window_hz"] > window else "")
+                 + f"; {ex['n_bins']} bins of {ex['bin_hz']:.1f} Hz)")
+    if ex["found"] is not None:
+        info += (f"\nRecalculated now: {ex['reason']}. The scan did not find it, so the data or "
+                 f"settings must differ from when it was run.")
+    else:
+        info += f"\nWhy not found: {ex['reason']}."
+
+    fig = go.Figure()
+    fig.add_trace(go.Scattergl(x=ff, y=pp, mode="lines", name="Spectrum", hoverinfo="skip",
+                               line=dict(shape="hvh", color="black", width=1)))
+    if ex["lo_hz"] is not None:
+        fig.add_vrect(x0=ex["lo_hz"], x1=ex["hi_hz"], fillcolor=ACCENT_PALE, opacity=0.8,
+                      line_width=0, layer="below")
+    fig.add_vline(x=pred, line=dict(color="#999999", width=1, dash="dash"),
+                  annotation_text=f"expected h{h}", annotation_font_color="#999999",
+                  annotation_position="top left")
+    if ex["f_max"] is not None:
+        fig.add_trace(go.Scatter(x=[ex["f_max"]], y=[ex["p_max"]], mode="markers",
+                                 name="strongest bin in window",
+                                 marker=dict(symbol="x", color=ACCENT, size=11,
+                                             line=dict(color=ACCENT, width=2)),
+                                 hovertext=[f"strongest bin in the window<br>{ex['f_max']:,.1f} Hz"
+                                            f"<br>P = {ex['p_max']:.4g}"], hoverinfo="text"))
+    w = float(half_width or 2000)
+    vm = (ff >= pred - w) & (ff <= pred + w)
+    fig.update_layout(template="plotly_white", margin=dict(l=55, r=10, t=10, b=40),
+                      xaxis_title="Frequency (Hz)", yaxis_title="Power (a.u.)",
+                      dragmode="pan", hovermode="closest", font=dict(size=11), showlegend=False)
+    fig.update_xaxes(range=[pred - w, pred + w], autorange=False)
+    if vm.any():
+        lo, hi = float(np.nanmin(pp[vm])), float(np.nanmax(pp[vm]))
+        fig.update_yaxes(range=[lo - 0.05 * (hi - lo or 1), hi + 0.12 * (hi - lo or 1)])
+    return fig, info
+
+
+def refview_harm_table(path, seq, recalculated, mark_h=None):
     """Reference viewer: the reference peak in each harmonic for this
     spectrum, as stored by the scan (or recalculated for older scans)."""
     if not path or not os.path.exists(path):
@@ -8844,7 +9010,7 @@ def refview_harm_table(path, seq, recalculated):
                             style={"fontWeight": "600", "marginRight": "8px"}),
                   html.Span(src, style={"color": "#888", "fontSize": "11px"})],
                  style={"fontSize": "12px", "marginBottom": "3px"}),
-        ref_peak_table("refview-harm-dt", recs)])
+        ref_peak_table("refview-harm-dt", recs, mark_h=mark_h)])
 
 
 def _refview_plot(seq, half_width, path, rows_out):
