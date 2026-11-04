@@ -650,8 +650,12 @@ def _set_state(**kw):
 
 
 def run_scan(s, label):
+    """Run a scan (background thread).  If it fails part-way, the run is
+    marked "failed" (with the error) in the database, its .json file and
+    index.csv, and the database is closed."""
     t0 = time.time()
-    db_path = None
+    db_path = con = info = stored = stem = None
+    n_ids_total = n_found = 0
     try:
         files = list_spectra(s["spectra_dir"], s["file_pattern"])
         if not files:
@@ -680,7 +684,6 @@ def run_scan(s, label):
             json.dump({"run_info": info, "settings": stored}, fh, indent=2)
 
         predicted = s["ref_frequency"]
-        n_ids_total = n_found = 0
         for seq, name in enumerate(files):
             if SCAN_STATE["cancel"]:
                 break
@@ -758,6 +761,7 @@ def run_scan(s, label):
         _kv_insert(con, "run_info", info)
         con.commit()
         con.close()
+        con = None
 
         with open(os.path.join(SCANS_DIR, stem + ".json"), "w") as fh:
             json.dump({"run_info": info, "settings": stored}, fh, indent=2)
@@ -767,7 +771,51 @@ def run_scan(s, label):
                                       f"Saved {os.path.basename(db_path)}")
     except Exception as exc:
         traceback.print_exc()
-        _set_state(running=False, error=str(exc), msg=f"Scan failed: {exc}")
+        msg = f"Scan failed: {exc}"
+        if info is not None:
+            # the run exists on disk: record the failure there too
+            info.update(status="failed", error=f"{type(exc).__name__}: {exc}",
+                        n_spectra_done=SCAN_STATE["done"], n_ref_found=n_found,
+                        n_identifications=n_ids_total, duration_s=round(time.time() - t0, 1))
+            msg += f" (partial run kept as {os.path.basename(db_path)})"
+            _record_failed_run(con, stem, info, stored)
+        _set_state(running=False, error=str(exc), msg=msg)
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+
+
+def _record_failed_run(con, stem, info, stored):
+    """Write a failed run's run_info to its database, .json file and index.csv.
+    Each step on its own, so one failing (e.g. the database itself) does not
+    stop the others."""
+    steps = []
+    if con is not None:
+        def _db():
+            # drop what was not committed yet (it may hold a half-written
+            # spectrum), then count what the database really holds
+            con.rollback()
+            q = lambda sql: con.execute(sql).fetchone()[0]
+            info.update(n_spectra_done=q("SELECT COUNT(*) FROM spectra"),
+                        n_ref_found=q("SELECT COUNT(*) FROM spectra WHERE ref_status='found'"),
+                        n_identifications=q("SELECT COUNT(*) FROM identifications"))
+            _kv_insert(con, "run_info", info)
+            con.commit()
+        steps.append(("database", _db))
+
+    def _json():
+        with open(os.path.join(SCANS_DIR, stem + ".json"), "w") as fh:
+            json.dump({"run_info": info, "settings": stored}, fh, indent=2)
+    steps.append(("json", _json))
+    steps.append(("index.csv", lambda: _append_index(stem, info, stored)))
+    for what, step in steps:
+        try:
+            step()
+        except Exception as exc:
+            print(f"Theia: could not record the failed scan in its {what}: {exc}", file=sys.stderr)
 
 
 INDEX_FIELDS = ["file", "created", "label", "status", "settings_hash", "n_files",
@@ -789,13 +837,27 @@ def _append_index(stem, info, stored):
         w.writerow(row)
 
 
+def read_run_info(con, path):
+    """run_info of a scan database.  A run still marked "running" that is not
+    the scan in progress was cut off (Theia closed or killed mid-scan): it is
+    reported as "interrupted" (the database itself is not changed)."""
+    info = read_kv(con, "run_info")
+    if info.get("status") == "running":
+        with SCAN_LOCK:
+            live = (SCAN_STATE["running"] and SCAN_STATE["db_path"] is not None
+                    and os.path.abspath(SCAN_STATE["db_path"]) == os.path.abspath(path))
+        if not live:
+            info["status"] = "interrupted"
+    return info
+
+
 def list_databases():
     """[(path, run_info, settings)] newest first."""
     out = []
     for path in sorted(glob.glob(os.path.join(SCANS_DIR, "*.sqlite")), reverse=True):
         try:
             con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-            info, st = read_kv(con, "run_info"), read_kv(con, "settings")
+            info, st = read_run_info(con, path), read_kv(con, "settings")
             con.close()
             out.append((path, info, st))
         except Exception:
@@ -4108,7 +4170,7 @@ def load_database(path):
     if not path or not os.path.exists(path):
         return [], [], [], [], empty_fig(), None, "Reference peak in each harmonic (whole run)"
     con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    info, st = read_kv(con, "run_info"), read_kv(con, "settings")
+    info, st = read_run_info(con, path), read_kv(con, "settings")
     con.close()
     summary = db_query(path, """
         SELECT ion, COUNT(DISTINCT spectrum_id) AS n_spectra
@@ -4526,7 +4588,7 @@ def save_confirmed(_n, store, path, ion_filter, spec_filter, closest, table_filt
 
     # Exact (unrounded) values straight from the database
     con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    info, st = read_kv(con, "run_info"), read_kv(con, "settings")
+    info, st = read_run_info(con, path), read_kv(con, "settings")
     cols = ("s.name AS spectrum, s.seq, i.spectrum_id, i.peak_id, i.ion, i.ion_base, i.Z, i.N, i.A, "
             "i.charge, i.harmonic, i.peak_freq, i.sim_freq, i.delta_hz, i.power, i.snr, i.kind, "
             "i.closest_for_ion, i.closest_for_peak, s.ref_found")
