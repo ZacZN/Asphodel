@@ -1327,6 +1327,16 @@ RESID_BOX_HIDDEN = {**RESID_BOX_SHOWN, "display": "none"}
 TABLE_PAGE_SIZE = 15    # rows per page of the hits table
 TABLE_ROW_PX = 30       # DataTable row height
 FILTER_HEAD_PX = 120    # height of the filter block above the hits table
+# Run info / settings tables: long values (e.g. corr_by_h) wrap onto several
+# lines inside the table's width instead of widening it
+KV_WRAP = dict(
+    style_data={"whiteSpace": "normal", "height": "auto"},
+    style_cell_conditional=[
+        {"if": {"column_id": "key"}, "whiteSpace": "nowrap", "width": "1%"},
+        {"if": {"column_id": "value"}, "textAlign": "left", "overflowWrap": "anywhere",
+         "wordBreak": "break-word"},
+    ],
+)
 
 scan_main = html.Div([
     html.Div([
@@ -1380,10 +1390,12 @@ results_tab = html.Div([
     html.Details([
         html.Summary("Run info and settings used", style={"fontWeight": "600", "cursor": "pointer"}),
         html.Div([
-            html.Div(_table("runinfo-table", ["key", "value"], page_size=50, height="320px"),
-                     style={"width": "40%", "marginRight": "16px"}),
-            html.Div(_table("settings-table", ["key", "value"], page_size=50, height="320px"),
-                     style={"width": "55%"}),
+            html.Div(_table("runinfo-table", ["key", "value"], page_size=50, height="320px",
+                            **KV_WRAP),
+                     style={"width": "40%", "marginRight": "16px", "minWidth": "0"}),
+            html.Div(_table("settings-table", ["key", "value"], page_size=50, height="320px",
+                            **KV_WRAP),
+                     style={"width": "55%", "minWidth": "0"}),
         ], style={"display": "flex", "marginTop": "6px"}),
     ], open=False, style={"marginBottom": "12px"}),
 
