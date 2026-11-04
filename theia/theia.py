@@ -1384,11 +1384,14 @@ results_tab = html.Div([
             dcc.Dropdown(id="db-select", options=[], placeholder="Select a scan database…",
                          style={"fontSize": "13px", "width": "720px"}),
         ], style={"marginRight": "10px"}),
-        html.Button("Refresh list", id="btn-refresh", className="btn btn-outline-secondary btn-sm"),
+        html.Button("Refresh list", id="btn-refresh", className="btn btn-outline-secondary btn-sm",
+                    style={"marginRight": "10px"}),
+        # toggles the run info / settings tables, which open below this row
+        html.Button("▸ Run info and settings used", id="btn-runinfo",
+                    className="btn btn-outline-secondary btn-sm"),
     ], style={"display": "flex", "alignItems": "flex-end", "marginBottom": "10px"}),
 
-    html.Details([
-        html.Summary("Run info and settings used", style={"fontWeight": "600", "cursor": "pointer"}),
+    html.Div([
         html.Div([
             html.Div(_table("runinfo-table", ["key", "value"], page_size=50, height="320px",
                             **KV_WRAP),
@@ -1396,8 +1399,8 @@ results_tab = html.Div([
             html.Div(_table("settings-table", ["key", "value"], page_size=50, height="320px",
                             **KV_WRAP),
                      style={"width": "55%", "minWidth": "0"}),
-        ], style={"display": "flex", "marginTop": "6px"}),
-    ], open=False, style={"marginBottom": "12px"}),
+        ], style={"display": "flex"}),
+    ], id="runinfo-panel", style={"display": "none", "marginBottom": "12px"}),
 
     # Grid layout.
     #   left  (rows 1-3): reference tracking + reference viewer
@@ -3946,6 +3949,18 @@ def refresh_db_list(_, finished, _tab, current):
             dash.callback_context.triggered[0]["prop_id"].startswith("scan-finished") and finished in paths:
         return opts, finished
     return opts, (current if current in paths else (paths[0] if paths else None))
+
+
+@app.callback(
+    Output("runinfo-panel", "style"),
+    Output("btn-runinfo", "children"),
+    Input("btn-runinfo", "n_clicks"),
+    prevent_initial_call=True,
+)
+def toggle_runinfo(n):
+    shown = bool(n) and n % 2 == 1
+    return ({"display": "block" if shown else "none", "marginBottom": "12px"},
+            ("▾ " if shown else "▸ ") + "Run info and settings used")
 
 
 def _kv_value(k, v):
