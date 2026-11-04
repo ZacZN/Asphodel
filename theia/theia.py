@@ -1327,6 +1327,8 @@ RESID_BOX_HIDDEN = {**RESID_BOX_SHOWN, "display": "none"}
 TABLE_PAGE_SIZE = 15    # rows per page of the hits table
 TABLE_ROW_PX = 30       # DataTable row height
 FILTER_HEAD_PX = 120    # height of the filter block above the hits table
+# heading of the fold-away per-harmonic tables in the reference boxes
+REF_FOLD_SUMMARY = {"fontWeight": "600", "fontSize": "13px", "cursor": "pointer"}
 # Run info / settings tables: long values (e.g. corr_by_h) wrap onto several
 # lines inside the table's width instead of widening it
 KV_WRAP = dict(
@@ -1444,7 +1446,12 @@ results_tab = html.Div([
                 html.H6("Reference tracking", style={"fontWeight": "600", "marginBottom": "6px"}),
                 dcc.Graph(id="ref-graph", figure=empty_fig(), style={"height": "280px"}),
                 html.Small("Click a point to open that spectrum below", style=HELP_STYLE),
-                html.Div(id="refh-summary", style={"marginTop": "8px"}),
+                # per-harmonic table, folded away by default
+                html.Details([
+                    html.Summary("Reference peak in each harmonic (whole run)",
+                                 id="refh-summary-title", style=REF_FOLD_SUMMARY),
+                    html.Div(id="refh-summary", style={"marginTop": "4px"}),
+                ], open=False, className="theia-fold", style={"marginTop": "8px"}),
             ], className="theia-box", style=BOX_STYLE),
 
             # Reference viewer: flip through spectra and see where the ref was found
@@ -1482,7 +1489,12 @@ results_tab = html.Div([
                 html.Small("Double-click the plot to see the whole spectrum", style=HELP_STYLE),
                 html.Div(id="refview-info", style={"fontSize": "12px", "color": "#333",
                                                    "whiteSpace": "pre-wrap"}),
-                html.Div(id="refview-harm", style={"margin": "4px 0 6px 0"}),
+                # per-harmonic table for this spectrum, folded away by default; the
+                # fold is part of the layout so it stays open/closed while stepping
+                html.Details([
+                    html.Summary("Reference peak in each harmonic", style=REF_FOLD_SUMMARY),
+                    html.Div(id="refview-harm", style={"marginTop": "4px"}),
+                ], open=False, className="theia-fold", style={"margin": "4px 0 6px 0"}),
                 dcc.Graph(id="refview-graph", figure=empty_fig("Load a database"),
                           style={"height": "340px"}, config={"scrollZoom": True}),
                 dcc.Store(id="refview-seq", data={"seq": 0, "h": None}),
@@ -3986,11 +3998,12 @@ def _kv_rows(d):
     Output("spec-filter", "options"),
     Output("ref-graph", "figure"),
     Output("refh-summary", "children"),
+    Output("refh-summary-title", "children"),
     Input("db-select", "value"),
 )
 def load_database(path):
     if not path or not os.path.exists(path):
-        return [], [], [], [], empty_fig(), None
+        return [], [], [], [], empty_fig(), None, "Reference peak in each harmonic (whole run)"
     con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     info, st = read_kv(con, "run_info"), read_kv(con, "settings")
     con.close()
@@ -4021,7 +4034,8 @@ def load_database(path):
                       xaxis_title="spectrum #", yaxis_title="ref freq (Hz)",
                       legend=dict(orientation="h", y=1.1), font=dict(size=11))
     return (_kv_rows(info), _kv_rows(st), ion_opts, spec_opts, fig,
-            refh_summary(path, st))
+            refh_summary(path, st),
+            f"{st.get('ref_name', 'Reference')} peak in each harmonic (whole run)")
 
 
 def _has_table(path, name):
@@ -4033,11 +4047,10 @@ def _has_table(path, name):
 
 
 def refh_summary(path, st):
-    """Scan Results: the reference ion's peak in each harmonic over the run."""
-    title = html.Div(f"{st.get('ref_name', 'Reference')} peak in each harmonic (whole run)",
-                     style={"fontWeight": "600", "fontSize": "13px", "marginBottom": "4px"})
+    """Scan Results: the reference ion's peak in each harmonic over the run.
+    (Its heading is the fold's summary line, set in load_database.)"""
     if not _has_table(path, "ref_harmonics"):
-        return html.Div([title, html.Small("Not recorded in this scan (made before the "
+        return html.Div([html.Small("Not recorded in this scan (made before the "
                                            "per-harmonic reference search was stored).",
                                            style=HELP_STYLE)])
     d = db_query(path, """
@@ -4053,7 +4066,7 @@ def refh_summary(path, st):
                MIN(offset_hz) AS min_off, MAX(offset_hz) AS max_off
         FROM ref_harmonics GROUP BY harmonic ORDER BY harmonic""")
     if d.empty:
-        return html.Div([title, html.Small("No spectrum had a reference to search from.",
+        return html.Div([html.Small("No spectrum had a reference to search from.",
                                            style=HELP_STYLE)])
     h_ref = int(float(st.get("ref_harmonic") or 0))
     w = float(st.get("ref_search_hz") or 0)
@@ -4085,7 +4098,7 @@ def refh_summary(path, st):
             {"if": {"column_id": "status"}, "textAlign": "left"}])
     note = (f"Offset = found − f_ref / h_ref × h (other harmonics searched within ±{w:g} Hz). "
             if w > 0 else "Reference search ± was 0: other harmonics used predicted positions. ")
-    return html.Div([title, tbl, html.Small(note + "Reference harmonic: the scan's own reference "
+    return html.Div([tbl, html.Small(note + "Reference harmonic: the scan's own reference "
                                             "search, offset from its (tracked) prediction.",
                                             style=HELP_STYLE)])
 
@@ -9011,9 +9024,7 @@ def refview_harm_table(path, seq, recalculated, mark_h=None):
     if not recs:
         return None
     return html.Div([
-        html.Div([html.Span("Reference peak in each harmonic",
-                            style={"fontWeight": "600", "marginRight": "8px"}),
-                  html.Span(src, style={"color": "#888", "fontSize": "11px"})],
+        html.Div(html.Span(src, style={"color": "#888", "fontSize": "11px"}),
                  style={"fontSize": "12px", "marginBottom": "3px"}),
         ref_peak_table("refview-harm-dt", recs, mark_h=mark_h)])
 
