@@ -1467,9 +1467,8 @@ results_tab = html.Div([
 
                 # hits table (Export button, always-visible horizontal scroll bar); its
                 # page size is set in the browser to fill the space (see _HITS_FILL_JS)
-                html.Div(_table("hits-table", ["spectrum", "seq", "ion", "harmonic", "peak_freq", "sim_freq",
-                                               "delta_hz", "power", "snr", "kind", "closest_for_ion",
-                                               "closest_for_peak"],
+                html.Div(_table("hits-table", ["spectrum", "ion", "harmonic", "peak_freq", "sim_freq",
+                                               "delta_hz", "power", "snr", "kind"],
                                 page_size=TABLE_PAGE_SIZE, export_format="csv", overflow_x="scroll"),
                          id="hits-table-wrap", style={"minWidth": "0", "flex": "1 1 0", "minHeight": "0",
                                                       "overflow": "hidden"}),
