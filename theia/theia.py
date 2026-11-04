@@ -364,10 +364,11 @@ def analyse_spectrum(ff, pp, s, predicted_ref):
 
     ion_db, ref_mq = build_ion_database(*s["ion_key"])
     allowed = hl_allowed(ion_db, s)
-    sims = matches = None
+    sims = matches = ref_rows = None
     if ref_used is not None:
         # every harmonic from the reference ion's own peak in it, with its own correction
-        sims, _ref_h, _ = physics.simulate_spectrum(ion_db, ref_mq, ref_used, s, ff, pp)
+        sims, ref_info, _ = physics.simulate_spectrum(ion_db, ref_mq, ref_used, s, ff, pp)
+        ref_rows = physics.reference_rows(ref_info, s["ref_harmonic"])
         lo, hi = ff.min() - s["match_tol_hz"], ff.max() + s["match_tol_hz"]
         sims = sims[(sims["f_sim"] >= lo) & (sims["f_sim"] <= hi)].reset_index(drop=True)
         # ions excluded by the half-life cut are simulated (and drawn) but
@@ -375,7 +376,7 @@ def analyse_spectrum(ff, pp, s, predicted_ref):
         sims_id = sims[allowed[sims["ion_row"].to_numpy()]].reset_index(drop=True)
         matches = match_peaks(peaks, sims_id, ion_db, s["match_tol_hz"])
     return dict(peaks=peaks, base=base, sig=sig, ref=ref, ref_used=ref_used, status=status,
-                sims=sims, matches=matches, ion_db=ion_db, excluded=~allowed)
+                sims=sims, matches=matches, ion_db=ion_db, excluded=~allowed, ref_rows=ref_rows)
 
 
 # ===========================================================================
@@ -607,6 +608,14 @@ CREATE TABLE identifications (
     closest_for_ion  INTEGER,
     closest_for_peak INTEGER
 );
+CREATE TABLE ref_harmonics (
+    spectrum_id INTEGER,
+    harmonic    INTEGER,
+    status      TEXT,
+    predicted   REAL,
+    freq        REAL,
+    offset_hz   REAL
+);
 CREATE INDEX idx_id_ion      ON identifications(ion);
 CREATE INDEX idx_id_ion_base ON identifications(ion_base);
 CREATE INDEX idx_id_spec     ON identifications(spectrum_id);
@@ -725,6 +734,15 @@ def run_scan(s, label):
                          m["delta_hz"], m["power"], m["snr"], m["kind"],
                          m["closest_for_ion"], m["closest_for_peak"])])
             n_ids_total += n_ids
+            # the reference ion's peak in every harmonic (reference harmonic: the scan's own search)
+            if r["ref_rows"]:
+                con.executemany(
+                    "INSERT INTO ref_harmonics(spectrum_id, harmonic, status, predicted, freq,"
+                    " offset_hz) VALUES (?,?,?,?,?,?)",
+                    [(sid, rr["h"], r["status"], float(predicted), rr["f"],
+                      rr["f"] - float(predicted)) if rr["status"] == "reference" else
+                     (sid, rr["h"], rr["status"], rr["predicted"], rr["f"], rr["offset"])
+                     for rr in r["ref_rows"]])
 
             if r["status"] == "found":
                 n_found += 1
@@ -932,6 +950,36 @@ TABLE_HEADER  = {"backgroundColor": ACCENT, "color": "white", "fontWeight": "600
 TABLE_CELL    = {"fontSize": "12px", "padding": "3px 8px", "textAlign": "right",
                  "fontFamily": "monospace"}
 TABLE_ODD     = [{"if": {"row_index": "odd"}, "backgroundColor": ACCENT_PALE}]
+
+REF_TABLE_COLS = [("h", "h"), ("status", "status"), ("predicted", "expected (Hz)"),
+                  ("freq", "found at (Hz)"), ("offset", "offset (Hz)")]
+
+
+def _ref_table_records(rows, ref_f_label=None):
+    """physics.reference_rows -> table records.  ref_f_label: status shown
+    for the reference harmonic (e.g. the scan's 'found' / 'predicted')."""
+    out = []
+    for r in rows:
+        st = r["status"]
+        label = (ref_f_label or "reference") if st == "reference" else r["label"]
+        shown = st in ("reference", "found")
+        out.append({"h": r["h"], "status": label, "predicted": f"{r['predicted']:.1f}",
+                    "freq": f"{r['f']:.1f}" if shown else "—",
+                    "offset": "—" if r["offset"] is None else f"{r['offset']:+.1f}"})
+    return out
+
+
+def ref_peak_table(id_, records, columns=REF_TABLE_COLS):
+    """Small table of where the reference ion's peak is in each harmonic."""
+    return dash_table.DataTable(
+        id=id_, columns=[{"name": n, "id": c} for c, n in columns], data=records, fill_width=False,
+        style_table={"overflowX": "auto"}, style_header=TABLE_HEADER, style_cell=TABLE_CELL,
+        style_data_conditional=TABLE_ODD + [
+            {"if": {"filter_query": '{status} = "not found"', "column_id": "status"},
+             "color": "#c0392b", "fontWeight": "600"},
+            {"if": {"filter_query": '{status} = "found"', "column_id": "status"},
+             "color": "#2e7d32", "fontWeight": "600"},
+            {"if": {"column_id": "status"}, "textAlign": "left"}])
 
 # key -> (component id, property)
 SETTING_FIELDS = {}
@@ -1394,6 +1442,7 @@ results_tab = html.Div([
                 html.H6("Reference tracking", style={"fontWeight": "600", "marginBottom": "6px"}),
                 dcc.Graph(id="ref-graph", figure=empty_fig(), style={"height": "280px"}),
                 html.Small("Click a point to open that spectrum below", style=HELP_STYLE),
+                html.Div(id="refh-summary", style={"marginTop": "8px"}),
             ], className="theia-box", style={**BOX_STYLE, "marginTop": "10px"}),
 
             # Reference viewer: flip through spectra and see where the ref was found
@@ -1419,6 +1468,7 @@ results_tab = html.Div([
                 html.Small("Double-click the plot to see the whole spectrum", style=HELP_STYLE),
                 html.Div(id="refview-info", style={"fontSize": "12px", "color": "#333",
                                                    "whiteSpace": "pre-wrap"}),
+                html.Div(id="refview-harm", style={"margin": "4px 0 6px 0"}),
                 dcc.Graph(id="refview-graph", figure=empty_fig("Load a database"),
                           style={"height": "340px"}, config={"scrollZoom": True}),
                 dcc.Store(id="refview-seq", data=0),
@@ -2455,7 +2505,7 @@ def v_build_figure(file_path, spectrum_name, ref_name, ref_frequency, ref_harmon
                    z_lims, n_lims, el1, el2, mq_width, gamma_t, harmonics,
                    correction_enabled=False, corr_a=0.0, corr_b=0.0, corr_c=0.0,
                    highlight_ions=None, shown_harmonics=None, lines_out=None,
-                   corr_by_h=None, ref_search_hz=0.0, warnings_out=None):
+                   corr_by_h=None, ref_search_hz=0.0, warnings_out=None, refs_out=None):
     """Run the full computation and return (figure, error text).
 
     shown_harmonics: harmonics to draw (None = all); set by the toggle box.
@@ -2483,6 +2533,8 @@ def v_build_figure(file_path, spectrum_name, ref_name, ref_frequency, ref_harmon
                                                   ref_search_hz)
         if warnings_out is not None:
             warnings_out += physics.reference_warnings(rinfo, ref_name, ref_search_hz)
+        if refs_out is not None:
+            refs_out += physics.reference_rows(rinfo, ref_harmonic)
         db = v_compute_frequencies_multi(db, "m/q", ref_name, ref_freq, gamma_t, harmonics,
                                          correction_enabled=correction_enabled,
                                          corr_a=corr_a, corr_b=corr_b, corr_c=corr_c,
@@ -2795,10 +2847,13 @@ viewer_tab = html.Div([
                          style={"position": "absolute", "top": "0", "left": "0", "zIndex": "9",
                                 "border": BOX_BORDER, "borderRadius": "6px",
                                 "pointerEvents": "none", "visibility": "hidden"}),
-            ], style={"position": "relative", "flex": "1 1 auto", "minHeight": "0"}),
+            ], style={"position": "relative", "flex": "1 1 0", "minHeight": "0"}),
+            html.Div(id="v-ref-table", style={"flex": "0 0 auto", "maxHeight": "30vh",
+                                              "overflowY": "auto"}),
             html.Div(id="_v-harm-hook", style={"display": "none"}),
         ], className="theia-box",
-           style={**BOX_STYLE, "height": "100%", "display": "flex", "flexDirection": "column"}),
+           style={**BOX_STYLE, "height": "100%", "display": "flex", "flexDirection": "column",
+                    "boxSizing": "border-box"}),
     ], style={"flex": "1", "minWidth": "0", "height": "calc(100vh - 42px)",
               "padding": "10px 14px"}),
     html.Div(id="_viewer-saved", style={"display": "none"}),
@@ -3504,7 +3559,7 @@ app.clientside_callback(
 
 
 @app.callback(Output("viewer-graph", "figure"), Output("v-error-box", "children"),
-              Output("v-zoom-lines", "data"), *_V_INPUTS,
+              Output("v-zoom-lines", "data"), Output("v-ref-table", "children"), *_V_INPUTS,
               Input("v-harm-toggle", "value"))
 def v_update_figure(*values):
     shown = values[-1]
@@ -3512,8 +3567,8 @@ def v_update_figure(*values):
     src = f"{v['file_path']}|{v['spectrum_name']}"
     if not v["spectrum_name"]:
         return (empty_fig("No spectrum selected (no .npz files in this folder?)"), "",
-                {"src": src, "lines": []})
-    lines, warns = [], []
+                {"src": src, "lines": []}, None)
+    lines, warns, refs = [], [], []
     try:
         corr = corrections.resolve(v.get("corr_profile"), v["corr_a"], v["corr_b"], v["corr_c"])
         fig, err = v_build_figure(
@@ -3530,12 +3585,28 @@ def v_update_figure(*values):
             ref_search_hz=float(v.get("ref_search_hz") or 0),
             highlight_ions=v_parse_highlight_ions(v["highlight_ions"] or ""),
             shown_harmonics=None if shown is None else [int(h) for h in shown],
-            lines_out=lines, warnings_out=warns)
+            lines_out=lines, warnings_out=warns, refs_out=refs)
         if warns and not err:
             err = "\n".join("⚠ " + w for w in warns)
-        return fig, err, {"src": src, "lines": lines}
+        return fig, err, {"src": src, "lines": lines}, v_ref_table(refs, v["ref_name"],
+                                                                    v.get("ref_search_hz"))
     except Exception as exc:
-        return empty_fig(), f"Parse error: {exc}", {"src": src, "lines": []}
+        return empty_fig(), f"Parse error: {exc}", {"src": src, "lines": []}, None
+
+
+def v_ref_table(rows, ref_name, window):
+    """Viewer: reference peak in each harmonic, under the plot."""
+    if not rows:
+        return None
+    w = float(window or 0)
+    note = (f"searched within ±{w:g} Hz of f_ref / h_ref × h" if w > 0 else
+            "search off (Reference search ± = 0): predicted positions used")
+    return html.Div([
+        html.Div([html.Span(f"{(ref_name or 'Reference').strip()} peak in each harmonic",
+                            style={"fontWeight": "600", "marginRight": "10px"}),
+                  html.Span(note, style={"color": "#888", "fontSize": "11px"})],
+                 style={"fontSize": "13px", "margin": "6px 0 4px 0"}),
+        ref_peak_table("v-ref-dt", _ref_table_records(rows))])
 
 
 def _v_zoom_hw(width_khz):
@@ -3879,11 +3950,12 @@ def _kv_rows(d):
     Output("ion-filter", "options"),
     Output("spec-filter", "options"),
     Output("ref-graph", "figure"),
+    Output("refh-summary", "children"),
     Input("db-select", "value"),
 )
 def load_database(path):
     if not path or not os.path.exists(path):
-        return [], [], [], [], [], empty_fig()
+        return [], [], [], [], [], empty_fig(), None
     con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     info, st = read_kv(con, "run_info"), read_kv(con, "settings")
     con.close()
@@ -3915,7 +3987,74 @@ def load_database(path):
     fig.update_layout(template="plotly_white", margin=dict(l=60, r=10, t=10, b=40),
                       xaxis_title="spectrum #", yaxis_title="ref freq (Hz)",
                       legend=dict(orientation="h", y=1.1), font=dict(size=11))
-    return (_kv_rows(info), _kv_rows(st), _fmt_records(summary), ion_opts, spec_opts, fig)
+    return (_kv_rows(info), _kv_rows(st), _fmt_records(summary), ion_opts, spec_opts, fig,
+            refh_summary(path, st))
+
+
+def _has_table(path, name):
+    try:
+        return not db_query(path, "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                            (name,)).empty
+    except Exception:
+        return False
+
+
+def refh_summary(path, st):
+    """Scan Results: the reference ion's peak in each harmonic over the run."""
+    title = html.Div(f"{st.get('ref_name', 'Reference')} peak in each harmonic (whole run)",
+                     style={"fontWeight": "600", "fontSize": "13px", "marginBottom": "4px"})
+    if not _has_table(path, "ref_harmonics"):
+        return html.Div([title, html.Small("Not recorded in this scan (made before the "
+                                           "per-harmonic reference search was stored).",
+                                           style=HELP_STYLE)])
+    d = db_query(path, """
+        SELECT harmonic,
+               COUNT(*) AS n,
+               SUM(status = 'found') AS n_found,
+               SUM(status = 'not_found') AS n_not_found,
+               SUM(status = 'off') AS n_off,
+               SUM(status = 'predicted') AS n_pred,
+               AVG(CASE WHEN status = 'found' THEN freq END) AS mean_f,
+               AVG(offset_hz) AS mean_off,
+               SQRT(MAX(AVG(offset_hz*offset_hz) - AVG(offset_hz)*AVG(offset_hz), 0)) AS std_off,
+               MIN(offset_hz) AS min_off, MAX(offset_hz) AS max_off
+        FROM ref_harmonics GROUP BY harmonic ORDER BY harmonic""")
+    if d.empty:
+        return html.Div([title, html.Small("No spectrum had a reference to search from.",
+                                           style=HELP_STYLE)])
+    h_ref = int(float(st.get("ref_harmonic") or 0))
+    w = float(st.get("ref_search_hz") or 0)
+    recs = []
+    for r in d.itertuples():
+        n = int(r.n)
+        if int(r.harmonic) == h_ref:
+            status = f"reference ({int(r.n_found or 0)} found, {int(r.n_pred or 0)} predicted)"
+        elif int(r.n_off or 0) == n:
+            status = "search off"
+        else:
+            status = f"{int(r.n_found or 0)} / {n} found"
+        f = lambda v, fmt: "—" if v is None or pd.isna(v) else format(v, fmt)
+        recs.append({"h": int(r.harmonic), "status": status,
+                     "not_found": int(r.n_not_found or 0),
+                     "mean_f": f(r.mean_f, ".1f"), "mean_off": f(r.mean_off, "+.1f"),
+                     "std_off": f(r.std_off, ".1f"),
+                     "range": "—" if r.min_off is None or pd.isna(r.min_off)
+                     else f"{r.min_off:+.1f} … {r.max_off:+.1f}"})
+    cols = [("h", "h"), ("status", "found"), ("not_found", "not found"),
+            ("mean_f", "mean found at (Hz)"), ("mean_off", "mean offset (Hz)"),
+            ("std_off", "spread (Hz)"), ("range", "offset range (Hz)")]
+    tbl = dash_table.DataTable(
+        id="refh-summary-dt", columns=[{"name": n, "id": c} for c, n in cols], data=recs, fill_width=False,
+        style_table={"overflowX": "auto"}, style_header=TABLE_HEADER, style_cell=TABLE_CELL,
+        style_data_conditional=TABLE_ODD + [
+            {"if": {"filter_query": "{not_found} > 0", "column_id": "not_found"},
+             "color": "#c0392b", "fontWeight": "600"},
+            {"if": {"column_id": "status"}, "textAlign": "left"}])
+    note = (f"Offset = found − f_ref / h_ref × h (other harmonics searched within ±{w:g} Hz). "
+            if w > 0 else "Reference search ± was 0: other harmonics used predicted positions. ")
+    return html.Div([title, tbl, html.Small(note + "Reference harmonic: the scan's own reference "
+                                            "search, offset from its (tracked) prediction.",
+                                            style=HELP_STYLE)])
 
 
 @app.callback(
@@ -8665,11 +8804,50 @@ def refview_step(_p, _n, typed, click, path, current, only_nf):
 @app.callback(
     Output("refview-graph", "figure"),
     Output("refview-info", "children"),
+    Output("refview-harm", "children"),
     Input("refview-seq", "data"),
     Input("refview-width", "value"),
     Input("db-select", "value"),
 )
 def refview_plot(seq, half_width, path):
+    rows = []
+    fig, info = _refview_plot(seq, half_width, path, rows)
+    return fig, info, refview_harm_table(path, seq, rows)
+
+
+def refview_harm_table(path, seq, recalculated):
+    """Reference viewer: the reference peak in each harmonic for this
+    spectrum, as stored by the scan (or recalculated for older scans)."""
+    if not path or not os.path.exists(path):
+        return None
+    src = "stored by the scan"
+    recs = []
+    if _has_table(path, "ref_harmonics"):
+        d = db_query(path, "SELECT r.harmonic, r.status, r.predicted, r.freq, r.offset_hz "
+                           "FROM ref_harmonics r JOIN spectra s USING (spectrum_id) "
+                           "WHERE s.seq = ? ORDER BY r.harmonic", (int(seq or 0),))
+        for r in d.itertuples():
+            shown = r.status in ("found", "predicted")
+            recs.append({"h": int(r.harmonic),
+                         "status": physics.REF_STATUS_LABEL.get(r.status, r.status),
+                         "predicted": f"{r.predicted:.1f}",
+                         "freq": f"{r.freq:.1f}" if shown else "—",
+                         "offset": "—" if r.offset_hz is None or pd.isna(r.offset_hz)
+                         else f"{r.offset_hz:+.1f}"})
+    if not recs and recalculated:
+        src = "recalculated (not stored in this scan)"
+        recs = _ref_table_records(recalculated, ref_f_label="found")
+    if not recs:
+        return None
+    return html.Div([
+        html.Div([html.Span("Reference peak in each harmonic",
+                            style={"fontWeight": "600", "marginRight": "8px"}),
+                  html.Span(src, style={"color": "#888", "fontSize": "11px"})],
+                 style={"fontSize": "12px", "marginBottom": "3px"}),
+        ref_peak_table("refview-harm-dt", recs)])
+
+
+def _refview_plot(seq, half_width, path, rows_out):
     if not path or not os.path.exists(path):
         return empty_fig("Load a database"), ""
     row = db_query(path, "SELECT * FROM spectra WHERE seq = ?", (int(seq or 0),))
@@ -8710,8 +8888,9 @@ def refview_plot(seq, half_width, path):
         try:
             s_db = parse_settings(st)
             ion_db, ref_mq = build_ion_database(*s_db["ion_key"])
-            sims, _, ref_warn = physics.simulate_spectrum(ion_db, ref_mq, float(found), s_db,
-                                                          ff, pp)
+            sims, rinfo, ref_warn = physics.simulate_spectrum(ion_db, ref_mq, float(found), s_db,
+                                                              ff, pp)
+            rows_out += physics.reference_rows(rinfo, s_db["ref_harmonic"])
             sims = sims[(sims["f_sim"] >= ff.min()) & (sims["f_sim"] <= ff.max())].reset_index(drop=True)
             ids = db_query(path, "SELECT ion, harmonic FROM identifications WHERE spectrum_id = ?",
                            (int(row["spectrum_id"]),))

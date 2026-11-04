@@ -357,6 +357,31 @@ def reference_warnings(info, ref_name, window_hz):
             f"the predicted position is used" for h, d in sorted(info.items()) if d["found"] is False]
 
 
+REF_STATUS_LABEL = {"reference": "reference", "found": "found", "not_found": "not found",
+                    "off": "search off"}
+
+
+def reference_rows(info, ref_harmonic):
+    """Rows for a reference-peak table, one per harmonic (sorted):
+    {"h", "status" (reference / found / not_found / off), "label", "predicted",
+    "f", "offset" (f - predicted, None unless found)}."""
+    rows = []
+    for h, d in sorted(info.items(), key=lambda kv: int(kv[0])):
+        h = int(h)
+        if h == int(ref_harmonic):
+            st = "reference"
+        elif d.get("found") is True:
+            st = "found"
+        elif d.get("found") is False:
+            st = "not_found"
+        else:
+            st = "off"
+        off = float(d["f"]) - float(d["predicted"]) if st == "found" else None
+        rows.append({"h": h, "status": st, "label": REF_STATUS_LABEL[st],
+                     "predicted": float(d["predicted"]), "f": float(d["f"]), "offset": off})
+    return rows
+
+
 def simulate_spectrum(ion_db, ref_mq, ref_obs_freq, s, ff=None, pp=None):
     """simulate_frequencies for a tool's parsed settings s, with the
     reference searched in every harmonic of the spectrum (ff, pp) and the

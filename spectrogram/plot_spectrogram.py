@@ -276,7 +276,9 @@ def compute_sim_lines(freq, sum_all, raw):
         })
     return {"ref_freq": ref_freq, "ref_name": s["ref_name"], "ref_harmonic": s["ref_harmonic"],
             "n_ions": int(len(ion_db)), "lines": lines, "warnings": warns,
-            "ref_by_h": {str(h): d["f"] for h, d in ref_info.items()}}
+            "ref_by_h": {str(h): d["f"] for h, d in ref_info.items()},
+            "ref_rows": physics.reference_rows(ref_info, s["ref_harmonic"]),
+            "ref_search_hz": float(s.get("ref_search_hz") or 0)}
 
 
 import re as _re
@@ -501,6 +503,13 @@ SIM_CSS = """
   .sim-row .opt-grp input[type=text]:focus { outline: none; border-color: #f97316; }
   #colorscaleSel, .sim-row .opt-grp select { background: #374151; border: 1px solid #4b5563; border-radius: 4px;
                      color: #e5e7eb; padding: 3px 4px; font-size: 13px; }
+  table.ref-tbl { border-collapse: collapse; font-size: 11px; margin-top: 2px; }
+  table.ref-tbl th { background: #f97316; color: #fff; font-weight: 600; padding: 2px 8px; }
+  table.ref-tbl td { padding: 2px 8px; text-align: right; font-family: monospace;
+                     border-bottom: 1px solid #374151; }
+  table.ref-tbl td.st { text-align: left; font-family: inherit; }
+  table.ref-tbl td.found { color: #4ade80; font-weight: 600; }
+  table.ref-tbl td.not_found { color: #f87171; font-weight: 600; }
   .sim-modal { display: none; position: fixed; inset: 0; z-index: 1000;
                background: rgba(0,0,0,.6); align-items: center; justify-content: center; }
   .sim-modal.open { display: flex; }
@@ -633,6 +642,7 @@ def sim_panel_html():
       <button onclick="runSim()">Simulate</button>
       <span id="simStatus"></span>
     </div>
+    <div class="opt-grp" id="simRefTable" style="display:block;"></div>
     </div>
    </div>
   </div>
@@ -817,7 +827,7 @@ async function runSim() {
     // just save the toggle and clear the lines
     fetch('/simulate', {method: 'POST', headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify(Object.assign({save_only: true}, raw))});
-    _renderSim(); _renderFull(); _simStatus('');
+    _renderRefTable(null); _renderSim(); _renderFull(); _simStatus('');
     return;
   }
   _simStatus('Simulating…');
@@ -828,8 +838,9 @@ async function runSim() {
     });
     var d = await r.json();
     if (seq !== _simSeq) return;
-    if (!r.ok) { SIM = null; _renderSim(); _renderFull(); _simStatus('✗ ' + (d.error || 'error'), 'err'); return; }
+    if (!r.ok) { SIM = null; _renderRefTable(null); _renderSim(); _renderFull(); _simStatus('✗ ' + (d.error || 'error'), 'err'); return; }
     SIM = d;
+    _renderRefTable(d);
     _renderSim();
     _renderFull();
     _simStatus('✓ ref ' + d.ref_name + ' h' + d.ref_harmonic + ' = ' +
@@ -840,6 +851,32 @@ async function runSim() {
   } catch (e) {
     if (seq === _simSeq) _simStatus('✗ ' + e.message, 'err');
   }
+}
+
+// Where the reference ion's peak is in each harmonic of the summed power
+function _renderRefTable(d) {
+  var el = document.getElementById('simRefTable');
+  var rows = (d && d.ref_rows) || [];
+  if (!rows.length) { el.innerHTML = ''; return; }
+  var fmt = function(v, sign) {
+    if (v === null || v === undefined) return '—';
+    var s = v.toLocaleString('en-GB', {minimumFractionDigits: 1, maximumFractionDigits: 1});
+    return sign && v >= 0 ? '+' + s : s;
+  };
+  var esc = function(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;'); };
+  var note = d.ref_search_hz > 0 ? 'searched within ±' + d.ref_search_hz + ' Hz of f_ref / h_ref × h'
+                                 : 'search off (ref ± = 0): predicted positions used';
+  var h = '<div style="font-weight:600;margin-top:4px;">' + esc(d.ref_name) +
+          ' peak in each harmonic <span style="font-weight:400;opacity:.7;">(' + note +
+          ')</span></div><table class="ref-tbl"><tr><th>h</th><th>status</th>' +
+          '<th>expected (Hz)</th><th>found at (Hz)</th><th>offset (Hz)</th></tr>';
+  rows.forEach(function(r) {
+    var shown = r.status === 'reference' || r.status === 'found';
+    h += '<tr><td>' + r.h + '</td><td class="st ' + r.status + '">' + esc(r.label) + '</td><td>' +
+         fmt(r.predicted) + '</td><td>' + (shown ? fmt(r.f) : '—') + '</td><td>' +
+         fmt(r.offset, true) + '</td></tr>';
+  });
+  el.innerHTML = h + '</table>';
 }
 
 // Redraw the lines that fall inside the current frequency-slider range
