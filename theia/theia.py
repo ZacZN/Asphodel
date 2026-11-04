@@ -1327,8 +1327,6 @@ RESID_BOX_HIDDEN = {**RESID_BOX_SHOWN, "display": "none"}
 TABLE_PAGE_SIZE = 15    # rows per page of the hits table
 TABLE_ROW_PX = 30       # DataTable row height
 FILTER_HEAD_PX = 120    # height of the filter block above the hits table
-SUMMARY_EXTRA_ROWS = 3  # extra rows in the ions-found table, which starts higher up
-SUMMARY_HEAD_PX = FILTER_HEAD_PX - SUMMARY_EXTRA_ROWS * TABLE_ROW_PX   # its heading (30 px)
 
 scan_main = html.Div([
     html.Div([
@@ -1389,24 +1387,11 @@ results_tab = html.Div([
         ], style={"display": "flex", "marginTop": "6px"}),
     ], open=False, style={"marginBottom": "12px"}),
 
-    # Grid layout.  The "Ions found" heading sits level with the filter labels
-    # and its table starts straight under it; the hits table starts below the
-    # filters.  Both header blocks have fixed heights, and the ions-found table
-    # shows exactly enough extra rows to fill the difference, so the two
-    # tables end level with each other (DataTable rows are 30 px).
-    #   left  (rows 1-2): heading + ions-found table
+    # Grid layout.
+    #   left  (rows 1-3): reference tracking + reference viewer
     #   right row 1: filters        right row 2: hits table
-    #   row 3: reference tracking (left) / snippet viewer (right)
+    #   right row 3: snippet viewer
     html.Div([
-        # left, rows 1-2
-        html.Div([
-            html.Div(html.H6("Ions found (click a row to filter)",
-                             style={"fontWeight": "600", "margin": "0", "paddingTop": "2px"}),
-                     style={"height": f"{SUMMARY_HEAD_PX}px"}),
-            _table("summary-table", ["ion", "n_spectra", "n_hits", "mean_delta_hz", "std_delta_hz"],
-                   page_size=TABLE_PAGE_SIZE + SUMMARY_EXTRA_ROWS, export_format="csv",
-                   overflow_x="scroll"),
-        ], style={"gridColumn": "1", "gridRow": "1 / 3", "minWidth": "0"}),
         # right, row 1: filters
         html.Div([
             html.Div([
@@ -1431,22 +1416,21 @@ results_tab = html.Div([
         ], style={"gridColumn": "2", "gridRow": "1", "height": f"{FILTER_HEAD_PX}px",
                   "minWidth": "0"}),
 
-        # right, row 2: hits table (both tables have an Export button and an
-        # always-visible horizontal scroll bar so their heights match)
+        # right, row 2: hits table (Export button, always-visible horizontal scroll bar)
         html.Div(_table("hits-table", ["spectrum", "seq", "ion", "harmonic", "peak_freq", "sim_freq",
                                        "delta_hz", "power", "snr", "kind", "closest_for_ion",
                                        "closest_for_peak"],
                         page_size=TABLE_PAGE_SIZE, export_format="csv", overflow_x="scroll"),
                  style={"gridColumn": "2", "gridRow": "2", "minWidth": "0"}),
 
-        # row 3, left: reference tracking + per-spectrum reference viewer
+        # left, rows 1-3: reference tracking + per-spectrum reference viewer
         html.Div([
             html.Div([
                 html.H6("Reference tracking", style={"fontWeight": "600", "marginBottom": "6px"}),
                 dcc.Graph(id="ref-graph", figure=empty_fig(), style={"height": "280px"}),
                 html.Small("Click a point to open that spectrum below", style=HELP_STYLE),
                 html.Div(id="refh-summary", style={"marginTop": "8px"}),
-            ], className="theia-box", style={**BOX_STYLE, "marginTop": "10px"}),
+            ], className="theia-box", style=BOX_STYLE),
 
             # Reference viewer: flip through spectra and see where the ref was found
             html.Div([
@@ -1488,8 +1472,8 @@ results_tab = html.Div([
                           style={"height": "340px"}, config={"scrollZoom": True}),
                 dcc.Store(id="refview-seq", data={"seq": 0, "h": None}),
             ], className="theia-box", style={**BOX_STYLE, "marginTop": "10px"}),
-        ], style={"gridColumn": "1", "gridRow": "3", "minWidth": "0"}),
-        # row 3, right: peak-by-peak snippet viewer
+        ], style={"gridColumn": "1", "gridRow": "1 / 4", "minWidth": "0"}),
+        # right, row 3: peak-by-peak snippet viewer
         html.Div([
             # Peak-by-peak viewer: steps through the rows of the hits table as
             # currently filtered (and sorted) above
@@ -1546,9 +1530,8 @@ results_tab = html.Div([
             dcc.Store(id="confirm-mode", data=False),
             dcc.Store(id="confirm-store", data={}),
             dcc.Store(id="snippet-idx", data=0),
-            # Grows downwards to fill the row: this box and the reference-viewer
-            # box on the left end at the same height and have the same padding,
-            # so the bottoms of the two plots line up
+            # Grows downwards to fill the row, so its bottom lines up with the
+            # reference-viewer box on the left when that column is the taller
             dcc.Graph(id="snippet-graph", figure=empty_fig(), responsive=True,
                       style={"flex": "1", "minHeight": "420px"},
                       config={"scrollZoom": True}),
@@ -2882,12 +2865,12 @@ app.title = "Theia"
 # Results tables: move the page buttons from below the table to the top right,
 # level with the Export button (both 30 px tall), so nothing is left below it.
 _TABLE_CSS = """
-#summary-table, #hits-table { position: relative; }
-#summary-table .previous-next-container, #hits-table .previous-next-container {
+#hits-table { position: relative; }
+#hits-table .previous-next-container {
     position: absolute; top: 0; right: 0; margin: 0; padding: 0;
     height: 30px; display: flex; align-items: center;
 }
-#summary-table .previous-next-container button, #hits-table .previous-next-container button {
+#hits-table .previous-next-container button {
     height: 30px; padding-top: 0; padding-bottom: 0;
 }
 """
@@ -3961,7 +3944,6 @@ def _kv_rows(d):
 @app.callback(
     Output("runinfo-table", "data"),
     Output("settings-table", "data"),
-    Output("summary-table", "data"),
     Output("ion-filter", "options"),
     Output("spec-filter", "options"),
     Output("ref-graph", "figure"),
@@ -3970,14 +3952,12 @@ def _kv_rows(d):
 )
 def load_database(path):
     if not path or not os.path.exists(path):
-        return [], [], [], [], [], empty_fig(), None
+        return [], [], [], [], empty_fig(), None
     con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     info, st = read_kv(con, "run_info"), read_kv(con, "settings")
     con.close()
     summary = db_query(path, """
-        SELECT ion, COUNT(DISTINCT spectrum_id) AS n_spectra, COUNT(*) AS n_hits,
-               AVG(delta_hz) AS mean_delta_hz,
-               SQRT(MAX(AVG(delta_hz*delta_hz) - AVG(delta_hz)*AVG(delta_hz), 0)) AS std_delta_hz
+        SELECT ion, COUNT(DISTINCT spectrum_id) AS n_spectra
         FROM identifications GROUP BY ion ORDER BY n_spectra DESC, ion""")
     bases = db_query(path, "SELECT ion_base, COUNT(DISTINCT spectrum_id) AS n FROM identifications "
                            "GROUP BY ion_base ORDER BY ion_base")
@@ -4002,7 +3982,7 @@ def load_database(path):
     fig.update_layout(template="plotly_white", margin=dict(l=60, r=10, t=10, b=40),
                       xaxis_title="spectrum #", yaxis_title="ref freq (Hz)",
                       legend=dict(orientation="h", y=1.1), font=dict(size=11))
-    return (_kv_rows(info), _kv_rows(st), _fmt_records(summary), ion_opts, spec_opts, fig,
+    return (_kv_rows(info), _kv_rows(st), ion_opts, spec_opts, fig,
             refh_summary(path, st))
 
 
@@ -4070,19 +4050,6 @@ def refh_summary(path, st):
     return html.Div([title, tbl, html.Small(note + "Reference harmonic: the scan's own reference "
                                             "search, offset from its (tracked) prediction.",
                                             style=HELP_STYLE)])
-
-
-@app.callback(
-    Output("ion-filter", "value"),
-    Input("summary-table", "active_cell"),
-    State("summary-table", "derived_viewport_data"),
-    State("ion-filter", "value"),
-    prevent_initial_call=True,
-)
-def summary_click(cell, rows, current):
-    if not cell or not rows or cell["row"] >= len(rows):
-        return dash.no_update
-    return [f"ion:{rows[cell['row']]['ion']}"]
 
 
 HIT_COLUMNS = ["spectrum", "seq", "spectrum_id", "peak_id", "ion", "harmonic", "peak_freq", "sim_freq",
