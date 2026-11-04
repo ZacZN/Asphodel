@@ -1329,6 +1329,12 @@ TABLE_ROW_PX = 30       # DataTable row height
 FILTER_HEAD_PX = 120    # height of the filter block above the hits table
 # heading of the fold-away per-harmonic tables in the reference boxes
 REF_FOLD_SUMMARY = {"fontWeight": "600", "fontSize": "13px", "cursor": "pointer"}
+# sub-tab bars (Scan Results, Further output)
+SUBTAB_STYLE = {"padding": "6px 14px", "fontWeight": "600", "fontSize": "13px"}
+SUBTAB_SEL = {**SUBTAB_STYLE, "borderTop": f"3px solid {ACCENT}"}
+# the two Scan Results pages: two columns side by side
+RESULTS_PAGE_GRID = {"display": "grid", "gridTemplateColumns": "minmax(0, 1fr) minmax(0, 1fr)",
+                     "columnGap": "16px", "alignItems": "start"}
 # Run info / settings tables: long values (e.g. corr_by_h) wrap onto several
 # lines inside the table's width instead of widening it
 KV_WRAP = dict(
@@ -1404,106 +1410,52 @@ results_tab = html.Div([
         ], style={"display": "flex"}),
     ], id="runinfo-panel", style={"display": "none", "marginBottom": "12px"}),
 
-    # Grid layout.
-    #   left  (rows 1-3): reference tracking + reference viewer
-    #   right row 1: filters        right row 2: hits table
-    #   right row 3: snippet viewer
+    # Sub-tabs.  The bar only switches which page is visible: both pages stay
+    # mounted, so plots keep their zoom (as in Further output).
+    dcc.Tabs(id="results-subtabs", value="ions", children=[
+        dcc.Tab(label="Ion search", value="ions", style=SUBTAB_STYLE, selected_style=SUBTAB_SEL),
+        dcc.Tab(label="Reference tracking", value="ref", style=SUBTAB_STYLE,
+                selected_style=SUBTAB_SEL),
+    ], style={"height": "40px", "marginBottom": "10px"}),
+
+    # Ion search: filters + hits table (left) | snippet viewer (right)
     html.Div([
-        # right, row 1: filters
+        # left: filters + hits table
         html.Div([
+            # filters
             html.Div([
                 html.Div([
-                    html.Label("Ion filter", style=LABEL_STYLE),
-                    dcc.Dropdown(id="ion-filter", options=[], multi=True,
-                                 placeholder="Type an ion, e.g. 197Os (all charge states) or 197Os76+",
-                                 style={"fontSize": "13px"}),
-                ], style={"flex": "1", "marginRight": "10px"}),
-                html.Div([
-                    html.Label("Spectrum filter", style=LABEL_STYLE),
-                    dcc.Dropdown(id="spec-filter", options=[], multi=True, placeholder="All spectra",
-                                 style={"fontSize": "13px"}),
-                ], style={"flex": "1"}),
-            ], style={"display": "flex", "marginBottom": "6px"}),
-            dcc.Checklist(id="closest-filter", options=[
-                {"label": " Only the closest peak for each ion", "value": "ion"},
-                {"label": " Only the closest ion for each peak", "value": "peak"},
-            ], value=[], inline=True, inputStyle={"marginRight": "4px"},
-                labelStyle={"marginRight": "16px"}, style={"fontSize": "13px", "marginBottom": "6px"}),
-            html.Div(id="hits-info", style={"fontSize": "13px", "color": "#333", "marginBottom": "4px"}),
-        ], style={"gridColumn": "2", "gridRow": "1", "height": f"{FILTER_HEAD_PX}px",
-                  "minWidth": "0"}),
-
-        # right, row 2: hits table (Export button, always-visible horizontal scroll bar)
-        html.Div(_table("hits-table", ["spectrum", "seq", "ion", "harmonic", "peak_freq", "sim_freq",
-                                       "delta_hz", "power", "snr", "kind", "closest_for_ion",
-                                       "closest_for_peak"],
-                        page_size=TABLE_PAGE_SIZE, export_format="csv", overflow_x="scroll"),
-                 style={"gridColumn": "2", "gridRow": "2", "minWidth": "0"}),
-
-        # left, rows 1-3: reference tracking + per-spectrum reference viewer
-        html.Div([
-            html.Div([
-                html.H6("Reference tracking", style={"fontWeight": "600", "marginBottom": "6px"}),
-                dcc.Graph(id="ref-graph", figure=empty_fig(), style={"height": "280px"}),
-                html.Small("Click a point to open that spectrum below", style=HELP_STYLE),
-                # per-harmonic table, folded away by default
-                html.Details([
-                    html.Summary("Reference peak in each harmonic (whole run)",
-                                 id="refh-summary-title", style=REF_FOLD_SUMMARY),
-                    html.Div(id="refh-summary", style={"marginTop": "4px"}),
-                ], open=False, className="theia-fold", style={"marginTop": "8px"}),
-            ], className="theia-box", style=BOX_STYLE),
-
-            # Reference viewer: flip through spectra and see where the ref was found
-            html.Div([
-                html.H6("Reference in each spectrum", style={"fontWeight": "600", "marginBottom": "6px"}),
-                html.Div([
-                    html.Button("◀ Prev", id="btn-ref-prev", className="btn btn-outline-secondary btn-sm",
-                                style={"marginRight": "6px"}),
-                    dcc.Input(id="refview-seq-input", type="number", min=0, step=1, value=0,
-                              debounce=True, className="form-control form-control-sm",
-                              style={"width": "90px", "marginRight": "6px"}),
-                    html.Button("Next ▶", id="btn-ref-next", className="btn btn-outline-secondary btn-sm",
-                                style={"marginRight": "12px"}),
-                    html.Label("Initial view ± (Hz)", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
-                    dcc.Input(id="refview-width", type="number", value=2000, min=100, debounce=True,
-                              className="form-control form-control-sm", style={"width": "100px"}),
-                ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap"}),
-                html.Div([
-                    dcc.RadioItems(id="refview-mode", options=[
-                        {"label": " Step through all spectra", "value": "all"},
-                        {"label": " Only spectra where the reference was not found", "value": "notfound"},
-                        {"label": " Only harmonics where the lead peak was not found (reference found)",
-                         "value": "harm_miss"},
-                    ], value="all", inputStyle={"marginRight": "4px"},
-                        labelStyle={"display": "block"}, style={"fontSize": "12px"}),
                     html.Div([
-                        html.Span("harmonic", style={"fontSize": "12px", "marginRight": "6px"}),
-                        dcc.Dropdown(id="refview-miss-h", options=[{"label": "all", "value": "all"}],
-                                     value="all", clearable=False,
-                                     style={"width": "170px", "fontSize": "12px"}),
-                    ], title="Harmonic(s) to step through in the 'lead peak not found' mode",
-                       style={"display": "flex", "alignItems": "flex-end", "marginLeft": "12px"}),
-                ], style={"display": "flex", "alignItems": "flex-end", "flexWrap": "wrap",
-                          "margin": "6px 0"}),
-                html.Small("Double-click the plot to see the whole spectrum", style=HELP_STYLE),
-                html.Div(id="refview-info", style={"fontSize": "12px", "color": "#333",
-                                                   "whiteSpace": "pre-wrap"}),
-                # per-harmonic table for this spectrum, folded away by default; the
-                # fold is part of the layout so it stays open/closed while stepping
-                html.Details([
-                    html.Summary("Reference peak in each harmonic", style=REF_FOLD_SUMMARY),
-                    html.Div(id="refview-harm", style={"marginTop": "4px"}),
-                ], open=False, className="theia-fold", style={"margin": "4px 0 6px 0"}),
-                dcc.Graph(id="refview-graph", figure=empty_fig("Load a database"),
-                          style={"height": "340px"}, config={"scrollZoom": True}),
-                dcc.Store(id="refview-seq", data={"seq": 0, "h": None}),
-            ], className="theia-box", style={**BOX_STYLE, "marginTop": "10px"}),
-        ], style={"gridColumn": "1", "gridRow": "1 / 4", "minWidth": "0"}),
-        # right, row 3: peak-by-peak snippet viewer
+                        html.Label("Ion filter", style=LABEL_STYLE),
+                        dcc.Dropdown(id="ion-filter", options=[], multi=True,
+                                     placeholder="Type an ion, e.g. 197Os (all charge states) or 197Os76+",
+                                     style={"fontSize": "13px"}),
+                    ], style={"flex": "1", "marginRight": "10px"}),
+                    html.Div([
+                        html.Label("Spectrum filter", style=LABEL_STYLE),
+                        dcc.Dropdown(id="spec-filter", options=[], multi=True, placeholder="All spectra",
+                                     style={"fontSize": "13px"}),
+                    ], style={"flex": "1"}),
+                ], style={"display": "flex", "marginBottom": "6px"}),
+                dcc.Checklist(id="closest-filter", options=[
+                    {"label": " Only the closest peak for each ion", "value": "ion"},
+                    {"label": " Only the closest ion for each peak", "value": "peak"},
+                ], value=[], inline=True, inputStyle={"marginRight": "4px"},
+                    labelStyle={"marginRight": "16px"}, style={"fontSize": "13px", "marginBottom": "6px"}),
+                html.Div(id="hits-info", style={"fontSize": "13px", "color": "#333", "marginBottom": "4px"}),
+            ], style={"height": f"{FILTER_HEAD_PX}px", "minWidth": "0"}),
+
+            # hits table (Export button, always-visible horizontal scroll bar)
+            html.Div(_table("hits-table", ["spectrum", "seq", "ion", "harmonic", "peak_freq", "sim_freq",
+                                           "delta_hz", "power", "snr", "kind", "closest_for_ion",
+                                           "closest_for_peak"],
+                            page_size=TABLE_PAGE_SIZE, export_format="csv", overflow_x="scroll"),
+                     style={"minWidth": "0"}),
+        ], style={"minWidth": "0"}),
+        # right: peak-by-peak snippet viewer
         html.Div([
             # Peak-by-peak viewer: steps through the rows of the hits table as
-            # currently filtered (and sorted) above
+            # currently filtered (and sorted) on the left
             html.Div([
                 html.Button("◀ Prev", id="btn-snip-prev", className="btn btn-outline-secondary btn-sm",
                             style={"marginRight": "6px"}),
@@ -1526,7 +1478,7 @@ results_tab = html.Div([
                                         "value": "on"}],
                               style={"fontSize": "13px"}),
             ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap"}),
-            html.Small("Steps through every identification in the table above, in table order; "
+            html.Small("Steps through every identification in the table on the left, in table order; "
                        "the filters and table sorting decide which peaks are shown",
                        style=HELP_STYLE),
             # Confirmation mode: accept / reject the identification shown, then
@@ -1558,15 +1510,74 @@ results_tab = html.Div([
             dcc.Store(id="confirm-store", data={}),
             dcc.Store(id="snippet-idx", data=0),
             # Grows downwards to fill the row, so its bottom lines up with the
-            # reference-viewer box on the left when that column is the taller
+            # hits table on the left when that column is the taller
             dcc.Graph(id="snippet-graph", figure=empty_fig(), responsive=True,
                       style={"flex": "1", "minHeight": "420px"},
                       config={"scrollZoom": True}),
-        ], className="theia-box", style={**BOX_STYLE, "gridColumn": "2", "gridRow": "3", "minWidth": "0",
-                  "alignSelf": "stretch", "marginTop": "10px",
+        ], className="theia-box", style={**BOX_STYLE, "minWidth": "0", "alignSelf": "stretch",
                   "display": "flex", "flexDirection": "column"}),
-    ], style={"display": "grid", "gridTemplateColumns": "34% minmax(0, 1fr)",
-              "columnGap": "16px", "alignItems": "start"}),
+    ], id="results-page-ions", style=RESULTS_PAGE_GRID),
+
+    # Reference tracking: reference over the run (left) | reference in each spectrum (right)
+    html.Div([
+        html.Div([
+            html.H6("Reference tracking", style={"fontWeight": "600", "marginBottom": "6px"}),
+            dcc.Graph(id="ref-graph", figure=empty_fig(), style={"height": "280px"}),
+            html.Small("Click a point to open that spectrum on the right", style=HELP_STYLE),
+            # per-harmonic table, folded away by default
+            html.Details([
+                html.Summary("Reference peak in each harmonic (whole run)",
+                             id="refh-summary-title", style=REF_FOLD_SUMMARY),
+                html.Div(id="refh-summary", style={"marginTop": "4px"}),
+            ], open=False, className="theia-fold", style={"marginTop": "8px"}),
+        ], className="theia-box", style={**BOX_STYLE, "minWidth": "0"}),
+
+        # Reference viewer: flip through spectra and see where the ref was found
+        html.Div([
+            html.H6("Reference in each spectrum", style={"fontWeight": "600", "marginBottom": "6px"}),
+            html.Div([
+                html.Button("◀ Prev", id="btn-ref-prev", className="btn btn-outline-secondary btn-sm",
+                            style={"marginRight": "6px"}),
+                dcc.Input(id="refview-seq-input", type="number", min=0, step=1, value=0,
+                          debounce=True, className="form-control form-control-sm",
+                          style={"width": "90px", "marginRight": "6px"}),
+                html.Button("Next ▶", id="btn-ref-next", className="btn btn-outline-secondary btn-sm",
+                            style={"marginRight": "12px"}),
+                html.Label("Initial view ± (Hz)", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
+                dcc.Input(id="refview-width", type="number", value=2000, min=100, debounce=True,
+                          className="form-control form-control-sm", style={"width": "100px"}),
+            ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap"}),
+            html.Div([
+                dcc.RadioItems(id="refview-mode", options=[
+                    {"label": " Step through all spectra", "value": "all"},
+                    {"label": " Only spectra where the reference was not found", "value": "notfound"},
+                    {"label": " Only harmonics where the lead peak was not found (reference found)",
+                     "value": "harm_miss"},
+                ], value="all", inputStyle={"marginRight": "4px"},
+                    labelStyle={"display": "block"}, style={"fontSize": "12px"}),
+                html.Div([
+                    html.Span("harmonic", style={"fontSize": "12px", "marginRight": "6px"}),
+                    dcc.Dropdown(id="refview-miss-h", options=[{"label": "all", "value": "all"}],
+                                 value="all", clearable=False,
+                                 style={"width": "170px", "fontSize": "12px"}),
+                ], title="Harmonic(s) to step through in the 'lead peak not found' mode",
+                   style={"display": "flex", "alignItems": "flex-end", "marginLeft": "12px"}),
+            ], style={"display": "flex", "alignItems": "flex-end", "flexWrap": "wrap",
+                      "margin": "6px 0"}),
+            html.Small("Double-click the plot to see the whole spectrum", style=HELP_STYLE),
+            html.Div(id="refview-info", style={"fontSize": "12px", "color": "#333",
+                                               "whiteSpace": "pre-wrap"}),
+            # per-harmonic table for this spectrum, folded away by default; the
+            # fold is part of the layout so it stays open/closed while stepping
+            html.Details([
+                html.Summary("Reference peak in each harmonic", style=REF_FOLD_SUMMARY),
+                html.Div(id="refview-harm", style={"marginTop": "4px"}),
+            ], open=False, className="theia-fold", style={"margin": "4px 0 6px 0"}),
+            dcc.Graph(id="refview-graph", figure=empty_fig("Load a database"),
+                      style={"height": "340px"}, config={"scrollZoom": True}),
+            dcc.Store(id="refview-seq", data={"seq": 0, "h": None}),
+        ], className="theia-box", style={**BOX_STYLE, "minWidth": "0"}),
+    ], id="results-page-ref", style={**RESULTS_PAGE_GRID, "display": "none"}),
 ], style={"padding": "14px 18px", "overflowY": "auto", "height": "calc(100vh - 42px)"})
 
 
@@ -2442,8 +2453,6 @@ isochronicity_tab = html.Div([
 # The sub-tab bar only switches which page is visible: both pages stay
 # mounted, so plots keep their zoom and browser-side listeners.
 FURTHER_PAGES = {"align": "further-page-align", "iso": "further-page-iso"}
-SUBTAB_STYLE = {"padding": "6px 14px", "fontWeight": "600", "fontSize": "13px"}
-SUBTAB_SEL = {**SUBTAB_STYLE, "borderTop": f"3px solid {ACCENT}"}
 further_tab = html.Div([
     dcc.Tabs(id="further-subtabs", value="align", children=[
         dcc.Tab(label="Aligning and fitting", value="align", style=SUBTAB_STYLE,
@@ -6231,6 +6240,16 @@ app.clientside_callback(
     Input("snippet-show-excluded", "value"),
     prevent_initial_call=True,
 )
+
+
+@app.callback(
+    Output("results-page-ions", "style"),
+    Output("results-page-ref", "style"),
+    Input("results-subtabs", "value"),
+)
+def show_results_page(page):
+    return ({**RESULTS_PAGE_GRID, "display": "grid" if page == "ions" else "none"},
+            {**RESULTS_PAGE_GRID, "display": "grid" if page == "ref" else "none"})
 
 
 @app.callback(
