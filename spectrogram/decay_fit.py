@@ -63,6 +63,15 @@ Error bars (default: automatic two-pass fit)
      p fitted parameters). If that gives σ ≤ 0 anywhere, a constant σ is used.
   3. Refit with σ_i = a·f(t_i) + b, absolute_sigma=True; parameter and
      half-life errors come from this weighted fit.
+  If the weighted refit (3) fails, the unweighted fit from (1) is shown
+  instead, with a warning in the plot and "unweighted (weighted refit
+  failed)" as the saved error model.
+
+Fit failures
+------------
+  fit_decay and fit_bateman_joint raise FitError when the fit does not
+  converge; run as a script, the message is printed and the exit code is 1
+  (the spectrogram page shows it).
 
 Saving a fit
 ------------
@@ -290,6 +299,11 @@ def model_no_offset(t, A, tau):
 # Fitting
 # ---------------------------------------------------------------------------
 
+class FitError(RuntimeError):
+    """A fit did not converge or could not be started (message for the user)."""
+
+
+
 def _bateman_guesses(time, intensity, B_fixed):
     """Heuristic initial guesses for Bateman parameters from data shape."""
     peak_idx = np.argmax(intensity)
@@ -325,6 +339,8 @@ def fit_decay(time, intensity, with_offset=True, bateman=False,
     model    : callable, model(t, *popt)
     resolved : dict  {'P','tau_A','tau_B','B','C'} → (value, err, label)
                label is 'fitted' or 'fixed'. None for simple decay.
+
+    Raises FitError if curve_fit fails.
     """
     _w = dict(sigma=sigma, absolute_sigma=True) if sigma is not None else {}
 
@@ -351,8 +367,8 @@ def fit_decay(time, intensity, with_offset=True, bateman=False,
                     maxfev=10_000, **_w,
                 )
                 model = model_no_offset
-        except RuntimeError as exc:
-            sys.exit(f"Curve fit failed: {exc}")
+        except (RuntimeError, ValueError) as exc:
+            raise FitError(f"Curve fit failed: {exc}") from exc
         perr = np.sqrt(np.diag(pcov))
         return popt, perr, model, None
 
@@ -439,8 +455,8 @@ def fit_decay(time, intensity, with_offset=True, bateman=False,
             tau_A, dtau_A      = tau_A_fixed, 0.0
             tau_B, dtau_B      = tau_B_fixed, 0.0
 
-    except RuntimeError as exc:
-        sys.exit(f"Curve fit failed: {exc}")
+    except (RuntimeError, ValueError) as exc:
+        raise FitError(f"Curve fit failed: {exc}") from exc
 
     resolved = {
         'P':     (P,       dP,     'fitted'),
@@ -886,7 +902,8 @@ def add_save_button(fig, record):
 def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, resolved,
                with_offset, bateman, freq_min, freq_max, filename,
                gamma=None, title_suffix=None, sigma_fit=None, err_note=None,
-               title_full=None, log_plot=False, show_residuals=False, record=None):
+               title_full=None, log_plot=False, show_residuals=False, record=None,
+               warning=None):
 
     plt.rcParams.update({"font.size": 20})
 
@@ -952,6 +969,8 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
     if chi2 is not None:
         chi2_red = chi2 / ndf if ndf > 0 else float("nan")
         eq_text += f"\n\n$\\chi^2/ndf$ = {chi2:.4g}/{ndf} = {chi2_red:.3g}"
+    if warning:
+        eq_text += f"\n\n{warning}"
 
     par_box = ax.text(
         0.97, 0.97, eq_text,
@@ -1235,8 +1254,8 @@ def fit_bateman_joint(tP, IP, tD, ID, tau_A_fixed=None, tau_B_fixed=None,
             bounds=([lower[n] for n in free], [np.inf] * len(free)),
             maxfev=50_000, **kw,
         )
-    except RuntimeError as exc:
-        sys.exit(f"Joint Bateman fit failed: {exc}")
+    except (RuntimeError, ValueError) as exc:
+        raise FitError(f"Joint Bateman fit failed: {exc}") from exc
 
     vals = unpack(popt)
     perr = np.sqrt(np.diag(pcov))
@@ -1318,7 +1337,17 @@ def run_joint(args, halflife_isomer_lab, halflife_groundstate_lab):
             print(f"  Pass 1 (unweighted): τ_A = {format_time(vals['tau_A'], errs['tau_A'])}, "
                   f"τ_B = {format_time(vals['tau_B'], errs['tau_B'])}")
             err_note = "σ from residuals (per window)"
-            vals, errs, free, pcov = fit_bateman_joint(tP, IP, tD, ID, tau_A_fixed, tau_B_fixed, sigmaP, sigmaD)
+            # if the weighted refit fails, keep the unweighted fit of pass 1
+            fit1 = (vals, errs, free, pcov)
+            try:
+                vals, errs, free, pcov = fit_bateman_joint(tP, IP, tD, ID, tau_A_fixed,
+                                                           tau_B_fixed, sigmaP, sigmaD)
+            except FitError as exc:
+                print(f"WARNING: weighted refit failed ({exc}); showing the unweighted fit of "
+                      f"pass 1")
+                vals, errs, free, pcov = fit1
+                sigmaP = sigmaD = None
+                err_note = "unweighted (weighted refit failed)"
 
     # ---- χ² and τ_A–τ_B correlation
     IPm, IDm = _joint_curves(tP, tD, **vals)
@@ -1572,6 +1601,7 @@ def main():
     )
 
     err_note = None
+    fit_warning = None
     if sigma_fit is not None:
         # Manual error coefficients
         err_note = f"σ = {err_a:g}·I + {err_b:g}" + (f" (÷√{n_avg})" if n_avg > 1 else "") + "  [manual]"
@@ -1582,7 +1612,7 @@ def main():
 
     else:
         # Pass 1: unweighted fit
-        popt1, perr1, model1, _ = fit_decay(time_fit, intensity_fit, **fit_kw)
+        popt1, perr1, model1, resolved1 = fit_decay(time_fit, intensity_fit, **fit_kw)
         # Error model from residuals
         sigma_fit, err_a, err_b, kind = estimate_error_model(time_fit, intensity_fit, popt1, model1)
         if kind == "linear":
@@ -1593,11 +1623,20 @@ def main():
             print(f"Error model from residuals: linear σ(I) went ≤ 0 or was ill-defined; "
                   f"using constant σ = {format_value(err_b)}")
             err_note = f"σ = {format_value(err_b)}  [constant, from residuals]"
-        # Pass 2: weighted fit
-        popt, perr, model, resolved = fit_decay(time_fit, intensity_fit, sigma=sigma_fit, **fit_kw)
-        if not args.bateman:
-            print(f"  Pass 1 (unweighted): τ = {format_time(popt1[1], perr1[1])}")
-            print(f"  Pass 2 (weighted):   τ = {format_time(popt[1], perr[1])}")
+        # Pass 2: weighted fit; if it fails, keep the unweighted fit of pass 1
+        try:
+            popt, perr, model, resolved = fit_decay(time_fit, intensity_fit, sigma=sigma_fit,
+                                                    **fit_kw)
+        except FitError as exc:
+            print(f"WARNING: weighted refit failed ({exc}); showing the unweighted fit of pass 1")
+            popt, perr, model, resolved = popt1, perr1, model1, resolved1
+            sigma_fit = None
+            err_note = "unweighted (weighted refit failed)"
+            fit_warning = "Weighted refit failed: unweighted fit shown"
+        else:
+            if not args.bateman:
+                print(f"  Pass 1 (unweighted): τ = {format_time(popt1[1], perr1[1])}")
+                print(f"  Pass 2 (weighted):   τ = {format_time(popt[1], perr[1])}")
 
     record = single_fit_record(args, time_fit, intensity_fit, popt, perr, model, resolved,
                                with_offset, sigma_fit, err_note)
@@ -1615,8 +1654,12 @@ def main():
         sigma_fit=sigma_fit,
         err_note=err_note,
         record=record,
+        warning=fit_warning,
     )
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except FitError as exc:
+        sys.exit(str(exc))
