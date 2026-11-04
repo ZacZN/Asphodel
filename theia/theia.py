@@ -1343,8 +1343,13 @@ RESULTS_PAGES = {"display": "grid", "gridTemplateColumns": "minmax(0, 1fr)",
                  "gridTemplateRows": "minmax(0, 1fr)", "flex": "1 1 0", "minHeight": "560px"}
 RESULTS_PAGE_GRID = {"display": "grid", "gridTemplateColumns": "minmax(0, 1fr) minmax(0, 1fr)",
                      "gridTemplateRows": "minmax(0, 1fr)", "columnGap": "16px",
-                     "alignItems": "stretch", "gridArea": "1 / 1", "minHeight": "0"}
-RESULTS_PAGE_HIDDEN = {**RESULTS_PAGE_GRID, "visibility": "hidden", "pointerEvents": "none"}
+                     "alignItems": "stretch", "gridArea": "1 / 1", "minHeight": "0",
+                     "position": "relative", "zIndex": "1"}
+# The hidden page goes underneath: Plotly's drag layers set their own
+# pointer-events, so without this an invisible plot would catch the mouse
+# over the page shown (crosshair, no clicks).
+RESULTS_PAGE_HIDDEN = {**RESULTS_PAGE_GRID, "visibility": "hidden", "pointerEvents": "none",
+                       "zIndex": "-1"}
 # a box that fills its grid cell, its contents stacked; the plot in it grows
 # (on a screen too small for everything at its minimum size the box scrolls)
 FILL_BOX = {**BOX_STYLE, "minWidth": "0", "minHeight": "0", "display": "flex",
