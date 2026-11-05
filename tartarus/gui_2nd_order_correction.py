@@ -66,7 +66,7 @@ import threading
 from functools import lru_cache
 
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import browser, corrections, icon, paths, physics, tabwatch
+from core import browser, corrections, icon, jsonfile, paths, physics, tabwatch
 from core.nubase_reader import MASS_MODEL, unpack_npz
 
 import numpy as np
@@ -115,20 +115,13 @@ LABELS = {
 # ===========================================================================
 
 def _read_json(path):
-    try:
-        with open(path, encoding="utf-8") as fh:
-            d = json.load(fh)
-        return d if isinstance(d, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    """A settings file as a dict; {} if missing.  A damaged file is set aside
+    (its backup restored if there is one) with a warning: core/jsonfile.py."""
+    return jsonfile.read(path, {})
 
 
 def _write_json(path, data):
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2)
-        fh.write("\n")
-    os.replace(tmp, path)
+    jsonfile.write(path, data)          # atomic, previous version kept as .bak
 
 
 _LOCK = threading.Lock()
@@ -139,12 +132,10 @@ def load_settings():
 
 
 def save_settings(changes):
-    with _LOCK:
+    p = paths.settings_file(SETTINGS_FILE)
+    with _LOCK, jsonfile.lock(p):
         cfg = {**load_settings(), **changes}
-        try:
-            _write_json(paths.settings_file(SETTINGS_FILE), physics.strip_shared(cfg))
-        except OSError:
-            pass
+        jsonfile.try_write(p, physics.strip_shared(cfg), "the correction-tool settings")
 
 
 def _session_key(path):
@@ -163,16 +154,13 @@ def load_session(path):
 def save_session(state):
     if not state or not state.get("file"):
         return
-    with _LOCK:
-        p = paths.settings_file(SESSIONS_FILE)
+    p = paths.settings_file(SESSIONS_FILE)
+    with _LOCK, jsonfile.lock(p):
         all_ = _read_json(p)
         d = {k: state.get(k) for k in SESSION_KEYS}
         d["saved"] = datetime.datetime.now().isoformat(timespec="seconds")
         all_[_session_key(state["file"])] = d
-        try:
-            _write_json(p, all_)
-        except OSError:
-            pass
+        jsonfile.try_write(p, all_, "the correction-tool session")
 
 
 def new_state(path, saved=None):

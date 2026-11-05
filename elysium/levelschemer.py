@@ -43,7 +43,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import paths
+from core import jsonfile, paths
 
 APP_NAME = "LevelSchemer"
 HIGHLIGHT = "#f57d15"
@@ -61,24 +61,23 @@ def _dir_or_none(d):
 
 
 def load_settings():
-    try:
-        with open(settings_path(), encoding="utf-8") as fh:
-            d = json.load(fh)
-        return d if isinstance(d, dict) else {}
-    except Exception:
-        return {}
+    """The settings as a dict; {} if missing.  A damaged file is set aside
+    (its backup restored if there is one) with a warning: core/jsonfile.py."""
+    return jsonfile.read(settings_path(), {})
 
 
 def save_settings(**changes):
-    """Merge `changes` into the settings file; failures are ignored."""
-    d = load_settings()
-    d.update(changes)
+    """Merge `changes` into the settings file (atomic, previous version kept as
+    .bak); a failure is reported in the terminal, not raised."""
+    p = settings_path()
     try:
-        os.makedirs(os.path.dirname(settings_path()), exist_ok=True)
-        with open(settings_path(), "w", encoding="utf-8") as fh:
-            json.dump(d, fh, indent=1)
-    except Exception:
-        pass
+        with jsonfile.lock(p):
+            d = load_settings()
+            d.update(changes)
+            jsonfile.write(p, d, indent=1)
+    except Exception as exc:
+        jsonfile.warn(f"could not save the LevelSchemer settings to {p}: "
+                      f"{type(exc).__name__}: {exc}")
 FILE_VERSION = 3
 
 DEFAULT_STYLE = {

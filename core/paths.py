@@ -25,7 +25,6 @@ Use from a script in a sub-folder (e.g. theia/theia.py):
     from core import paths
 """
 
-import json
 import os
 import shutil
 
@@ -60,20 +59,13 @@ EXPERIMENT_SUBDIRS = ("spectra_1d", "spectrograms", "summed_1d", "levelschemes",
 
 
 def _read_suite_settings():
-    try:
-        with open(SUITE_SETTINGS, encoding="utf-8") as fh:
-            d = json.load(fh)
-        return d if isinstance(d, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    from . import jsonfile                 # jsonfile imports nothing from here
+    return jsonfile.read(SUITE_SETTINGS, {})
 
 
 def _write_suite_settings(d):
-    os.makedirs(DATA_ROOT, exist_ok=True)
-    tmp = SUITE_SETTINGS + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(d, fh, indent=2)
-    os.replace(tmp, SUITE_SETTINGS)
+    from . import jsonfile
+    jsonfile.write(SUITE_SETTINGS, d)
 
 
 def profiles():
@@ -125,9 +117,11 @@ def set_experiment(name):
     """Make `name` the active experiment (kept in data/asphodel_settings.json)."""
     if name not in profiles():
         raise ValueError(f"Unknown experiment {name!r}")
-    d = _read_suite_settings()
-    d["experiment"] = name
-    _write_suite_settings(d)
+    from . import jsonfile
+    with jsonfile.lock(SUITE_SETTINGS):
+        d = _read_suite_settings()
+        d["experiment"] = name
+        _write_suite_settings(d)
 
 
 def create_experiment(name, data_dir=None, copy_physics_from=None):
@@ -147,11 +141,13 @@ def create_experiment(name, data_dir=None, copy_physics_from=None):
         dst = os.path.join(data_dir, "settings", "physics.json")
         if os.path.isfile(src) and not os.path.exists(dst):
             shutil.copyfile(src, dst)
-    d = _read_suite_settings()
-    reg = d.get("profiles") if isinstance(d.get("profiles"), dict) else {}
-    reg[name] = {"data_dir": data_dir}
-    d["profiles"] = reg
-    _write_suite_settings(d)
+    from . import jsonfile
+    with jsonfile.lock(SUITE_SETTINGS):
+        d = _read_suite_settings()
+        reg = d.get("profiles") if isinstance(d.get("profiles"), dict) else {}
+        reg[name] = {"data_dir": data_dir}
+        d["profiles"] = reg
+        _write_suite_settings(d)
     return data_dir
 
 
@@ -215,10 +211,9 @@ def _folders_path(exp=None):
 def load_folders(exp=None):
     """{"data": [...], "output": [...]}: the connected folders of the experiment
     (the standard sub-folders until anything is connected or removed)."""
-    try:
-        with open(_folders_path(exp), encoding="utf-8") as fh:
-            d = json.load(fh)
-    except (OSError, ValueError):
+    from . import jsonfile
+    d = jsonfile.read(_folders_path(exp), None)
+    if d is None:                          # missing (or damaged: set aside + warning)
         return _default_folders(exp)
     out = {}
     for g, kinds in FOLDER_GROUPS.items():
@@ -233,12 +228,8 @@ def load_folders(exp=None):
 
 
 def save_folders(d, exp=None):
-    path = _folders_path(exp)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(d, fh, indent=2)
-    os.replace(tmp, path)
+    from . import jsonfile
+    jsonfile.write(_folders_path(exp), d)
 
 
 def guess_kind(group, path):
@@ -268,45 +259,56 @@ def connect_folder(group, path, kind=None, name=None, exp=None):
     if not (path or "").strip() or not os.path.isdir(p):
         raise ValueError(f"Not a folder: {path}")
     kind = kind if kind in FOLDER_GROUPS[group] else guess_kind(group, p)
-    d = load_folders(exp)
-    entry = next((f for f in d[group] if f["path"] == p), None)
-    if entry is None:
-        entry = {"path": p, "kind": kind, "name": (name or "").strip() or os.path.basename(p.rstrip("/"))}
-        d[group].append(entry)
-    else:
-        entry["kind"] = kind
-        if (name or "").strip():
-            entry["name"] = name.strip()
-    save_folders(d, exp)
+    with _folders_lock(exp):
+        d = load_folders(exp)
+        entry = next((f for f in d[group] if f["path"] == p), None)
+        if entry is None:
+            entry = {"path": p, "kind": kind,
+                     "name": (name or "").strip() or os.path.basename(p.rstrip("/"))}
+            d[group].append(entry)
+        else:
+            entry["kind"] = kind
+            if (name or "").strip():
+                entry["name"] = name.strip()
+        save_folders(d, exp)
     return entry
 
 
+def _folders_lock(exp=None):
+    """Lock for a read-modify-write of folders.json (core/jsonfile.py)."""
+    from . import jsonfile
+    return jsonfile.lock(_folders_path(exp))
+
+
 def disconnect_folder(group, path, exp=None):
-    d = load_folders(exp)
-    d[group] = [f for f in d[group] if f["path"] != path]
-    save_folders(d, exp)
+    with _folders_lock(exp):
+        d = load_folders(exp)
+        d[group] = [f for f in d[group] if f["path"] != path]
+        save_folders(d, exp)
 
 
 def update_folder(group, path, exp=None, **changes):
     """Change a connected folder's kind or name."""
-    d = load_folders(exp)
-    for f in d[group]:
-        if f["path"] == path:
-            if changes.get("kind") in FOLDER_GROUPS[group]:
-                f["kind"] = changes["kind"]
-            if (changes.get("name") or "").strip():
-                f["name"] = changes["name"].strip()
-    save_folders(d, exp)
+    with _folders_lock(exp):
+        d = load_folders(exp)
+        for f in d[group]:
+            if f["path"] == path:
+                if changes.get("kind") in FOLDER_GROUPS[group]:
+                    f["kind"] = changes["kind"]
+                if (changes.get("name") or "").strip():
+                    f["name"] = changes["name"].strip()
+        save_folders(d, exp)
 
 
 def make_default(group, path, exp=None):
     """Move a folder in front of the others of its kind: the tools use it."""
-    d = load_folders(exp)
-    f = next((x for x in d[group] if x["path"] == path), None)
-    if f is not None:
-        d[group].remove(f)
-        d[group].insert(0, f)
-        save_folders(d, exp)
+    with _folders_lock(exp):
+        d = load_folders(exp)
+        f = next((x for x in d[group] if x["path"] == path), None)
+        if f is not None:
+            d[group].remove(f)
+            d[group].insert(0, f)
+            save_folders(d, exp)
 
 
 def connected(group, kind=None, exp=None):

@@ -44,7 +44,7 @@ import tempfile
 import threading
 import time
 
-from core import paths
+from core import jsonfile, paths
 
 DEFAULTS = {
     "host": "appc256",
@@ -94,13 +94,9 @@ def size_text(n):
 def settings(exp=None):
     """Sync settings of the experiment (DEFAULTS + settings/sync.json)."""
     cfg = dict(DEFAULTS)
-    try:
-        with open(paths.settings_file("sync.json", exp), encoding="utf-8") as fh:
-            d = json.load(fh)
-        cfg.update({k: v.strip() for k, v in d.items()
-                    if k in DEFAULTS and isinstance(v, str) and v.strip()})
-    except (OSError, ValueError, AttributeError):
-        pass
+    d = jsonfile.read(paths.settings_file("sync.json", exp), {})
+    cfg.update({k: v.strip() for k, v in d.items()
+                if k in DEFAULTS and isinstance(v, str) and v.strip()})
     for k in ("remote_root", "remote_confirmed", "remote_spectrograms"):
         if not _SAFE_PATH.match(cfg[k]):
             raise SyncError(f"sync.json: {k} = {cfg[k]!r} contains characters scp can't take unquoted.")

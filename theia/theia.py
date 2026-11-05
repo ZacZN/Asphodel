@@ -51,7 +51,7 @@ Peak detection (no smoothing is ever applied to the data)
 import os
 import sys
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import browser, corrections, icon, paths, physics, tabwatch
+from core import browser, corrections, icon, jsonfile, paths, physics, tabwatch
 from core.nubase_reader import (df_nubase, rect_restrict, diag_restrict, index_by_name, unpack_npz,
                                 get_base_dataframe, ion_electron_energy_kev)
 from core.physics import (delta_f, apply_correction, ion_base_name, build_hover_label, HL_UNITS,
@@ -384,11 +384,9 @@ def analyse_spectrum(ff, pp, s, predicted_ref):
 # ===========================================================================
 
 def _load_json(path):
-    try:
-        with open(path) as fh:
-            return json.load(fh)
-    except Exception:
-        return {}
+    """A settings file as a dict; {} if missing.  A damaged file is set aside
+    (its backup restored if there is one) with a warning: core/jsonfile.py."""
+    return jsonfile.read(path, {})
 
 
 
@@ -442,28 +440,24 @@ def load_config():
     return physics.with_shared(DEFAULTS, _load_json(CONFIG_PATH))
 
 
-_CONFIG_LOCK = threading.Lock()
-
-
 def save_config(cfg):
     """Merge `cfg` into scanner_config.json (keys not in cfg are kept, e.g. the
     snippet half-width is saved separately from the scan settings).
 
-    Several callbacks can save at the same moment (the server is threaded), so
-    the read-merge-write is locked and the file is replaced atomically; this
-    stops one save reading a half-written file and wiping the others.
+    Several callbacks (and the home page, another process) can save at the
+    same moment, so the read-merge-write holds the file's lock; the file is
+    replaced atomically and the previous version kept as .bak
+    (core/jsonfile.py).  A failed save is reported, not ignored.
     """
     try:
-        with _CONFIG_LOCK:
+        with jsonfile.lock(CONFIG_PATH):
             # physics values equal to the shared default are not stored, so
             # they follow physics.json; only real overrides are kept
             merged = physics.strip_shared({**_load_json(CONFIG_PATH), **cfg})
-            tmp = CONFIG_PATH + ".tmp"
-            with open(tmp, "w") as fh:
-                json.dump(merged, fh, indent=2)
-            os.replace(tmp, CONFIG_PATH)
-    except Exception:
-        pass
+            jsonfile.write(CONFIG_PATH, merged)
+    except Exception as exc:
+        jsonfile.warn(f"could not save the scanner settings to {CONFIG_PATH}: "
+                      f"{type(exc).__name__}: {exc}")
 
 
 def _ints(s, n=None, what="value"):
@@ -2816,17 +2810,16 @@ def v_zoom_width_saved():
 def save_viewer_config(cfg):
     """Save the viewer settings in cfg; the V_EXTRA_KEYS not in cfg keep
     their saved values."""
-    old = _load_json(VIEWER_CONFIG_PATH)
-    extra = {k: cfg.get(k, old.get(k)) for k in V_EXTRA_KEYS
-             if cfg.get(k, old.get(k)) is not None}
-    main = {k: v for k, v in cfg.items() if k not in V_EXTRA_KEYS}
     try:
-        tmp = VIEWER_CONFIG_PATH + ".tmp"
-        with open(tmp, "w") as fh:
-            json.dump({**physics.strip_shared(main), **extra}, fh, indent=2)
-        os.replace(tmp, VIEWER_CONFIG_PATH)
-    except Exception:
-        pass
+        with jsonfile.lock(VIEWER_CONFIG_PATH):
+            old = _load_json(VIEWER_CONFIG_PATH)
+            extra = {k: cfg.get(k, old.get(k)) for k in V_EXTRA_KEYS
+                     if cfg.get(k, old.get(k)) is not None}
+            main = {k: v for k, v in cfg.items() if k not in V_EXTRA_KEYS}
+            jsonfile.write(VIEWER_CONFIG_PATH, {**physics.strip_shared(main), **extra})
+    except Exception as exc:
+        jsonfile.warn(f"could not save the viewer settings to {VIEWER_CONFIG_PATH}: "
+                      f"{type(exc).__name__}: {exc}")
 
 
 VCFG = load_viewer_config()
@@ -3173,6 +3166,11 @@ _BASE_LAYOUT = html.Div([
     dcc.Store(id="sum-view", data=None),
     html.Div(id="_sum-view-hook", style={"display": "none"}),
     html.Div(id="_further-saved", style={"display": "none"}),
+    # Settings-file problems (damaged file set aside, failed save): core/jsonfile.py
+    html.Div(id="settings-warn", children=[],
+             style={"position": "fixed", "top": "48px", "right": "14px", "zIndex": 3000,
+                    "maxWidth": "560px"}),
+    dcc.Interval(id="settings-warn-poll", interval=3000),
 ], style={"position": "relative"})
 
 
@@ -3810,15 +3808,11 @@ def _v_zoom_hw(width_khz):
 
 def _v_save_extra(key, value):
     """Save one of V_EXTRA_KEYS in viewer_config.json, other entries untouched."""
-    cfg = _load_json(VIEWER_CONFIG_PATH)
-    cfg[key] = value
     try:
-        tmp = VIEWER_CONFIG_PATH + ".tmp"
-        with open(tmp, "w") as fh:
-            json.dump(cfg, fh, indent=2)
-        os.replace(tmp, VIEWER_CONFIG_PATH)
-    except Exception:
-        pass
+        jsonfile.update(VIEWER_CONFIG_PATH, {key: value})
+    except Exception as exc:
+        jsonfile.warn(f"could not save the viewer settings to {VIEWER_CONFIG_PATH}: "
+                      f"{type(exc).__name__}: {exc}")
 
 
 @app.callback(
@@ -7142,10 +7136,11 @@ def iso_bin_width(st):
 
 def save_iso_fit_settings(st):
     path = paths.settings_file("isocurve.json")
-    tmp = path + ".tmp"
-    with open(tmp, "w") as fh:
-        json.dump(st, fh, indent=2)
-    os.replace(tmp, path)
+    try:
+        jsonfile.write(path, st)
+    except Exception as exc:
+        jsonfile.warn(f"could not save the isochronicity fit settings to {path}: "
+                      f"{type(exc).__name__}: {exc}")
 
 
 def check_iso_fit_settings(st):
@@ -9298,6 +9293,28 @@ def _refview_plot(seq, half_width, path, rows_out):
         fig.update_yaxes(range=[lo - 0.05 * (hi - lo or 1), hi + 0.12 * (hi - lo or 1)])
     return fig, info
 
+
+
+# ===========================================================================
+# Settings-file warnings (core/jsonfile.py): damaged files set aside, failed saves
+# ===========================================================================
+
+@app.callback(
+    Output("settings-warn", "children"),
+    Input("settings-warn-poll", "n_intervals"),
+    State("settings-warn", "children"),
+)
+def show_settings_warnings(_n, shown):
+    new = jsonfile.take_warnings()
+    if not new:
+        raise PreventUpdate
+    # keep the alerts still open (a dismissed one comes back with is_open False)
+    shown = [c for c in (shown or [])
+             if isinstance(c, dict) and (c.get("props") or {}).get("is_open", True) is not False]
+    for text in new:
+        shown.append(dbc.Alert([html.B("Settings file: "), text], color="warning",
+                               dismissable=True, style={"fontSize": "13px", "marginBottom": "6px"}))
+    return shown[-6:]
 
 
 # ===========================================================================

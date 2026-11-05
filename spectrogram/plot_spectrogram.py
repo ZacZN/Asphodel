@@ -92,7 +92,7 @@ def slice_freq(freq, power, freq_min, freq_max):
 
 _HERE       = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(1, os.path.dirname(_HERE))
-from core import baseline, browser, icon, paths, tabwatch
+from core import baseline, browser, icon, jsonfile, paths, tabwatch
 PREFS_PATH  = paths.settings_file("spectrogram_prefs.json")
 DECAY_PATH  = os.path.join(_HERE, "decay_fit.py")
 
@@ -102,20 +102,14 @@ _PREFS_LOCK = threading.RLock()   # serialise read-modify-write of the prefs fil
 
 
 def read_prefs():
-    import json
-    try:
-        with open(PREFS_PATH, "r", encoding="utf-8") as fh:
-            return json.loads(fh.read())
-    except Exception:
-        return {}
+    """The prefs file as a dict; {} if missing.  A damaged file is set aside
+    (its backup restored if there is one) with a warning: core/jsonfile.py."""
+    return jsonfile.read(PREFS_PATH, {})
 
 
 def write_prefs(prefs):
-    import json
-    tmp = PREFS_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(json.dumps(prefs))
-    os.replace(tmp, PREFS_PATH)   # atomic: never leaves a half-written prefs file
+    # atomic, previous version kept as .bak (core/jsonfile.py); raises on failure
+    jsonfile.write(PREFS_PATH, prefs, indent=None)
 
 
 def _same_crop(a, b):
@@ -2813,8 +2807,9 @@ def load_dataset(path, fmin=None, fmax=None, linear=False, n_avg=1, ion=None, bl
     )
     try:
         write_prefs(prefs)
-    except Exception:
-        pass
+    except Exception as exc:
+        jsonfile.warn(f"could not save the spectrogram prefs to {PREFS_PATH}: "
+                      f"{type(exc).__name__}: {exc}")
     finally:
         _PREFS_LOCK.release()
     return html, state

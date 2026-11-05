@@ -34,11 +34,9 @@ If the file does not exist yet, it is created with one profile holding the
 a, b, c currently in physics.json (setup not recorded).
 """
 import datetime
-import json
 import math
-import os
 
-from . import paths
+from . import jsonfile, paths
 from .nubase_reader import MASS_MODEL
 
 PROFILES_FILE = "correction_profiles.json"
@@ -54,12 +52,7 @@ def profiles_path(exp=None):
 
 
 def _write(profiles, exp=None):
-    path = profiles_path(exp)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump({"format": FORMAT, "version": 2, "profiles": profiles}, fh, indent=2)
-        fh.write("\n")
-    os.replace(tmp, path)
+    jsonfile.write(profiles_path(exp), {"format": FORMAT, "version": 2, "profiles": profiles})
 
 
 def _seed(exp=None):
@@ -80,13 +73,11 @@ def _seed(exp=None):
 def load_profiles(exp=None):
     """List of profiles (oldest first).  Creates the file on first use."""
     path = profiles_path(exp)
-    if not os.path.exists(path):
-        return _seed(exp)
-    try:
-        with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (OSError, ValueError):
-        return []
+    with jsonfile.lock(path):
+        # damaged file: set aside, the backup restored if there is one (jsonfile)
+        data = jsonfile.read(path, None)
+        if data is None:
+            return _seed(exp)
     out = []
     for p in (data.get("profiles") or []) if isinstance(data, dict) else []:
         try:
@@ -119,18 +110,19 @@ def save_profile(profile, exp=None, overwrite=False):
     name = str(profile.get("name") or "").strip()
     if not name or name == CUSTOM:
         raise ValueError("the profile needs a name")
-    profiles = load_profiles(exp)
-    if any(p["name"] == name for p in profiles):
-        if not overwrite:
-            raise ValueError(f"a profile called '{name}' already exists")
-        profiles = [p for p in profiles if p["name"] != name]
     prof = dict(profile, name=name, a=float(profile["a"]), b=float(profile["b"]),
                 c=float(profile["c"]))
     if not prof.get("per_harmonic"):
         prof.pop("per_harmonic", None)
     prof.setdefault("created", datetime.datetime.now().isoformat(timespec="seconds"))
-    profiles.append(prof)
-    _write(profiles, exp)
+    with jsonfile.lock(profiles_path(exp)):
+        profiles = load_profiles(exp)
+        if any(p["name"] == name for p in profiles):
+            if not overwrite:
+                raise ValueError(f"a profile called '{name}' already exists")
+            profiles = [p for p in profiles if p["name"] != name]
+        profiles.append(prof)
+        _write(profiles, exp)
     return prof
 
 

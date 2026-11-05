@@ -30,7 +30,6 @@ asking. Ctrl-C in the terminal stops only the home page; the tools keep running.
 import datetime
 import glob
 import itertools
-import json
 import os
 import shlex
 import signal
@@ -42,7 +41,8 @@ import time
 import webbrowser
 
 sys.path.insert(1, os.path.dirname(os.path.abspath(__file__)))
-from core import browser, corrections, folderpick, icon, labbook, paths, physics, sync, tabwatch, version
+from core import (browser, corrections, folderpick, icon, jsonfile, labbook, paths, physics, sync,
+                  tabwatch, version)
 
 import dash
 from dash import dcc, html, Input, Output, State, ALL, ctx
@@ -221,21 +221,13 @@ def tool_status(key):
 # ===========================================================================
 
 def _read_json(path):
-    try:
-        with open(path, encoding="utf-8") as fh:
-            d = json.load(fh)
-        return d if isinstance(d, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    """A JSON file as a dict; {} if missing.  A damaged file is set aside
+    (its backup restored if there is one) with a warning: core/jsonfile.py."""
+    return jsonfile.read(path, {})
 
 
 def _update_json(path, changes):
-    d = _read_json(path)
-    d.update(changes)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(d, fh, indent=2)
-    os.replace(tmp, path)
+    jsonfile.update(path, changes)
 
 
 def tool_overrides():
@@ -781,6 +773,8 @@ def serve_layout():
         dcc.Interval(id="tick", interval=2000),
         header(),
         html.Div(id="msg", className="banner", children="Ready."),
+        html.Div(id="settings-banner", className="banner settings-warn",
+                 style={"display": "none"}),
         html.Div([
             sidebar(),
             html.Main([tools_section(), folders_section(), notes_section()]),
@@ -803,6 +797,8 @@ header .logo{{font-weight:800;font-size:18px;letter-spacing:.5px}} header .logo 
 header .exp{{width:180px;font-size:13px}} header .path{{color:var(--muted);font-family:monospace;font-size:12px}}
 header .spacer{{flex:1}}
 .banner{{background:var(--pale);border-bottom:1px solid var(--line);padding:6px 18px;font-size:12px;color:#8a4a10;min-height:28px}}
+.settings-warn{{border-left:4px solid var(--accent);color:#222}}
+.settings-warn ul{{margin:2px 0 2px 18px;padding:0}}
 /* page = header + banner + (sidebar | main) filling the window; the main
    section scrolls on its own, the sidebar stays put */
 body{{overflow:hidden}}
@@ -1064,6 +1060,49 @@ def run_forms(_s, _l, ss_in, ss_out, ls_file):
     except Exception as exc:
         return f"⚠ {exc}"
     return dash.no_update
+
+
+# Settings-file problems (core/jsonfile.py): damaged files set aside by any
+# tool (found as *.corrupt-* files, shown until they are deleted) and failed
+# saves of the home page itself (last few)
+_SAVE_WARNINGS = []
+
+
+def _damaged_settings_files():
+    folders = {paths.DATA_ROOT, os.path.dirname(paths.settings_file("physics.json")),
+               paths.outputs("identified")}           # Segrè chart's identified list
+    out = []
+    for f in sorted(folders):
+        out += jsonfile.damaged_files(f)
+    return out
+
+
+@app.callback(
+    Output("settings-banner", "children"),
+    Output("settings-banner", "style"),
+    Input("tick", "n_intervals"),
+)
+def settings_banner(_n):
+    _SAVE_WARNINGS.extend(jsonfile.take_warnings())
+    del _SAVE_WARNINGS[:-5]
+    try:
+        damaged = _damaged_settings_files()
+    except Exception:
+        damaged = []
+    if not damaged and not _SAVE_WARNINGS:
+        return [], {"display": "none"}
+    kids = []
+    if damaged:
+        kids.append(html.Div([
+            html.B("Damaged settings files were set aside: "),
+            "the tools used the backup (.bak) or their defaults instead. Check them, then "
+            "delete them to clear this message."]))
+        kids.append(html.Ul([html.Li(html.Code(p)) for p in damaged[:10]]
+                            + ([html.Li(f"… and {len(damaged) - 10} more")]
+                               if len(damaged) > 10 else [])))
+    for w in _SAVE_WARNINGS:
+        kids.append(html.Div(["Settings file: ", w]))
+    return kids, {}
 
 
 @app.callback(

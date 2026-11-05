@@ -22,14 +22,13 @@ Shared physics for the Asphodel suite.
 
 import json
 import math
-import os
 import re
 from functools import lru_cache
 
 import numpy as np
 import pandas as pd
 
-from . import paths
+from . import jsonfile, paths
 from .nubase_reader import df_nubase, rect_restrict, diag_restrict, index_by_name
 
 
@@ -582,11 +581,7 @@ def shared_path(exp=None):
 def load_shared(exp=None):
     """Shared physics settings (canonical form) for the experiment."""
     out = dict(BUILTIN_PHYSICS)
-    try:
-        with open(shared_path(exp), encoding="utf-8") as fh:
-            saved = json.load(fh)
-    except (OSError, ValueError):
-        saved = {}
+    saved = jsonfile.read(shared_path(exp), {})   # damaged file: set aside + warning
     if isinstance(saved, dict):
         for k, v in saved.items():
             if k in BUILTIN_PHYSICS:
@@ -598,20 +593,20 @@ def load_shared(exp=None):
 
 
 def save_shared(values, exp=None):
-    """Write the shared physics settings (any representation is accepted)."""
-    out = load_shared(exp)
-    for k, v in values.items():
-        if k in BUILTIN_PHYSICS:
-            out[k] = canonical(k, v)
+    """Write the shared physics settings (any representation is accepted).
+    The previous version is kept as physics.json.bak (core/jsonfile.py)."""
     path = shared_path(exp)
-    tmp = path + ".tmp"
-    text = json.dumps(out, indent=2)
-    # short lists on one line ("harmonics": [212, 213, 214]) for hand editing
-    text = re.sub(r"\[\s*([^\[\]{}]*?)\s*\]",
-                  lambda m: "[" + ", ".join(x.strip() for x in m.group(1).split(",")) + "]", text)
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(text + "\n")
-    os.replace(tmp, path)
+    with jsonfile.lock(path):
+        out = load_shared(exp)
+        for k, v in values.items():
+            if k in BUILTIN_PHYSICS:
+                out[k] = canonical(k, v)
+        text = json.dumps(out, indent=2)
+        # short lists on one line ("harmonics": [212, 213, 214]) for hand editing
+        text = re.sub(r"\[\s*([^\[\]{}]*?)\s*\]",
+                      lambda m: "[" + ", ".join(x.strip() for x in m.group(1).split(",")) + "]",
+                      text)
+        jsonfile.write(path, None, text=text)
 
 
 def with_shared(tool_defaults, saved, exp=None):

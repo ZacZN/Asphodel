@@ -28,7 +28,6 @@ Usage
 
 import datetime
 import glob
-import json
 import logging
 import os
 import re
@@ -41,7 +40,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import browser, icon, paths, physics, tabwatch
+from core import browser, icon, jsonfile, paths, physics, tabwatch
 from core.nubase_reader import get_base_dataframe
 from core.physics import build_hover_label, half_life_seconds
 
@@ -562,27 +561,21 @@ def load_ids():
     d = {"format": "asphodel-segre-identified", "version": 1, "entries": [], "confirmed_lists": [],
          "searched": [],          # [{"Z", "N", "updated"}]: searched for, not identified
          "list_addons": {}}       # {Theia-list entry id: {"alts", "notes", "updated"}}
-    try:
-        with open(ids_path(), encoding="utf-8") as fh:
-            saved = json.load(fh)
-        if isinstance(saved, dict):
-            d["entries"] = [e for e in saved.get("entries", []) if isinstance(e, dict)]
-            d["confirmed_lists"] = [str(x) for x in saved.get("confirmed_lists", [])]
-            d["searched"] = [x for x in saved.get("searched", []) if isinstance(x, dict) and "Z" in x and "N" in x]
-            d["list_addons"] = {k: v for k, v in (saved.get("list_addons") or {}).items()
-                                if isinstance(v, dict)}
-    except (OSError, ValueError):
-        pass
+    # missing -> empty; damaged -> set aside, backup restored if there is one
+    # (core/jsonfile.py)
+    saved = jsonfile.read(ids_path(), {})
+    if isinstance(saved, dict):
+        d["entries"] = [e for e in saved.get("entries", []) if isinstance(e, dict)]
+        d["confirmed_lists"] = [str(x) for x in saved.get("confirmed_lists", [])]
+        d["searched"] = [x for x in saved.get("searched", []) if isinstance(x, dict) and "Z" in x and "N" in x]
+        d["list_addons"] = {k: v for k, v in (saved.get("list_addons") or {}).items()
+                            if isinstance(v, dict)}
     return d
 
 
 def save_ids(d):
-    path = ids_path()
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(d, fh, indent=1, ensure_ascii=False)
-        fh.write("\n")
-    os.replace(tmp, path)
+    # atomic, previous version kept as .bak (core/jsonfile.py); raises on failure
+    jsonfile.write(ids_path(), d, indent=1, ensure_ascii=False)
 
 
 def parse_int_list(text, lo, hi):
