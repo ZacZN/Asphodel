@@ -520,6 +520,7 @@ def fit_harmonic(s, state, m):
     res = corrections.fit_correction(x, y, x0)
     return {"h": h, "n": res["n"], "abc": list(res["abc"]), "abc_unc": list(res["abc_unc"]),
             "s1": res["s1"], "s2": res["s2"], "ds1": res["ds1"], "ds2": res["ds2"],
+            "cov": res["cov"],
             "x0": x0, "ref_f_h": m["ref_h_f"], "rms": res["rms"],
             "ref_found": m["ref_info"].get("found"), "stretch": m["k"], "missing": missing,
             "file": state["file"], "f_ref": m["f_ref"], "ref_name": s["ref_name"],
@@ -726,7 +727,13 @@ def save_harmonic(r, target, new_name, confirm_replace=False):
     Returns (profile, replaced).  Raises ValueError (e.g. 'exists: confirm')."""
     h = str(r["h"])
     (a, b, c), (da, db, dc) = r["abc"], r["abc_unc"]
+    # "shifted": s1, s2, their covariance and x0, so the correction's own
+    # uncertainty can be worked out later (corrections.correction_sigma)
+    shifted = (corrections.shifted_block(r["s1"], r["s2"], r["x0"], r["cov"])
+               if r.get("cov") else None)
     entry = {"a": a, "b": b, "c": c, "a_unc": da, "b_unc": db, "c_unc": dc, "fit": _fit_info(r)}
+    if shifted:
+        entry["shifted"] = shifted
     is_ref = r["h"] == r["ref_harmonic"]
     if target == NEW_PROFILE:
         name = (new_name or "").strip()
@@ -744,6 +751,8 @@ def save_harmonic(r, target, new_name, confirm_replace=False):
                                            f"h{r['ref_harmonic']} is saved.")}
         if is_ref:
             p.update(a_unc=da, b_unc=db, c_unc=dc)
+            if shifted:
+                p["shifted"] = shifted
         return corrections.save_profile(p), False
     p = corrections.get_profile(target)
     if p is None:
@@ -757,6 +766,10 @@ def save_harmonic(r, target, new_name, confirm_replace=False):
     if is_ref:                       # the reference harmonic is also the general a, b, c
         p.update(a=a, b=b, c=c, a_unc=da, b_unc=db, c_unc=dc,
                  fit=dict(_fit_info(r), per_harmonic=True))
+        if shifted:
+            p["shifted"] = shifted
+        else:
+            p.pop("shifted", None)       # an older fit's block no longer matches a, b, c
         p["notes"] = (p.get("notes") or "").replace(
             f" General a, b, c = 0 (no correction) until h{r['ref_harmonic']} is saved.", "")
     else:

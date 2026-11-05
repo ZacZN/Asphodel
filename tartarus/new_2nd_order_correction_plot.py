@@ -189,15 +189,18 @@ def default_profile_name(weighted, n_points):
     return f"{datetime.datetime.now():%Y-%m-%d %H:%M} {mode}, e-binding, {n_points} ions"
 
 
-def save_profile(name, make_default, coeffs, uncs, fit_info):
+def save_profile(name, make_default, coeffs, uncs, fit_info, shifted=None):
     """Save a correction profile; with make_default also write a, b, c to
-    physics.json.  Returns a status message (raises ValueError on a bad name)."""
+    physics.json.  shifted: corrections.shifted_block (s1, s2, x0 and their
+    covariance).  Returns a status message (raises ValueError on a bad name)."""
     (c2, c1, c0), (dc2, dc1, dc0) = coeffs, uncs
-    prof = corrections.save_profile({
-        "name": name.strip(), "a": float(c2), "b": float(c1), "c": float(c0),
-        "a_unc": float(dc2), "b_unc": float(dc1), "c_unc": float(dc0),
-        "created": datetime.datetime.now().isoformat(timespec="seconds"),
-        "fit": fit_info, "notes": ""})
+    prof = {"name": name.strip(), "a": float(c2), "b": float(c1), "c": float(c0),
+            "a_unc": float(dc2), "b_unc": float(dc1), "c_unc": float(dc0),
+            "created": datetime.datetime.now().isoformat(timespec="seconds"),
+            "fit": fit_info, "notes": ""}
+    if shifted:
+        prof["shifted"] = shifted
+    prof = corrections.save_profile(prof)
     msg = f"Saved profile '{prof['name']}'"
     print(f"\n{msg} in {corrections.profiles_path()}")
     if make_default:
@@ -434,7 +437,8 @@ def main():
     def on_save(_event):
         try:
             text = save_profile(name_box.text, chk.get_status()[0], (c2, c1, c0),
-                                (dc2, dc1, dc0), fit_info)
+                                (dc2, dc1, dc0), fit_info,
+                                corrections.shifted_block(s1, s2, x0, cov))
             msg.set_text("✓ " + text)
             msg.set_color("darkgreen")
         except (ValueError, OSError) as exc:

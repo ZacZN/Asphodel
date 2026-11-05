@@ -9,13 +9,21 @@ one fills the boxes.
 File: data/<experiment>/settings/correction_profiles.json
 
     {"format": "asphodel-correction-profiles", "version": 2,
-     "profiles": [{"name", "a", "b", "c", "a_unc", "b_unc", "c_unc", "created",
+     "profiles": [{"name", "a", "b", "c", "a_unc", "b_unc", "c_unc", "shifted", "created",
                    "fit": {ref_ion, ref_f_exp, ref_harmonic, f_ref_rev, gamma_t,
                            mass_model, weighted, n_points, rms_rev_hz, ions,
                            source_file, sheet},
                    "per_harmonic": {"212": {"a", "b", "c", "a_unc", "b_unc", "c_unc",
+                                            "shifted",
                                             "fit": {... as above, plus ref_f_h}}, ...},
                    "notes"}]}
+
+"shifted" (fits saved from 5 Nov 2026 on; optional): the fit as it was made,
+    {"x0": anchor (Hz, revolution), "s1", "s2", "cov": [[var s1, cov], [cov, var s2]]}
+for  f_diff = s1 (f - x0) + s2 (f - x0)^2.  a, b, c are strongly correlated,
+so their separate uncertainties (a_unc ...) cannot be combined into the
+uncertainty of the correction; correction_sigma(entry, f) does that from the
+s1, s2 covariance.  Older profiles have no "shifted" (correction_sigma -> None).
 
 Per-harmonic profiles (version 2, from the GUI correction tool
 tartarus/gui_2nd_order_correction.py): every harmonic in "per_harmonic" has
@@ -267,8 +275,32 @@ def fit_correction(x, y, x0, sigma=None):
     ds1, ds2 = (float(v) for v in np.sqrt(np.abs(np.diag(cov))))
     abc, dabc = expanded(s1, s2, x0, cov)
     return {"s1": float(s1), "s2": float(s2), "ds1": ds1, "ds2": ds2, "x0": float(x0),
+            "cov": [[float(v) for v in row] for row in cov],
             "abc": abc, "abc_unc": dabc, "resid": resid, "n": int(len(x)),
             "rms": float(np.sqrt(np.mean(resid ** 2))), "chi2_ndf": float(chi2)}
+
+
+def shifted_block(s1, s2, x0, cov):
+    """The "shifted" entry stored with a profile (see the module docstring)."""
+    return {"x0": float(x0), "s1": float(s1), "s2": float(s2),
+            "cov": [[float(cov[0][0]), float(cov[0][1])], [float(cov[1][0]), float(cov[1][1])]]}
+
+
+def correction_sigma(entry, f_rev):
+    """1-sigma uncertainty (Hz, revolution frequency) of the correction of a
+    profile entry (a profile, or one of its per_harmonic entries) at revolution
+    frequency f_rev (a number or an array): sqrt(J C J^T), J = (df, df^2),
+    df = f_rev - x0, C = the s1, s2 covariance.  Zero at the anchor x0.
+    None if the entry has no "shifted" block (fitted before it was saved)."""
+    import numpy as np
+    sh = (entry or {}).get("shifted")
+    if not isinstance(sh, dict) or "cov" not in sh:
+        return None
+    c = np.asarray(sh["cov"], float)
+    df = np.asarray(f_rev, float) - float(sh["x0"])
+    var = c[0, 0] * df ** 2 + 2 * c[0, 1] * df ** 3 + c[1, 1] * df ** 4
+    out = np.sqrt(np.clip(var, 0, None))
+    return float(out) if out.ndim == 0 else out
 
 
 def _num(v):
