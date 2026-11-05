@@ -399,9 +399,10 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
             fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name="stable",
                                      marker=dict(symbol="triangle-ne", size=11, color="#000000"),
                                      hoverinfo="skip", showlegend=True))
-        # a NUBASE isomer identified (any entry with isomer m, n, ...): bottom-left corner purple
+        # a known NUBASE isomer identified (an entry with isomer m, n, ... not flagged as a first
+        # observation): bottom-left corner purple.  A first observation shows only the star.
         iso_cells = [c for c, es in (id_cells or {}).items()
-                     if any(e.get("isomer", "g") not in ("g", NEW_ISOMER) for e in es)]
+                     if any(e.get("isomer", "g") not in ("g", NEW_ISOMER) and not is_first_obs(e) for e in es)]
         path = "".join(f"M{n - HALF:g},{zz - HALF:g}H{n - HALF + k:g}L{n - HALF:g},{zz - HALF + k:g}Z"
                        for zz, n in iso_cells)
         if path:
@@ -421,7 +422,8 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
                                      hoverinfo="skip", showlegend=True))
         # an isomer not seen before (a new one not in NUBASE, or a NUBASE one flagged as a first
         # observation): yellow star in the bottom-left corner
-        # (a path shape in data units, so it zooms with the square; drawn over the purple corner)
+        # (a path shape in data units, so it zooms with the square; drawn over the purple corner
+        # when a known isomer of the nuclide is identified as well)
         new_cells = [c for c, es in (id_cells or {}).items() if any(star_entry(e) for e in es)]
         if new_cells:
             ang = np.pi / 2 + np.arange(10) * np.pi / 5
