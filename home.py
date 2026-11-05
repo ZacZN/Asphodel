@@ -391,6 +391,10 @@ def tool_forms():
             lbl("Output folder"),
             dcc.Dropdown(id="ss-out", options=_folder_opts("data", "summed_1d"), clearable=False,
                          value=paths.summed_1d()),
+            lbl("Peak tracking window ± (Hz)"),
+            html.Div(dcc.Input(id="ss-window", type="number", min=1, value=500, debounce=True),
+                     title="The drift-corrected sum follows the strongest peak: each spectrum's "
+                           "peak is looked for within ± this of the previous one's"),
             html.Button("Run", id="ss-run", className="btn primary small", n_clicks=0),
         ], className="form"),
         "levelschemer": html.Div([
@@ -1049,18 +1053,25 @@ def redraw_folders(_ver, ids):
     Output("msg", "children", allow_duplicate=True),
     Input("ss-run", "n_clicks"),
     Input("ls-run", "n_clicks"),
-    State("ss-in", "value"), State("ss-out", "value"),
+    State("ss-in", "value"), State("ss-out", "value"), State("ss-window", "value"),
     State("ls-file", "value"),
     prevent_initial_call=True,
 )
-def run_forms(_s, _l, ss_in, ss_out, ls_file):
+def run_forms(_s, _l, ss_in, ss_out, ss_window, ls_file):
     """The 'Run' buttons of the tool forms."""
     t = ctx.triggered_id
     try:
         if t == "ss-run":
             if not ss_in or not ss_out:
                 return "⚠ Sum spectra: give the input and output folders."
-            return start_tool("sum_spectra", [os.path.expanduser(ss_in), os.path.expanduser(ss_out)])
+            try:
+                window = float(ss_window)
+            except (TypeError, ValueError):
+                window = 0.0
+            if not window > 0:
+                return "⚠ Sum spectra: the peak tracking window must be a number above 0 Hz."
+            return start_tool("sum_spectra", [os.path.expanduser(ss_in), os.path.expanduser(ss_out),
+                                              "--window", f"{window:g}"])
         if t == "ls-run":
             if not ls_file:
                 return "⚠ No scheme files in the connected level-scheme folders (Folders below)."

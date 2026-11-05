@@ -52,7 +52,7 @@ import os
 import sys
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core import (browser, corrections, icon, jsonfile, logcapture, logpanel, offline, paths, physics,
-                  tabwatch)
+                  summing, tabwatch)
 
 # output also to data/logs/ and the page's Log panel (core/logcapture.py)
 if __name__ == "__main__":
@@ -1737,8 +1737,11 @@ SUGG_BOX_STYLE = {"marginLeft": "0", "marginTop": "4px", "width": "620px", "maxW
 INFO_TEXTS = {
     "sum": ("Sum spectra", [
         "Each spectrum is added once, however many identifications or files it appears in.",
-        "Aligned spectra are shifted (linear interpolation) so the chosen peak sits at the "
-        "median of its positions.",
+        "Aligned spectra are shifted by whole bins (never interpolated) so the chosen peak sits "
+        "where it is in the first spectrum; what is left over (at most half a bin) is shown.",
+        "Strongest peak: the first spectrum's strongest bin, then in each next spectrum the "
+        "strongest bin within ± the window (Hz) of the previous spectrum's peak, so another ion "
+        "becoming the strongest elsewhere does not move the alignment.",
         "The plot opens zoomed to ±5 kHz around the ion/harmonic chosen in the dropdown.",
         "With an identified peak, spectra without that ion/harmonic are left out.",
         "Bins not covered by every shifted spectrum are dropped.",
@@ -2074,6 +2077,15 @@ align_fit_tab = html.Div([
                                         {"label": "Identified peak", "value": "identified"}],
                                inputStyle={"marginRight": "4px"},
                                labelStyle={"marginRight": "14px", "fontSize": "13px"}),
+                html.Span([html.Span("±", style={"marginRight": "3px"}),
+                           dcc.Input(id="sum-window", type="number", min=1,
+                                     value=summing.DEFAULT_WINDOW_HZ, debounce=True,
+                                     style={"width": "70px", "fontSize": "13px"}),
+                           html.Span(" Hz", style={"marginLeft": "3px"})],
+                          id="sum-window-box",
+                          title="Strongest peak: each spectrum's peak is looked for within ± "
+                                "this of the previous spectrum's peak",
+                          style={"display": "none", "fontSize": "13px", "marginRight": "14px"}),
                 dcc.Dropdown(id="sum-ion", options=[], placeholder="Ion / harmonic…",
                              clearable=False, style={"fontSize": "13px", "width": "240px",
                                                      "marginRight": "14px"}),
@@ -3236,6 +3248,7 @@ def serve_layout():
         ("sum-align", "value", st.get("align") or "none"),
         ("sum-ion", "value", st.get("ion")),
         ("sum-unsure", "value", st.get("unsure") if st.get("unsure") is not None else ["on"]),
+        ("sum-window", "value", st.get("window") or summing.DEFAULT_WINDOW_HZ),
         ("fit-shape", "value", fit.get("shape") or "gauss"),
         ("fit-bg", "value", fit.get("bg") or "const"),
         ("further-restore", "data", (dict(st, files=files) if st.get("summed") and restorable
@@ -4841,13 +4854,15 @@ def sum_ion_options(files, current):
     return opts, current if current in values else values[0]
 
 
-def sum_spectra(files, align, ion_key=None, include_unsure=True):
+def sum_spectra(files, align, ion_key=None, include_unsure=True,
+                window_hz=summing.DEFAULT_WINDOW_HZ):
     """Sum the spectra referenced by the confirmation files.
 
     align: 'none' | 'strongest' | 'identified'.  Returns (freq, summed power,
-    info dict).  The first spectrum's frequency axis is the common grid; each
-    spectrum is shifted by (target - its peak position) and linearly
-    interpolated onto that grid, target = median of the peak positions.
+    info dict).  core/summing.py: each spectrum is shifted by whole bins (no
+    interpolation) so its peak lands on the first spectrum's peak; only the
+    bins every shifted spectrum covers are kept.  'strongest' tracks the
+    strongest peak from spectrum to spectrum within ±window_hz.
     """
     frames = []
     for path in files:
@@ -4897,46 +4912,50 @@ def sum_spectra(files, align, ion_key=None, include_unsure=True):
         except Exception as exc:
             failed.append(f"{name}: {exc}")
             continue
-        if align == "strongest":
-            peak_pos[(d, name)] = float(ff[int(np.nanargmax(pp))])
         spectra.append(((d, name), ff, pp))
     if not spectra:
         raise ValueError("No spectra could be loaded" + (f" ({failed[0]})" if failed else "."))
 
-    grid = spectra[0][1]
-    target = float(np.median([peak_pos[k] for k, _, _ in spectra])) if align != "none" else None
-    total = np.zeros_like(grid)
-    covered = np.ones(grid.shape, dtype=bool)
-    shifts = []
-    for k, ff, pp in spectra:
-        shift = (target - peak_pos[k]) if target is not None else 0.0
-        shifts.append(shift)
-        x = ff + shift
-        if shift == 0.0 and len(ff) == len(grid) and np.array_equal(ff, grid):
-            y = pp
-        else:
-            y = np.interp(grid, x, pp, left=np.nan, right=np.nan)
-        covered &= np.isfinite(y)
-        total += np.nan_to_num(y)
-    total[~covered] = np.nan
+    data = [(ff, pp) for _, ff, pp in spectra]
+    if align == "strongest":
+        # tracked from spectrum to spectrum (in file order), not the strongest
+        # bin of each whole spectrum
+        positions, lost = summing.track_strongest(data, window_hz)
+        left_out = [f"{spectra[i][0][1]}: {why}" for i, why in lost]
+    elif align == "identified":
+        positions = [peak_pos[k] for k, _, _ in spectra]
+        left_out = []
+    else:
+        positions, left_out = None, []
+    freq, total, s_info = summing.sum_whole_bins(data, positions)
+    used = [spectra[i] for i in s_info["used"]]
+    shifts = s_info["shift_hz"]
+    target = s_info["target"]
     # initial zoom: where the chosen ion ends up after shifting (median over
     # the summed spectra that contain it); falls back to the alignment target
     zoom, zoom_on_ion = target, False
     if target is not None:
-        moved = [ion_pos[k] + s for (k, _, _), s in zip(spectra, shifts) if k in ion_pos]
+        moved = [ion_pos[k] + s for (k, _, _), s in zip(used, shifts) if k in ion_pos]
         if moved:
             zoom, zoom_on_ion = float(np.median(moved)), True
-    info = dict(n=len(spectra), n_requested=n_requested, failed=failed, target=target, zoom=zoom,
-                zoom_on_ion=zoom_on_ion,
-                shifts=np.array(shifts), names=[k[1] for k, _, _ in spectra],
-                n_dirs=len({k[0] for k, _, _ in spectra}))
-    return grid[covered], total[covered], info
+    info = dict(n=len(used), n_requested=n_requested, failed=failed, target=target, zoom=zoom,
+                zoom_on_ion=zoom_on_ion, shifts=shifts, shift_bins=s_info["shift_bins"],
+                residual_hz=s_info["residual_hz"], bin_hz=s_info["bin_hz"], left_out=left_out,
+                names=[k[1] for k, _, _ in used], n_dirs=len({k[0] for k, _, _ in used}))
+    return freq, total, info
 
 
 @app.callback(Output("sum-ion", "style"), Input("sum-align", "value"))
 def toggle_sum_ion(align):
     return {"fontSize": "13px", "width": "240px", "marginRight": "14px",
             "display": "none" if align == "none" else "block"}
+
+
+@app.callback(Output("sum-window-box", "style"), Input("sum-align", "value"))
+def toggle_sum_window(align):
+    return {"fontSize": "13px", "marginRight": "14px",
+            "display": "inline-flex" if align == "strongest" else "none",
+            "alignItems": "center"}
 
 
 @app.callback(
@@ -5226,9 +5245,10 @@ def _fit_into_patch(patch, fit_state, cached):
     State("pid-settings", "data"),
     State("fsrc-dir", "value"),
     State("fsrc-name", "value"),
+    State("sum-window", "value"),
 )
 def show_sum(_, _load, _req, restore, files, align, ion_key, unsure, show_sims, pid_store,
-             f_dir, f_name):
+             f_dir, f_name, window):
     """'Sum spectra' button, 'Load spectrum' / 'Use Viewer spectrum' (single
     spectrum file), or (on page load) rebuild the plot saved last time with
     its zoom; the saved fit is then picked up by update_fit."""
@@ -5254,6 +5274,7 @@ def show_sum(_, _load, _req, restore, files, align, ion_key, unsure, show_sims, 
             files, align = restore.get("files") or files, restore.get("align") or align
             ion_key = restore.get("ion") or ion_key
             unsure = restore.get("unsure") if restore.get("unsure") is not None else unsure
+            window = restore.get("window") or window
     pid_over = pid_overrides(pid_store, source)
 
     if source == "file":
@@ -5271,7 +5292,14 @@ def show_sum(_, _load, _req, restore, files, align, ion_key, unsure, show_sims, 
             return (empty_fig("No confirmation files loaded"), "Load at least one file first.",
                     None, "")
         try:
-            ff, pp, info = sum_spectra(files, align, ion_key, bool(unsure))
+            try:
+                window = float(window)
+            except (TypeError, ValueError):
+                window = 0.0
+            if align == "strongest" and not window > 0:
+                raise ValueError("the peak tracking window (± Hz) must be above 0")
+            ff, pp, info = sum_spectra(files, align, ion_key, bool(unsure),
+                                       window if window > 0 else summing.DEFAULT_WINDOW_HZ)
         except Exception as exc:
             return (empty_fig(str(exc)), html.Span(f"Error: {exc}", style={"color": "#c0392b"}),
                     None, "")
@@ -5279,7 +5307,7 @@ def show_sum(_, _load, _req, restore, files, align, ion_key, unsure, show_sims, 
             ion, harm = ion_key.rsplit("|", 1)
             how = f"aligned on {ion} h={harm}"
         elif align == "strongest":
-            how = "aligned on the strongest peak"
+            how = f"aligned on the strongest peak, tracked ±{window:g} Hz"
         else:
             how = "not aligned"
         title = f"Sum of {info['n']} spectra ({how})"
@@ -5359,8 +5387,10 @@ def show_sum(_, _load, _req, restore, files, align, ion_key, unsure, show_sims, 
         parts.append(f"{info['n_requested'] - info['n'] - len(info['failed'])} spectra without "
                      f"that ion/harmonic left out")
     if info["target"] is not None and len(sh):
-        parts.append(f"shifts {sh.min():+.1f} to {sh.max():+.1f} Hz "
-                     f"(median |shift| {np.median(np.abs(sh)):.1f} Hz)")
+        sb = info["shift_bins"]
+        parts.append(f"whole-bin shifts {sb.min():+d} to {sb.max():+d} bins "
+                     f"({sh.min():+.1f} to {sh.max():+.1f} Hz; left over at most "
+                     f"{np.max(np.abs(info['residual_hz'])):.1f} Hz)")
     if align == "strongest" and ion_key:
         zi, zh = ion_key.rsplit("|", 1)
         parts.append(f"view centred on {zi} h={zh}" if info["zoom_on_ion"] else
@@ -5368,6 +5398,11 @@ def show_sum(_, _load, _req, restore, files, align, ion_key, unsure, show_sims, 
     if info["n_dirs"] > 1:
         parts.append(f"from {info['n_dirs']} spectra directories")
     status = [html.Span("  ·  ".join(parts))]
+    if info.get("left_out"):
+        lo = info["left_out"]
+        status.append(html.Div(f"Left out {len(lo)} (tracked peak not found; a larger ± window "
+                               f"may help): " + "; ".join(lo[:3]) + (" …" if len(lo) > 3 else ""),
+                               style={"color": "#c0392b"}))
     if info["failed"]:
         status.append(html.Div(f"Could not load {len(info['failed'])}: "
                                + "; ".join(info["failed"][:3])
@@ -6064,6 +6099,7 @@ app.clientside_callback(
     Input("sum-align", "value"),
     Input("sum-ion", "value"),
     Input("sum-unsure", "value"),
+    Input("sum-window", "value"),
     Input("sum-key", "data"),
     Input("sum-view", "data"),
     Input("fit-state", "data"),
@@ -6076,13 +6112,14 @@ app.clientside_callback(
     Input("fsrc-name", "value"),
     prevent_initial_call=True,
 )
-def save_further_state(files, align, ion, unsure, key, view, fit, energy, name1, name2, pid,
-                       source, f_dir, f_name):
+def save_further_state(files, align, ion, unsure, window, key, view, fit, energy, name1, name2,
+                       pid, source, f_dir, f_name):
     """Save the Further output tab after every change, so it is restored the
     next time Theia runs (scanner_config.json -> further_state)."""
     trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
     old = load_config().get("further_state") or {}
     st = {"files": files or [], "align": align, "ion": ion, "unsure": unsure or [],
+          "window": window,
           "summed": key is not None, "view": view or old.get("view"), "fit": old.get("fit"),
           "energy": old.get("energy"), "pid": pid,
           # chosen data source and single file; "plot" = what the plot shows
