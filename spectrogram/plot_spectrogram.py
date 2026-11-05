@@ -63,11 +63,10 @@ def parse_args():
 
 def load(path):
     """Load and return freq_1d (F,), time_1d (T,), power_2d (T, F)."""
-    data = np.load(path)
-    freq  = data['freq'].ravel()   # (1, F) → (F,)
-    time  = data['time'].ravel()   # (T, 1) → (T,)
-    power = data['power']          # (T, F)
-    data.close()
+    with np.load(path) as data:    # closed even if a key is missing
+        freq  = data['freq'].ravel()   # (1, F) → (F,)
+        time  = data['time'].ravel()   # (T, 1) → (T,)
+        power = data['power']          # (T, F)
 
     # Normalise time to start at 0
     time = time - time[0]

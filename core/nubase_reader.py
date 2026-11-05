@@ -336,8 +336,9 @@ def unpack_npz(filepath, namespace=None, verbose=False):
     dict
         Mapping of array name → numpy array.
     """
-    data = np.load(filepath)
-    arrays = {key: data[key] for key in data.files}
+    # "with" closes the file (a batch scan opens thousands of them)
+    with np.load(filepath) as data:
+        arrays = {key: data[key] for key in data.files}
 
     if namespace is not None:
         namespace.update(arrays)

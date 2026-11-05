@@ -251,11 +251,10 @@ def parse_args():
 
 def load(path):
     """Return freq (F,), time (T,), power (T, F) from an ESR .npz file."""
-    data  = np.load(path)
-    freq  = data["freq"].ravel()
-    time  = data["time"].ravel()
-    power = data["power"]
-    data.close()
+    with np.load(path) as data:    # closed even if a key is missing
+        freq  = data["freq"].ravel()
+        time  = data["time"].ravel()
+        power = data["power"]
     time = time - time[0]
     return freq, time, power
 

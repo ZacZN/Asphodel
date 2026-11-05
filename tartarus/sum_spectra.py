@@ -92,9 +92,9 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Load the first file — determines array size and reference peak
     # ------------------------------------------------------------------
-    first = np.load(npz_files[0])
-    freq: np.ndarray = first["arr_0"]
-    first_intensity: np.ndarray = first["arr_1"].astype(float)
+    with np.load(npz_files[0]) as first:          # closes the file afterwards
+        freq: np.ndarray = first["arr_0"]
+        first_intensity: np.ndarray = first["arr_1"].astype(float)
     n_bins = len(first_intensity)
 
     ref_peak_idx: int = int(np.argmax(first_intensity))
@@ -110,8 +110,8 @@ def main() -> None:
     sum_aligned = np.zeros(n_bins)
 
     for file_idx, npz_file in enumerate(npz_files):
-        data = np.load(npz_file)
-        intensity = data["arr_1"].astype(float)
+        with np.load(npz_file) as data:
+            intensity = data["arr_1"].astype(float)
 
         if len(intensity) != n_bins:
             print(
