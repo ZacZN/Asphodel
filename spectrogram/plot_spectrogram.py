@@ -92,7 +92,7 @@ def slice_freq(freq, power, freq_min, freq_max):
 
 _HERE       = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(1, os.path.dirname(_HERE))
-from core import baseline, browser, icon, jsonfile, logcapture, logpanel, paths, tabwatch
+from core import baseline, browser, icon, jsonfile, logcapture, logpanel, offline, paths, tabwatch
 
 # output also to data/logs/ and the page's Log panel (core/logcapture.py)
 if __name__ == "__main__":
@@ -1711,19 +1711,16 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
 
     # The 3-D plot is created in the page by _initSurface() from Z_RAW, so only
     # its style and layout are embedded (not a second copy of the data), and
-    # plotly.js is loaded from the same CDN URL plotly.py would use.
-    import re as _re_cdn
+    # plotly.js is served by this program from the plotly package (no internet
+    # needed: core/offline.py)
     from plotly.utils import PlotlyJSONEncoder
-    _cdn = _re_cdn.search(r'<script src="([^"]*cdn\.plot\.ly[^"]*)"',
-                          go.Figure().to_html(full_html=False, include_plotlyjs="cdn"))
-    _cdn_url = _cdn.group(1) if _cdn else "https://cdn.plot.ly/plotly-latest.min.js"
     _lay = fig.to_plotly_json()["layout"]      # incl. plotly's default template (3-D panes)
     surf_layout_json = json.dumps(_lay, cls=PlotlyJSONEncoder).replace("</", "<\\/")
     surf_style_json = json.dumps({
         "type": "surface",
         "colorbar": {"title": {"text": z_label, "side": "right"}, "thickness": 18},
     }).replace("</", "<\\/")
-    plot_div = (f'<script src="{_cdn_url}" charset="utf-8"></script>\n'
+    plot_div = (f'<script src="{offline.PLOTLY_JS_URL}" charset="utf-8"></script>\n'
                 f'<div id="specPlot" style="width:100%;"></div>')
     _default_title_js = json.dumps(_default_title).replace("</", "<\\/")
     title_html = title.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
@@ -2885,6 +2882,16 @@ def serve(html, state):
             q   = parse_qs(url.query)
             if url.path in ("/", "/spectrogram.html"):
                 self._send(200, STATE["html"], "text/html; charset=utf-8")
+
+            elif url.path == offline.PLOTLY_JS_URL:
+                # plotly.js from the installed plotly package (core/offline.py)
+                data = offline.plotly_js_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/javascript")
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "max-age=86400")
+                self.end_headers()
+                self.wfile.write(data)
 
             elif url.path == "/_aslog":
                 # this program's output for the page's Log panel (core/logpanel.py)

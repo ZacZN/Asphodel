@@ -51,7 +51,8 @@ Peak detection (no smoothing is ever applied to the data)
 import os
 import sys
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import browser, corrections, icon, jsonfile, logcapture, logpanel, paths, physics, tabwatch
+from core import (browser, corrections, icon, jsonfile, logcapture, logpanel, offline, paths, physics,
+                  tabwatch)
 
 # output also to data/logs/ and the page's Log panel (core/logcapture.py)
 if __name__ == "__main__":
@@ -2976,8 +2977,11 @@ viewer_tab = html.Div([
 ], style={"display": "flex"})
 
 
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True,
-                title="Theia")
+# Bootstrap CSS served from core/static/ (not cdn.jsdelivr.net), so Theia
+# works without internet access: core/offline.py
+app = dash.Dash(__name__, external_stylesheets=[offline.BOOTSTRAP_CSS_URL],
+                suppress_callback_exceptions=True, title="Theia")
+offline.serve_static(app.server)
 app.title = "Theia"
 
 # Results tables: move the page buttons from below the table to the top right,
