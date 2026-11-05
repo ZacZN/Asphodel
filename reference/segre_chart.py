@@ -210,7 +210,10 @@ def colouring(rows, by, id_cells=None):
     """z values, colour scale, zmin/zmax and colour-bar settings."""
     if by == "identified":
         order = {name: i for i, (name, _) in enumerate(ID_COLOURS)}
-        z = np.array([order[cell_status((id_cells or {}).get((zz, nn), []))]
+        # the square's colour comes from ground-state entries only: a nuclide with only
+        # isomers identified stays grey and shows just its purple corner / star
+        z = np.array([order[cell_status([e for e in (id_cells or {}).get((zz, nn), [])
+                                         if e.get("isomer", "g") == "g"])]
                       for zz, nn in zip(rows["Z"], rows["N"])], dtype=float)
         n = len(ID_COLOURS)
         return z, _stepped([c for _, c in ID_COLOURS]), -0.5, n - 0.5, \
