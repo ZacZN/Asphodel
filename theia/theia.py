@@ -51,7 +51,11 @@ Peak detection (no smoothing is ever applied to the data)
 import os
 import sys
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import browser, corrections, icon, jsonfile, paths, physics, tabwatch
+from core import browser, corrections, icon, jsonfile, logcapture, logpanel, paths, physics, tabwatch
+
+# output also to data/logs/ and the page's Log panel (core/logcapture.py)
+if __name__ == "__main__":
+    logcapture.start("theia")
 from core.nubase_reader import (df_nubase, rect_restrict, diag_restrict, index_by_name, unpack_npz,
                                 get_base_dataframe, ion_electron_energy_kev)
 from core.physics import (delta_f, apply_correction, ion_base_name, build_hover_label, HL_UNITS,
@@ -3114,6 +3118,10 @@ _BASE_LAYOUT = html.Div([
     # mode.  Opening/closing is done in the browser (clientside callback
     # below): the button toggles it, clicking anywhere outside closes it.
     # Quit: stops Theia and closes (or blanks) this browser tab
+    # Log: this program's output (core/logpanel.py), left of Quit
+    logpanel.dash_button(className="btn btn-outline-secondary btn-sm",
+                         style={"position": "absolute", "top": "7px", "right": "188px",
+                                "zIndex": "20"}),
     html.Button("\u23FB Quit", id="btn-quit", className="btn btn-outline-danger btn-sm",
                 title="Stop Theia and close this tab",
                 style={"position": "absolute", "top": "7px", "right": "122px", "zIndex": "20",
@@ -3145,7 +3153,7 @@ _BASE_LAYOUT = html.Div([
                 children=[further_tab]),
     # Tab bar stops short of the right edge to leave room for the Quit and
     # Settings buttons
-    ], style={"height": "42px", "width": "calc(100% - 210px)"}),
+    ], style={"height": "42px", "width": "calc(100% - 268px)"}),
     # Polls the background scan; only enabled while a scan is running
     dcc.Interval(id="poll", interval=700, disabled=True),
     dcc.Store(id="scan-finished"),
@@ -3267,7 +3275,8 @@ def serve_layout():
     return _BASE_LAYOUT
 
 
-app.layout = serve_layout
+app.layout = logpanel.dash_layout(serve_layout, "Theia")
+logpanel.register_dash(app)
 
 # ---------------------------------------------------------------------------
 # Coordinate readout (bottom-right) for the spectrum graphs

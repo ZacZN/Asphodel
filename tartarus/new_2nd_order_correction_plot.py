@@ -52,7 +52,11 @@ import matplotlib.pyplot as plt
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from matplotlib.widgets import Button, CheckButtons, TextBox
 
-from core import corrections, paths, physics
+from core import corrections, logcapture, logpanel, paths, physics
+
+# output also to data/logs/ and this tool's Output window (core/logcapture.py)
+if __name__ == "__main__":
+    logcapture.start("correction_plot")
 from core.nubase_reader import MASS_MODEL, df_nubase
 
 plt.rcParams["font.size"] = 2 * plt.rcParams["font.size"]  # all fonts doubled
@@ -323,6 +327,7 @@ def plot_points(path):
         os.remove(path)                    # a temporary file written by the GUI
     except OSError:
         pass
+    logpanel.add_mpl_buttons([0.925, 0.955, 0.07, 0.04], "Correction plot")
     plt.show()
 
 
@@ -438,6 +443,7 @@ def main():
         fig.canvas.draw_idle()
 
     btn.on_clicked(on_save)
+    logpanel.add_mpl_buttons([0.925, 0.955, 0.07, 0.04], "Correction plot")
     plt.show()
 
 

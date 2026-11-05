@@ -43,7 +43,11 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import jsonfile, paths
+from core import jsonfile, logcapture, logpanel, paths
+
+# output also to data/logs/ and the Output window (core/logcapture.py)
+if __name__ == "__main__":
+    logcapture.start("levelschemer")
 
 APP_NAME = "LevelSchemer"
 HIGHLIGHT = "#f57d15"
@@ -1364,6 +1368,9 @@ class App:
         h = tk.Menu(m, tearoff=0)
         h.add_command(label="Quick guide", command=self.show_help)
         m.add_cascade(label="Help", menu=h)
+        # what the program printed (would otherwise only be in a terminal)
+        m.add_command(label="Output", command=lambda: logpanel.open_tk_window(self.root,
+                                                                           "LevelSchemer"))
         self.root.config(menu=m)
 
     def _buttons(self, master, items):

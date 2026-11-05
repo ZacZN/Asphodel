@@ -24,7 +24,11 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import paths
+from core import logcapture, logpanel, paths
+
+# output also to data/logs/ and this tool's Output window (core/logcapture.py)
+if __name__ == "__main__":
+    logcapture.start("intensity_variation_fit")
 
 
 def read_data(path):
@@ -122,6 +126,7 @@ def main(path, exclude=()):
     out = os.path.join(paths.outputs("figures"), "linear_fit.png")
     fig.savefig(out, dpi=200, bbox_inches="tight")
     print(f"Saved {out}")
+    logpanel.add_mpl_buttons([0.925, 0.955, 0.07, 0.04], "Intensity variation fit")
     plt.show()
 
 

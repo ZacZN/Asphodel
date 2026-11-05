@@ -40,7 +40,11 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import browser, icon, jsonfile, paths, physics, tabwatch
+from core import browser, icon, jsonfile, logcapture, logpanel, paths, physics, tabwatch
+
+# output also to data/logs/ and the page's Log panel (core/logcapture.py)
+if __name__ == "__main__":
+    logcapture.start("segre")
 from core.nubase_reader import get_base_dataframe
 from core.physics import build_hover_label, half_life_seconds
 
@@ -990,7 +994,8 @@ def serve_layout():
     return html.Div([
         html.Header([html.Div(["Segrè ", html.Span("chart")], className="logo"),
                      html.Div(f"NUBASE2020 · core/nubase_4.mas20 · experiment {paths.experiment()}",
-                              className="exp")]),
+                              className="exp"),
+                     logpanel.dash_button(style={"marginLeft": "auto"})]),
         html.Div([
             html.Div([html.Label("Colour by", className="t"),
                       dcc.Dropdown(id="by", clearable=False, className="dd", value="identified",
@@ -1038,7 +1043,8 @@ def serve_layout():
     ], className="page")
 
 
-app.layout = serve_layout
+app.layout = logpanel.dash_layout(serve_layout, "Segrè chart")
+logpanel.register_dash(app)
 
 
 @app.callback(Output("level", "disabled"), Input("state", "value"))

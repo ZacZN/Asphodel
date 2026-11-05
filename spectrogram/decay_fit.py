@@ -107,7 +107,11 @@ from matplotlib.widgets import Button
 from scipy.optimize import curve_fit
 
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import baseline, paths
+from core import baseline, logcapture, logpanel, paths
+
+# output also to data/logs/ and this tool's Output window (core/logcapture.py)
+if __name__ == "__main__":
+    logcapture.start("decay_fit")
 
 # Set by plot_spectrogram.py when it starts a fit: this file is created once
 # the fit window has been drawn, so the page can tell "window open" from a
@@ -117,7 +121,12 @@ _NON_GUI_BACKENDS = {"agg", "cairo", "pdf", "pgf", "ps", "svg", "template"}
 
 
 def show_window():
-    """plt.show(), reporting to the spectrogram page once the window is drawn."""
+    """plt.show(), reporting to the spectrogram page once the window is drawn.
+    Every window gets an "Output" button (what this fit printed: core/logpanel.py),
+    next to "Save fit parameters" where there is one."""
+    logpanel.add_mpl_buttons(lambda f: [0.16, 0.945, 0.07, 0.045]
+                             if hasattr(f, "_save_fit_button") else [0.005, 0.945, 0.07, 0.045],
+                             "Decay fit")
     if READY_FILE:
         backend = plt.get_backend().lower()
         if backend in _NON_GUI_BACKENDS:

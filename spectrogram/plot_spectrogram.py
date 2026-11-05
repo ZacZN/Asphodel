@@ -92,7 +92,11 @@ def slice_freq(freq, power, freq_min, freq_max):
 
 _HERE       = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(1, os.path.dirname(_HERE))
-from core import baseline, browser, icon, jsonfile, paths, tabwatch
+from core import baseline, browser, icon, jsonfile, logcapture, logpanel, paths, tabwatch
+
+# output also to data/logs/ and the page's Log panel (core/logcapture.py)
+if __name__ == "__main__":
+    logcapture.start("spectrogram")
 PREFS_PATH  = paths.settings_file("spectrogram_prefs.json")
 DECAY_PATH  = os.path.join(_HERE, "decay_fit.py")
 
@@ -2862,6 +2866,8 @@ def serve(html, state):
         def _send(self, code, body, ctype="application/json"):
             if isinstance(body, (dict, list)):
                 body = json.dumps(body)
+            if isinstance(body, str) and ctype.startswith("text/html"):
+                body = logpanel.inject_html(body, "Spectrogram")   # Log button + panel
             data = body.encode() if isinstance(body, str) else body
             self.send_response(code)
             self.send_header("Content-Type", ctype)
@@ -2879,6 +2885,14 @@ def serve(html, state):
             q   = parse_qs(url.query)
             if url.path in ("/", "/spectrogram.html"):
                 self._send(200, STATE["html"], "text/html; charset=utf-8")
+
+            elif url.path == "/_aslog":
+                # this program's output for the page's Log panel (core/logpanel.py)
+                try:
+                    since = int(float(q.get("since", ["0"])[0]))
+                except (ValueError, OverflowError):
+                    since = 0
+                self._send(200, logpanel.http_lines(since))
 
             elif url.path == icon.ICON_URL:
                 # browser-tab icon: core/icons/spectrogram.png, else asphodel.png
@@ -3012,6 +3026,8 @@ def serve(html, state):
                 # the page's tab is being closed or reloaded
                 TABS.bye(parse_qs(urlparse(self.path).query).get("id", [""])[0])
                 self._send(200, {"ok": True})
+            elif self.path == "/_aslog/open":
+                self._send(200, logpanel.http_open(self._body()))
             elif self.path == "/load":
                 try:
                     b = self._body()
@@ -3099,7 +3115,10 @@ def serve(html, state):
                     # stderr to a file (read back if the fit dies); stdout stays
                     # on the terminal as before
                     with open(err, "wb") as errfh:
-                        proc = _subprocess.Popen(cmd, env=env, stderr=errfh)
+                        # stdout: this program's original one (the fit keeps its own
+                        # log, core/logcapture.py)
+                        proc = _subprocess.Popen(cmd, env=env, stderr=errfh,
+                                                 stdout=logcapture.child_stdio().get("stdout"))
                     FITS[fid] = {"proc": proc, "ready": ready, "err": err}
                     self._send(200, {"status": "launched", "id": fid})
                 except Exception as exc:

@@ -66,7 +66,11 @@ import threading
 from functools import lru_cache
 
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import browser, corrections, icon, jsonfile, paths, physics, tabwatch
+from core import browser, corrections, icon, jsonfile, logcapture, logpanel, paths, physics, tabwatch
+
+# output also to data/logs/ and the page's Log panel (core/logcapture.py)
+if __name__ == "__main__":
+    logcapture.start("gui_correction")
 from core.nubase_reader import MASS_MODEL, unpack_npz
 
 import numpy as np
@@ -880,7 +884,8 @@ def serve_layout():
         html.Div(id="_g-hook", style={"display": "none"}),
         html.Div(id="_g-fit-label-hook", style={"display": "none"}),
         html.Div(id="g-readout"),
-        html.Div([html.H1(APP_NAME), html.Span(f"experiment {paths.experiment()}", className="exp")],
+        html.Div([html.H1(APP_NAME), html.Span(f"experiment {paths.experiment()}", className="exp"),
+                  logpanel.dash_button(style={"marginLeft": "auto"})],
                  className="top"),
         html.Div([
             html.Div([
@@ -1002,7 +1007,8 @@ def serve_layout():
     ])
 
 
-app.layout = serve_layout
+app.layout = logpanel.dash_layout(serve_layout, "GUI Second Order Correction")
+logpanel.register_dash(app)
 SETTING_INPUTS = [Input(f"g-{k}", "value") for k in SETTING_KEYS]
 SETTING_STATES = [State(f"g-{k}", "value") for k in SETTING_KEYS]
 
@@ -1944,8 +1950,10 @@ def matplotlib_plot(_n, state, *values):
                    "x0": r["x0"], "ref_ion": s["ref_name"], "ref_f": r["ref_f_h"], "h": r["h"],
                    "file": state["file"]}, fh)
     err = tempfile.TemporaryFile()
+    # stdout: this program's original one (the plot keeps its own log, core/logcapture.py)
     proc = subprocess.Popen([sys.executable, CORR_SCRIPT, "--points", path],
-                            cwd=paths.REPO_ROOT, stderr=err)
+                            cwd=paths.REPO_ROOT, stderr=err,
+                            stdout=logcapture.child_stdio().get("stdout"))
     time.sleep(1.5)
     if proc.poll() not in (None, 0):
         err.seek(0)

@@ -41,8 +41,12 @@ import time
 import webbrowser
 
 sys.path.insert(1, os.path.dirname(os.path.abspath(__file__)))
-from core import (browser, corrections, folderpick, icon, jsonfile, labbook, paths, physics, sync,
-                  tabwatch, version)
+from core import (browser, corrections, folderpick, icon, jsonfile, labbook, logcapture, logpanel,
+                  paths, physics, sync, tabwatch, version)
+
+# output also to data/logs/ and the page's Log panel (core/logcapture.py)
+if __name__ == "__main__":
+    logcapture.start("home")
 
 import dash
 from dash import dcc, html, Input, Output, State, ALL, ctx
@@ -130,8 +134,10 @@ def start_tool(key, args=()):
     # own process group, so Stop/Quit also end what the tool starts itself
     # (e.g. decay fits opened from the spectrogram), and Ctrl-C in the home
     # page's terminal does not reach the tools
+    # the tool keeps its own log (core/logcapture.py): give it the home page's
+    # original stdout/stderr, not the home page's capture
     proc = subprocess.Popen([sys.executable, path, *[str(a) for a in args]], cwd=REPO, env=env,
-                            start_new_session=True)
+                            start_new_session=True, **logcapture.child_stdio())
     with _PROCS_LOCK:
         _PROCS.setdefault(key, []).append((proc, exp))
     shown = " ".join(shlex.quote(str(a)) for a in args)
@@ -705,6 +711,7 @@ def header():
         html.Span(className="spacer"),
         html.Button("⇅ Sync with APPC256", id="sync-open", className="btn small", n_clicks=0,
                     title="Send new confirmed lists to APPC256, pull new summed spectrograms"),
+        logpanel.dash_button(className="btn small"),
         html.Button("↻ Refresh", id="refresh", className="btn small", n_clicks=0,
                     title="Re-read files and outputs"),
         html.Button("⏻ Quit", id="quit", className="btn small quit", n_clicks=0,
@@ -918,7 +925,8 @@ app.index_string = app.index_string.replace("</head>", f"<style>{CSS}</style></h
 app.index_string = app.index_string.replace(
     "{%scripts%}", "{%scripts%}\n<script>" + tabwatch.watch_js("Asphodel") + "</script>")
 icon.use_in_dash(app, "asphodel")          # browser-tab icon (core/icons/)
-app.layout = serve_layout
+app.layout = logpanel.dash_layout(serve_layout, "Home page", files=True)
+logpanel.register_dash(app, files=True)
 
 
 @app.callback(

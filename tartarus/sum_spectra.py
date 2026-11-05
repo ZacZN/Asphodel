@@ -22,8 +22,16 @@ Output files (written to <output_dir>):
 """
 
 import argparse
+import os
 import sys
 from pathlib import Path
+
+sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core import logcapture
+
+# output also to data/logs/ and this tool's Output window (core/logcapture.py)
+if __name__ == "__main__":
+    logcapture.start("sum_spectra")
 
 import numpy as np
 import matplotlib.pyplot as plt
