@@ -324,7 +324,8 @@ def _text_colour(hexc):
 HALF = 0.47                  # half side of a square (cells are 1 wide: a thin white gap)
 STABLE_CORNER = 0.38         # Identified ions: side of the corner triangles (stable / isomer identified)
 ISOMER_CORNER_COLOUR = "#8e44ad"   # bottom-left corner: a NUBASE isomer of this nuclide is identified
-NEW_STAR_COLOUR = "#ffd21f"        # bottom-left star: a new isomer (not in NUBASE) is logged
+NEW_STAR_COLOUR = "#ffd21f"        # bottom-left star: a new isomer (not in NUBASE) is logged, or a
+                                   # NUBASE isomer is flagged as a first observation (predicted, not seen before)
 STAR_R = 0.15                      # outer radius of that star, in squares
 ALT_COLOUR = "#1f4e9e"             # "Alternatives:" text in the entry cards
 ALT_LINE_COLOUR = "#000000"        # curved double arrow (and its label) between an identification and an alternative
@@ -418,9 +419,10 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
             fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name="searched, not identified",
                                      marker=dict(symbol="triangle-se", size=11, color=SEARCHED_COLOUR),
                                      hoverinfo="skip", showlegend=True))
-        # a new isomer (not in NUBASE) logged: yellow star in the bottom-left corner
+        # an isomer not seen before (a new one not in NUBASE, or a NUBASE one flagged as a first
+        # observation): yellow star in the bottom-left corner
         # (a path shape in data units, so it zooms with the square; drawn over the purple corner)
-        new_cells = [c for c, es in (id_cells or {}).items() if any(e.get("isomer") == NEW_ISOMER for e in es)]
+        new_cells = [c for c, es in (id_cells or {}).items() if any(star_entry(e) for e in es)]
         if new_cells:
             ang = np.pi / 2 + np.arange(10) * np.pi / 5
             rad = np.where(np.arange(10) % 2 == 0, STAR_R, STAR_R * 0.42)
@@ -430,7 +432,7 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
                            for zz, n in new_cells)
             cell_shapes.append(dict(type="path", path=path, fillcolor=NEW_STAR_COLOUR,
                                     line=dict(color="#000000", width=0.8), layer="below", xref="x", yref="y"))
-            fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name="new isomer",
+            fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name="isomer not seen before",
                                      marker=dict(symbol="star", size=13, color=NEW_STAR_COLOUR,
                                                  line=dict(color="#000000", width=0.8)),
                                      hoverinfo="skip", showlegend=True))
@@ -564,7 +566,7 @@ def ids_path():
 def load_ids():
     d = {"format": "asphodel-segre-identified", "version": 1, "entries": [], "confirmed_lists": [],
          "searched": [],          # [{"Z", "N", "updated"}]: searched for, not identified
-         "list_addons": {}}       # {Theia-list entry id: {"alts", "notes", "updated"}}
+         "list_addons": {}}       # {Theia-list entry id: {"alts", "notes", "first_obs", "updated"}}
     # missing -> empty; damaged -> set aside, backup restored if there is one
     # (core/jsonfile.py)
     saved = jsonfile.read(ids_path(), {})
@@ -610,6 +612,17 @@ def parse_int_list(text, lo, hi):
 
 NEW_ISOMER = "new"            # Energy State value of a newly identified isomer (not in NUBASE)
 NEW_FIELDS = ["new_ex", "new_ex_unc", "new_t", "new_t_unc"]     # optional numbers of a new isomer
+# "first_obs": True on an entry of a NUBASE isomer (m, n, ...) = predicted in NUBASE but not
+# seen before (a first observation): shown with the same star as a new isomer.
+
+
+def is_first_obs(e):
+    return bool(e.get("first_obs")) and e.get("isomer", "g") not in ("g", NEW_ISOMER)
+
+
+def star_entry(e):
+    """An isomer not seen before: a new one (not in NUBASE) or a NUBASE one seen for the first time."""
+    return e.get("isomer") == NEW_ISOMER or is_first_obs(e)
 T_UNITS = ["ns", "us", "ms", "s", "m", "h", "d", "y"]
 
 
@@ -735,7 +748,7 @@ def all_entries(d=None):
         for e in confirmed_entries(name):
             ad = addons.get(e["id"]) or {}
             out.append(dict(e, alts=ad.get("alts") or [], notes=ad.get("notes") or "",
-                            updated=ad.get("updated")))        # copies: the list cache stays clean
+                            first_obs=bool(ad.get("first_obs")), updated=ad.get("updated")))        # copies: the list cache stays clean
     return out
 
 
@@ -829,7 +842,7 @@ def entry_hover_line(e):
         note = note[:57] + "…"
     src = " [Theia list]" if e.get("source") else ""
     new = f" [new isomer{': ' + new_isomer_text(e) if new_isomer_text(e) else ''}]" \
-        if e.get("isomer") == NEW_ISOMER else ""
+        if e.get("isomer") == NEW_ISOMER else (" [first observation]" if is_first_obs(e) else "")
     alts = active_alts(e)
     alt = (" ↔ or " + ", ".join(alt_text(a, e) for a in alts)) if alts else ""
     return f"{mark} {ion_name(e)} h{e['harmonic']}{new}{src}{alt}" + (f" – {note}" if note else "")
@@ -957,6 +970,11 @@ def id_panel():
                 html.Div("All optional: rough values or ones measured later can be added by editing.",
                          className="hint"),
             ], id="id-new-box", className="newbox", style={"display": "none"}),
+            # a NUBASE isomer (m, n, ...) predicted but not seen before
+            html.Div(dcc.Checklist(id="id-first-obs", value=[], className="lists",
+                                   options=[{"label": "First observation (in NUBASE, not seen before)",
+                                             "value": "yes"}]),
+                     id="id-first-box", className="newbox", style={"display": "none"}),
             html.Div([html.Div([lbl("Charge state(s) q *"),
                                 dcc.Input(id="id-charge", type="text", inputMode="numeric", debounce=False,
                                           placeholder="72 or 70-72", autoComplete="off")]),
@@ -1162,6 +1180,8 @@ def _entry_card(e):
     if e.get("isomer") == NEW_ISOMER:
         out.append(html.Div("New isomer" + (": " + new_isomer_text(e) if new_isomer_text(e) else
                                             " (energy and half-life not given yet)"), className="newiso"))
+    elif is_first_obs(e):
+        out.append(html.Div("First observation (in NUBASE, not seen before)", className="newiso"))
     if e.get("alts"):
         txt = "Alternatives: " + ", ".join(alt_text(a, e) for a in e["alts"])
         out.append(html.Div(txt, className="alts"))
@@ -1261,13 +1281,14 @@ def _id_searched(value, sel, ver):
     return (ver or 0) + 1, msg
 
 
-@app.callback(Output("id-new-box", "style"), Input("id-iso", "value"))
+@app.callback(Output("id-new-box", "style"), Output("id-first-box", "style"), Input("id-iso", "value"))
 def _id_new_box(iso):
-    return {} if iso == NEW_ISOMER else {"display": "none"}
+    hide = {"display": "none"}
+    return ({} if iso == NEW_ISOMER else hide), ({} if iso not in (None, "g", NEW_ISOMER) else hide)
 
 
 EDIT_OUTPUTS = ["ver", "editing", "iso", "charge", "harm", "status", "notes",
-                "new_ex", "new_ex_unc", "new_t", "new_t_unc", "new_t_unit", "alts",
+                "new_ex", "new_ex_unc", "new_t", "new_t_unc", "new_t_unit", "alts", "first_obs",
                 "msg", "save_label", "cancel_style", "lock_iso", "lock_charge", "lock_harm", "status_opts"]
 STATUS_OPTS = [{"label": "Confident", "value": "confident"}, {"label": "Unsure", "value": "unsure"}]
 LOCKED = dict(lock_iso=True, lock_charge=True, lock_harm=True,
@@ -1282,7 +1303,7 @@ def _out(**kw):
 
 def _cleared(**kw):
     """Outputs that empty the form (the harmonic and status are kept: often the same)."""
-    base = dict(editing=None, iso="g", charge="", notes="", alts="", new_ex="", new_ex_unc="", new_t="",
+    base = dict(editing=None, iso="g", charge="", notes="", alts="", first_obs=[], new_ex="", new_ex_unc="", new_t="",
                 new_t_unc="", new_t_unit="s", save_label="Add", cancel_style={"display": "none"},
                 **UNLOCKED)
     base.update(kw)
@@ -1313,7 +1334,7 @@ def _str(v):
     Output("id-status", "value"), Output("id-notes", "value"),
     Output("id-new-ex", "value"), Output("id-new-ex-unc", "value"),
     Output("id-new-t", "value"), Output("id-new-t-unc", "value"), Output("id-new-t-unit", "value"),
-    Output("id-alts", "value"),
+    Output("id-alts", "value"), Output("id-first-obs", "value"),
     Output("id-msg", "children"), Output("id-save", "children"), Output("id-cancel", "style"),
     Output("id-iso", "disabled"), Output("id-charge", "disabled"), Output("id-harm", "disabled"),
     Output("id-status", "options"),
@@ -1325,12 +1346,12 @@ def _str(v):
     State("id-status", "value"), State("id-notes", "value"),
     State("id-new-ex", "value"), State("id-new-ex-unc", "value"),
     State("id-new-t", "value"), State("id-new-t-unc", "value"), State("id-new-t-unit", "value"),
-    State("id-alts", "value"),
+    State("id-alts", "value"), State("id-first-obs", "value"),
     State("id-editing", "data"), State("id-ver", "data"),
     prevent_initial_call=True,
 )
 def _id_edit(_save, _cancel, _edit, _del, sel, iso, charge, harm, status, notes,
-             new_ex, new_ex_unc, new_t, new_t_unc, new_t_unit, alts_text, editing, ver):
+             new_ex, new_ex_unc, new_t, new_t_unc, new_t_unit, alts_text, first_obs, editing, ver):
     """Add / save / edit / delete an identification of the selected nuclide."""
     t = ctx.triggered_id
     ver = ver or 0
@@ -1348,9 +1369,11 @@ def _id_edit(_save, _cancel, _edit, _del, sel, iso, charge, harm, status, notes,
                 return _out(msg="⚠ that list entry is no longer shown")
             return _out(editing=e["id"], iso=e.get("isomer", "g"), charge=str(e["charge"]),
                         harm=str(e["harmonic"]), status=e["status"], notes=e.get("notes", ""),
-                        alts=alts_input_text(e), save_label="Save changes", cancel_style={},
+                        alts=alts_input_text(e), first_obs=["yes"] if is_first_obs(e) else [],
+                        save_label="Save changes", cancel_style={},
                         msg=f"Editing {ion_name(e)} h{e['harmonic']} from a Theia list: only its "
-                            "alternatives and notes are saved here (the rest comes from the list).",
+                            "alternatives, notes and first-observation flag are saved here "
+                            "(the rest comes from the list).",
                         **LOCKED)
         if e is None:
             return _out(msg="⚠ that entry no longer exists")
@@ -1363,6 +1386,7 @@ def _id_edit(_save, _cancel, _edit, _del, sel, iso, charge, harm, status, notes,
                     new_ex=_str(e.get("new_ex")), new_ex_unc=_str(e.get("new_ex_unc")),
                     new_t=_str(e.get("new_t")), new_t_unc=_str(e.get("new_t_unc")),
                     new_t_unit=e.get("new_t_unit") or "s", alts=alts_input_text(e),
+                    first_obs=["yes"] if is_first_obs(e) else [],
                     msg=f"Editing {ion_name(e)} h{e['harmonic']}", save_label="Save changes",
                     cancel_style={}, **UNLOCKED)
     # Save a Theia-list ion's add-ons (alternatives, notes)
@@ -1378,8 +1402,9 @@ def _id_edit(_save, _cancel, _edit, _del, sel, iso, charge, harm, status, notes,
                and a["charge"] == e["charge"] and a["harmonic"] in (None, e["harmonic"]) for a in alts):
             return _out(msg="⚠ An alternative can't be the identification itself.")
         note = (notes or "").strip()
-        if alts or note:
-            d["list_addons"][editing] = {"alts": alts, "notes": note,
+        fo = bool(first_obs) and e.get("isomer", "g") not in ("g", NEW_ISOMER)
+        if alts or note or fo:
+            d["list_addons"][editing] = {"alts": alts, "notes": note, "first_obs": fo,
                                          "updated": datetime.datetime.now().isoformat(timespec="seconds")}
         else:
             d["list_addons"].pop(editing, None)
@@ -1422,6 +1447,8 @@ def _id_edit(_save, _cancel, _edit, _del, sel, iso, charge, harm, status, notes,
             "notes": (notes or "").strip(), "updated": now, **newvals}
     if alts is not None:
         base["alts"] = alts
+    if first_obs and iso not in ("g", NEW_ISOMER):
+        base["first_obs"] = True
 
     def clash(q, h):
         # a new isomer is told apart from other new isomers of the nuclide by its energy
@@ -1435,7 +1462,7 @@ def _id_edit(_save, _cancel, _edit, _del, sel, iso, charge, harm, status, notes,
         c = clash(q, h)
         if c:
             return _out(msg=f"⚠ {ion_name(c)} h{h} is already in the list – edit that one.")
-        for k in NEW_FIELDS + ["new_t_unit"]:          # no stale new-isomer values on other states
+        for k in NEW_FIELDS + ["new_t_unit", "first_obs"]:   # no stale values from another state
             old.pop(k, None)
         old.update(base, charge=q, harmonic=h)
         msg = f"Saved {ion_name(old)} h{h}."
