@@ -465,6 +465,26 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
     fig.add_trace(go.Scatter(
         x=[], y=[], text=[], mode="text", name="labels", textfont=dict(size=9), textposition="bottom right",
         hoverinfo="skip", showlegend=False))
+    # identified charge states ("72+ 73+", every entry of the nuclide: g / isomers, confident /
+    # unsure, own / Theia list) at the bottom-right corner; shown by the page like the A + symbol
+    # labels ("qlabels-all" -> "qlabels"), two per line, extra lines growing upwards
+    qx, qy, qt, qc = [], [], [], []
+    if by == "identified" and id_cells:
+        for zz, nn, c in zip(z_arr, n_arr, cols):
+            es = id_cells.get((int(zz), int(nn)))
+            if not es:
+                continue
+            qs = [f"{q}+" for q in sorted({int(e["charge"]) for e in es})]
+            qx.append(round(float(nn) + HALF - LABEL_INSET, 3))
+            qy.append(round(float(zz) - HALF + LABEL_INSET, 3))
+            qt.append("<br>".join(" ".join(qs[i:i + 2]) for i in range(0, len(qs), 2)))
+            qc.append(_text_colour(c))
+    fig.add_trace(go.Scatter(
+        x=qx, y=qy, text=qt, mode="text", name="qlabels-all", visible=False, textposition="top left",
+        textfont=dict(size=9, color=qc), hoverinfo="skip", showlegend=False))
+    fig.add_trace(go.Scatter(
+        x=[], y=[], text=[], mode="text", name="qlabels", textfont=dict(size=9), textposition="top left",
+        hoverinfo="skip", showlegend=False))
     # colour key: Identified ions -> square entries in the legend (first, above the corner marks);
     # the other colourings keep their colour bar
     if by == "identified":
@@ -1589,11 +1609,16 @@ app.clientside_callback(
                     if (!gd._fullLayout || !gd._fullLayout.yaxis || !gd.data || !gd.data.length) return;
                     var ya = gd._fullLayout.yaxis, r = ya.range;
                     var px = ya._length / Math.abs(r[1] - r[0]);       // one square, in pixels
-                    var iL = -1, iA = -1;
+                    var iL = -1, iA = -1, iQ = -1, iQA = -1;
                     gd.data.forEach(function(t, i) {
                         if (t.name === 'labels') iL = i;
                         if (t.name === 'labels-all') iA = i;
+                        if (t.name === 'qlabels') iQ = i;           // identified charge states
+                        if (t.name === 'qlabels-all') iQA = i;
                     });
+                    // [shown trace, hidden source] pairs, filled together
+                    var pairs = [[iL, iA]];
+                    if (iQ >= 0 && iQA >= 0) pairs.push([iQ, iQA]);
                     var jobs = [], relayoutHD = null;
                     // WebGL hover finds the nearest marker centre within hoverdistance
                     // pixels; the nearest centre is the square under the mouse, so a
@@ -1608,24 +1633,30 @@ app.clientside_callback(
                         var y0 = Math.min(yr[0], yr[1]), y1 = Math.max(yr[0], yr[1]);
                         var cov = gd._segreCover;      // region the current labels cover
                         if (px < %d) {
-                            if (gd.data[iL].x.length) jobs.push([{x: [[]], y: [[]], text: [[]]}, [iL]]);
+                            pairs.forEach(function(pr) {
+                                if (gd.data[pr[0]].x.length) jobs.push([{x: [[]], y: [[]], text: [[]]}, [pr[0]]]);
+                            });
                             gd._segreCover = null;
                         } else if (!cov || x0 < cov[0] || x1 > cov[1] || y0 < cov[2] || y1 > cov[3]) {
                             var w = x1 - x0, h = y1 - y0;
                             cov = [x0 - w / 2, x1 + w / 2, y0 - h / 2, y1 + h / 2];
-                            var A = gd.data[iA], X = [], Y = [], T = [], C = [];
-                            for (var k = 0; k < A.x.length; k++) {
-                                if (A.x[k] < cov[0] || A.x[k] > cov[1] || A.y[k] < cov[2] || A.y[k] > cov[3]) continue;
-                                X.push(A.x[k]); Y.push(A.y[k]); T.push(A.text[k]); C.push(A.textfont.color[k]);
-                            }
+                            pairs.forEach(function(pr) {
+                                var A = gd.data[pr[1]], X = [], Y = [], T = [], C = [];
+                                for (var k = 0; k < (A.x || []).length; k++) {
+                                    if (A.x[k] < cov[0] || A.x[k] > cov[1] || A.y[k] < cov[2] || A.y[k] > cov[3]) continue;
+                                    X.push(A.x[k]); Y.push(A.y[k]); T.push(A.text[k]); C.push(A.textfont.color[k]);
+                                }
+                                jobs.push([{x: [X], y: [Y], text: [T], 'textfont.color': [C]}, [pr[0]]]);
+                            });
                             gd._segreCover = cov;
-                            jobs.push([{x: [X], y: [Y], text: [T], 'textfont.color': [C]}, [iL]]);
                         }
                         // font grows with the squares: "188Re" fills about 3/4 of a square
                         if (px >= %d) {
                             var fs = Math.round(Math.min(26, Math.max(9, px * 0.22)));
-                            if ((gd.data[iL].textfont || {}).size !== fs)
-                                jobs.push([{'textfont.size': fs}, [iL]]);
+                            pairs.forEach(function(pr) {
+                                if ((gd.data[pr[0]].textfont || {}).size !== fs)
+                                    jobs.push([{'textfont.size': fs}, [pr[0]]]);
+                            });
                         }
                     }
                     // remember the view for the next redraw (other colouring, state, overlays)
