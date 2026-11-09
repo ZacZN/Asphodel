@@ -329,6 +329,8 @@ STABLE_CORNER = 0.38         # Identified ions: side of the corner triangles (st
 ISOMER_CORNER_COLOUR = "#8e44ad"   # bottom-left corner: a NUBASE isomer of this nuclide is identified
 NEW_STAR_COLOUR = "#ffd21f"        # bottom-left star: a new isomer (not in NUBASE) is logged, or a
                                    # NUBASE isomer is flagged as a first observation (predicted, not seen before)
+LEGEND_FONT = 15                   # legend text size (px; was the 12 px page font)
+LEGEND_MARK = 15                   # legend symbol size of the square marks (was 11)
 STAR_R = 0.15                      # outer radius of that star, in squares
 ALT_COLOUR = "#1f4e9e"             # "Alternatives:" text in the entry cards
 ALT_LINE_COLOUR = "#000000"        # curved double arrow (and its label) between an identification and an alternative
@@ -400,7 +402,7 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
             cell_shapes.append(dict(type="path", path=path, fillcolor="#000000", line=dict(width=0),
                                     layer="below", xref="x", yref="y"))
             fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name="stable",
-                                     marker=dict(symbol="triangle-ne", size=11, color="#000000"),
+                                     marker=dict(symbol="triangle-ne", size=LEGEND_MARK, color="#000000"),
                                      hoverinfo="skip", showlegend=True))
         # a known NUBASE isomer identified (an entry with isomer m, n, ... not flagged as a first
         # observation): bottom-left corner purple.  A first observation shows only the star.
@@ -412,7 +414,7 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
             cell_shapes.append(dict(type="path", path=path, fillcolor=ISOMER_CORNER_COLOUR,
                                     line=dict(width=0), layer="below", xref="x", yref="y"))
             fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name="isomer identified",
-                                     marker=dict(symbol="triangle-sw", size=11, color=ISOMER_CORNER_COLOUR),
+                                     marker=dict(symbol="triangle-sw", size=LEGEND_MARK, color=ISOMER_CORNER_COLOUR),
                                      hoverinfo="skip", showlegend=True))
         # searched for but not identified: bottom-right corner red
         path = "".join(f"M{n + HALF:g},{zz - HALF:g}H{n + HALF - k:g}L{n + HALF:g},{zz - HALF + k:g}Z"
@@ -421,7 +423,7 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
             cell_shapes.append(dict(type="path", path=path, fillcolor=SEARCHED_COLOUR,
                                     line=dict(width=0), layer="below", xref="x", yref="y"))
             fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name="searched, not identified",
-                                     marker=dict(symbol="triangle-se", size=11, color=SEARCHED_COLOUR),
+                                     marker=dict(symbol="triangle-se", size=LEGEND_MARK, color=SEARCHED_COLOUR),
                                      hoverinfo="skip", showlegend=True))
         # an isomer not seen before (a new one not in NUBASE, or a NUBASE one flagged as a first
         # observation): yellow star in the bottom-left corner
@@ -438,7 +440,7 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
             cell_shapes.append(dict(type="path", path=path, fillcolor=NEW_STAR_COLOUR,
                                     line=dict(color="#000000", width=0.8), layer="below", xref="x", yref="y"))
             fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name="isomer not seen before",
-                                     marker=dict(symbol="star", size=13, color=NEW_STAR_COLOUR,
+                                     marker=dict(symbol="star", size=LEGEND_MARK + 3, color=NEW_STAR_COLOUR,
                                                  line=dict(color="#000000", width=0.8)),
                                      hoverinfo="skip", showlegend=True))
     # hover: one invisible square marker per nuclide, coloured like its square
@@ -463,11 +465,19 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
     fig.add_trace(go.Scatter(
         x=[], y=[], text=[], mode="text", name="labels", textfont=dict(size=9), textposition="bottom right",
         hoverinfo="skip", showlegend=False))
-    # colour bar
-    fig.add_trace(go.Scatter(
-        x=[None], y=[None], mode="markers", name="colourbar", hoverinfo="skip", showlegend=False,
-        marker=dict(color=[zmin], colorscale=scale, cmin=zmin, cmax=zmax, showscale=True,
-                    colorbar=dict(thickness=14, len=0.9, **cbar))))
+    # colour key: Identified ions -> square entries in the legend (first, above the corner marks);
+    # the other colourings keep their colour bar
+    if by == "identified":
+        for i, (name, colour) in enumerate(ID_COLOURS):
+            fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name=name, hoverinfo="skip",
+                                     showlegend=True, legendrank=100 + i,
+                                     marker=dict(symbol="square", size=LEGEND_MARK + 2, color=colour,
+                                                 line=dict(color="#999999", width=1))))
+    else:
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None], mode="markers", name="colourbar", hoverinfo="skip", showlegend=False,
+            marker=dict(color=[zmin], colorscale=scale, cmin=zmin, cmax=zmax, showscale=True,
+                        colorbar=dict(thickness=14, len=0.9, **cbar))))
 
     shapes = magic_shapes(TABLE[TABLE["state"] == "g"]) if "magic" in overlays else []
     region_text = ""
@@ -507,8 +517,9 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
     fig.update_layout(
         margin=dict(l=55, r=10, t=10, b=45), plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
         hovermode="closest", hoverdistance=1,
-        legend=dict(x=0.01, y=0.99, xanchor="left", yanchor="top", bgcolor="rgba(255,255,255,0.85)",
-                    bordercolor=LINE, borderwidth=1),
+        legend=dict(x=0.01, y=0.99, xanchor="left", yanchor="top", bgcolor="#ffffff",
+                    bordercolor="#999999", borderwidth=1, font=dict(size=LEGEND_FONT),
+                    itemwidth=40, tracegroupgap=4),
         shapes=cell_shapes + shapes, dragmode="pan", uirevision=uirev,
         # uncertain identification <-> its alternatives, drawn by the page on hover
         meta={"altlinks": links if by == "identified" else {}},
