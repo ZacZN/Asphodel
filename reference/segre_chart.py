@@ -1023,6 +1023,33 @@ def id_panel():
     ], id="id-panel", className="panel", style={"display": "none"})
 
 
+# ticked overlay boxes (experiment region, measured masses / half-lives, magic numbers),
+# remembered per experiment in <experiment>/settings/segre_chart.json
+SETTINGS_NAME = "segre_chart.json"
+OVERLAY_KEYS = ["region", "mass_limit", "hl_limit", "magic"]
+OVERLAY_DEFAULT = ["region", "magic"]
+
+
+def load_overlays():
+    try:
+        v = jsonfile.read(paths.settings_file(SETTINGS_NAME), {}).get("overlays")
+    except Exception:
+        v = None
+    if not isinstance(v, list):
+        return list(OVERLAY_DEFAULT)
+    return [k for k in OVERLAY_KEYS if k in v]
+
+
+@app.callback(Output("overlays-saved", "data"), Input("overlays", "value"), prevent_initial_call=True)
+def _save_overlays(value):
+    v = [k for k in OVERLAY_KEYS if k in (value or [])]
+    try:
+        jsonfile.update(paths.settings_file(SETTINGS_NAME), {"overlays": v})
+    except Exception as exc:
+        print(f"Segrè chart: could not save the overlay boxes: {exc}")
+    return v
+
+
 def serve_layout():
     levels = [{"label": lbl, "value": v} for v, lbl in ISOMER_LEVELS if (TABLE["state"] == v).any()]
     return html.Div([
@@ -1043,12 +1070,13 @@ def serve_layout():
                                               {"label": "Isomers", "value": "iso"}]),
                       dcc.Dropdown(id="level", clearable=False, className="dd-s", value="m",
                                    options=levels, disabled=True)], className="grp"),
-            html.Div(dcc.Checklist(id="overlays", value=["region", "magic"], className="chk", inline=True,
+            html.Div(dcc.Checklist(id="overlays", value=load_overlays(), className="chk", inline=True,
                                    options=[{"label": "Experiment region", "value": "region"},
                                             {"label": "Measured masses", "value": "mass_limit"},
                                             {"label": "Measured half-lives", "value": "hl_limit"},
                                             {"label": "Magic numbers", "value": "magic"}]),
                      className="grp"),
+            dcc.Store(id="overlays-saved"),
             html.Div([html.Label("Find", className="t"),
                       dcc.Input(id="q", type="text", placeholder="198Ir, Ir198, m186Hf",
                                 debounce=False, n_submit=0, autoComplete="off",
