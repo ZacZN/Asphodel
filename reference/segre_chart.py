@@ -1942,29 +1942,41 @@ app.clientside_callback(
                                                  Math.round(sg[1]) === Math.round(pt.y)) ? px(sg[2], sg[3]) : px(sg[0], sg[1]);
                         var dx = far[0] - p0[0], dy = far[1] - p0[1], len = Math.sqrt(dx * dx + dy * dy);
                         if (len < 1) return;
-                        var cut = Math.min(0.3 * sq, len / 4);
-                        // try leaving the square in several directions; keep the shortest curve
-                        // that stays clear of the hover labels
-                        var dirs = [[dx / len, dy / len], [0, -1], [0, 1], [-1, 0], [1, 0],
-                                    [-0.7, -0.7], [0.7, -0.7], [-0.7, 0.7], [0.7, 0.7]];
-                        var best = null;
-                        dirs.forEach(function(dv, k) {
-                            var a = [p0[0] + dv[0] * cut, p0[1] + dv[1] * cut];
-                            var ux = (far[0] - a[0]), uy = (far[1] - a[1]), l2 = Math.sqrt(ux * ux + uy * uy) || 1;
-                            var b = [far[0] - ux / l2 * cut, far[1] - uy / l2 * cut];
-                            var reach = Math.max(0.35 * l2, 2.2 * sq);
-                            var c1 = [a[0] + dv[0] * reach, a[1] + dv[1] * reach];
-                            var bend = k === 0 ? 0.22 * l2 : 0;              // first try: the gentle arc
-                            var c2 = [b[0] - ux / l2 * 0.3 * l2 - uy / l2 * bend, b[1] - uy / l2 * 0.3 * l2 + ux / l2 * bend];
-                            if (k === 0) c1 = [a[0] + ux * 0.3 - uy / l2 * bend, a[1] + uy * 0.3 + ux / l2 * bend];
-                            var hits = 0, length = 0, prev = a;
-                            for (var i = 1; i <= 40; i++) {
-                                var q = bez(a, c1, c2, b, i / 40);
-                                if (inRects(q[0], q[1], avoid)) hits++;
-                                length += Math.hypot(q[0] - prev[0], q[1] - prev[1]); prev = q;
-                            }
-                            var score = hits * 1e6 + length;
-                            if (!best || score < best.score) best = {score: score, a: a, c1: c1, c2: c2, b: b};
+                        // A symmetric arc: it leaves the hovered square at angle th to the
+                        // straight line and comes back into the other one at the mirror angle,
+                        // the arrowheads at the square edges.  Short links (neighbouring
+                        // squares) leave steeply and reach well out, so the arc has room to
+                        // swing out and curve back in instead of hugging the squares.
+                        // Candidates (both sides, a few angles) in order of preference; the
+                        // first that stays clear of the hover labels wins, shorter breaking ties.
+                        var cut = Math.min(0.5 * sq, len / 3);
+                        var ux = dx / len, uy = dy / len;
+                        var short = len < 3.5 * sq;
+                        var angles = short ? [65, 80, 50] : [32, 48, 65];
+                        var reach = short ? Math.max(0.6 * len, 1.6 * sq) : Math.max(0.4 * len, 1.6 * sq);
+                        var rot = function(vx, vy, deg) {
+                            var r = deg * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
+                            return [vx * c - vy * s, vx * s + vy * c];
+                        };
+                        var best = null, k = 0;
+                        angles.forEach(function(th) {
+                            [1, -1].forEach(function(side) {
+                                var o = rot(ux, uy, side * th);          // out of the hovered square
+                                var i = rot(-ux, -uy, -side * th);       // into the other one (mirror)
+                                var a = [p0[0] + o[0] * cut, p0[1] + o[1] * cut];
+                                var b = [far[0] + i[0] * cut, far[1] + i[1] * cut];
+                                var c1 = [a[0] + o[0] * reach, a[1] + o[1] * reach];
+                                var c2 = [b[0] + i[0] * reach, b[1] + i[1] * reach];
+                                var hits = 0, length = 0, prev = a;
+                                for (var n = 1; n <= 40; n++) {
+                                    var q = bez(a, c1, c2, b, n / 40);
+                                    if (inRects(q[0], q[1], avoid)) hits++;
+                                    length += Math.hypot(q[0] - prev[0], q[1] - prev[1]); prev = q;
+                                }
+                                var score = hits * 1e6 + length * (1 + 0.08 * k);
+                                k++;
+                                if (!best || score < best.score) best = {score: score, a: a, c1: c1, c2: c2, b: b};
+                            });
                         });
                         var d = 'M' + best.a[0] + ',' + best.a[1] + ' C' + best.c1[0] + ',' + best.c1[1] + ' ' +
                                 best.c2[0] + ',' + best.c2[1] + ' ' + best.b[0] + ',' + best.b[1];
