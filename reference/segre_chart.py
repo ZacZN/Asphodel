@@ -334,7 +334,10 @@ NEW_STAR_COLOUR = "#ffd21f"        # bottom-left star: a new isomer (not in NUBA
                                    # NUBASE isomer is flagged as a first observation (predicted, not seen before)
 LEGEND_FONT = 15                   # legend text size (px; was the 12 px page font)
 LEGEND_MARK = 15                   # legend symbol size of the square marks (was 11)
-LEGEND_ROW_PX = 24                 # approximate legend row height (first guess for the counts box)
+LEGEND_SCALE = 1.5                 # legend symbols enlarged by the page (Plotly caps them at 16 px)
+LEGEND_ITEMWIDTH = 60              # legend symbol column / line-sample length (px; was 40)
+LEGEND_ROW_GAP = 8                 # extra px between legend rows (each row is its own legend group)
+LEGEND_ROW_PX = 31                 # approximate legend row pitch (first guess for the counts box)
 SUMMARY_GAP = 6                    # px between the legend and the counts box under it
 SUMMARY_PAD = 6                    # counts box: padding inside its frame (borderpad, px)
 STAR_R = 0.15                      # outer radius of that star, in squares
@@ -539,13 +542,18 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
         shapes.append(dict(type="rect", x0=nn - .5, x1=nn + .5, y0=zz - .5, y1=zz + .5,
                            line=dict(color=ACCENT, width=4), layer="above"))
 
+    # every legend row its own legend group, so tracegroupgap spaces the rows out
+    # (room for the symbols the page enlarges by LEGEND_SCALE)
+    for t in fig.data:
+        if t.showlegend and not t.legendgroup:
+            t.legendgroup = t.name
     xr, yr = (view or {}).get("x"), (view or {}).get("y")
     fig.update_layout(
         margin=dict(l=55, r=10, t=10, b=45), plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
         hovermode="closest", hoverdistance=1,
         legend=dict(x=0.01, y=0.99, xanchor="left", yanchor="top", bgcolor="#ffffff",
                     bordercolor="#999999", borderwidth=1, font=dict(size=LEGEND_FONT),
-                    itemwidth=40, tracegroupgap=4),
+                    itemwidth=LEGEND_ITEMWIDTH, tracegroupgap=LEGEND_ROW_GAP),
         shapes=cell_shapes + shapes, dragmode="pan", uirevision=uirev,
         # uncertain identification <-> its alternatives, drawn by the page on hover
         meta={"altlinks": links if by == "identified" else {}},
@@ -1765,7 +1773,14 @@ app.clientside_callback(
                     S.W = Math.max(S.legNat, S.boxNat);
                     return {i: i, W: S.W, leg: leg, boxNat: S.boxNat};
                 };
+                // legend symbols enlarged (Plotly caps legend markers at 16 px): a scale after
+                // Plotly's own translate; put back whenever Plotly redraws them
+                var LEG_SCALE = ' scale(%s)';
                 var fixLegend = function() {
+                    gd.querySelectorAll('g.legend .legendpoints path.scatterpts').forEach(function(p) {
+                        var t = p.getAttribute('transform') || '';
+                        if (t.indexOf('scale(') < 0) p.setAttribute('transform', t + LEG_SCALE);
+                    });
                     var s = sumWidths();
                     if (s && parseFloat(s.leg.getAttribute('width')) !== s.W) s.leg.setAttribute('width', s.W);
                 };
@@ -1787,9 +1802,11 @@ app.clientside_callback(
                     fixLegend();
                     return Object.keys(fix).length ? fix : null;
                 };
-                // Plotly redraws the legend (back to its own width) on some updates: put ours back
-                new MutationObserver(fixLegend).observe(gd, {subtree: true, childList: true,
-                                                             attributes: true, attributeFilter: ['width']});
+                // Plotly redraws the legend (back to its own width / symbol size) on some updates:
+                // put ours back
+                new MutationObserver(fixLegend).observe(gd, {subtree: true, childList: true, attributes: true,
+                                                             attributeFilter: ['width', 'transform']});
+                fixLegend();
                 var placeSummary = function() {
                     var fix = summaryShift();
                     if (!fix) return;
@@ -1965,7 +1982,7 @@ app.clientside_callback(
         }, 150);
         return window.dash_clientside.no_update;
     }
-    """ % (LABEL_PX, LABEL_PX, SUMMARY_GAP, SUMMARY_PAD, ALT_LINE_COLOUR, ALT_LINE_COLOUR, ALT_LINE_COLOUR, ALT_LINE_COLOUR),
+    """ % (LABEL_PX, LABEL_PX, LEGEND_SCALE, SUMMARY_GAP, SUMMARY_PAD, ALT_LINE_COLOUR, ALT_LINE_COLOUR, ALT_LINE_COLOUR, ALT_LINE_COLOUR),
     Output("labels-dummy", "children"),
     Input("chart", "figure"),
 )
