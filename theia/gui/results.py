@@ -129,7 +129,8 @@ results_tab = html.Div([
                                   style={"fontSize": "13px"}),
                 ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap"}),
                 html.Small("Steps through every identification in the table on the left, in table order; "
-                           "the filters and table sorting decide which peaks are shown",
+                           "the filters and table sorting decide which peaks are shown. "
+                           "With an ion filter set, the closest to the prediction (smallest |Δ|) come first",
                            style=HELP_STYLE),
                 # Confirmation mode: accept / reject the identification shown, then
                 # move to the next one.  Decisions are kept for this session only,
@@ -530,14 +531,19 @@ def query_hits(path, ion_filter, spec_filter, closest):
         where.append("closest_for_ion = 1")
     if "peak" in (closest or []):
         where.append("closest_for_peak = 1")
+    # With an ion filter, closest to the prediction first (|Δ| over all the
+    # selected ions together), so the snippet viewer steps through the best
+    # matches first; otherwise run order.  Sorting a column still overrides.
+    order = "ABS(delta_hz), seq, peak_freq" if ors else "seq, peak_freq"
     sql = (f"SELECT {', '.join(HIT_COLUMNS)} FROM hits"
            + (" WHERE " + " AND ".join(where) if where else "")
-           + f" ORDER BY seq, peak_freq LIMIT {MAX_ROWS + 1}")
+           + f" ORDER BY {order} LIMIT {MAX_ROWS + 1}")
     df = db_query(path, sql, params)
     truncated = len(df) > MAX_ROWS
     df = df.iloc[:MAX_ROWS]
     n_spec = df["spectrum_id"].nunique() if len(df) else 0
     info = (f"{len(df)} identifications in {n_spec} spectra"
+            + ("  (closest to prediction first)" if ors else "")
             + (f"  (showing first {MAX_ROWS}; narrow the filter)" if truncated else ""))
 
     return _fmt_records(df), info
