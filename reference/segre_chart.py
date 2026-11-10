@@ -336,6 +336,7 @@ LEGEND_FONT = 15                   # legend text size (px; was the 12 px page fo
 LEGEND_MARK = 15                   # legend symbol size of the square marks (was 11)
 LEGEND_ROW_PX = 24                 # approximate legend row height (first guess for the counts box)
 SUMMARY_GAP = 6                    # px between the legend and the counts box under it
+SUMMARY_PAD = 6                    # counts box: padding inside its frame (borderpad, px)
 STAR_R = 0.15                      # outer radius of that star, in squares
 ALT_COLOUR = "#1f4e9e"             # "Alternatives:" text in the entry cards
 ALT_LINE_COLOUR = "#000000"        # curved double arrow (and its label) between an identification and an alternative
@@ -563,7 +564,7 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
             name="idsummary", text=id_summary_text([e for es in id_cells.values() for e in es]),
             xref="paper", yref="paper", x=0.01, y=0.99, xanchor="left", yanchor="top",
             yshift=-(n_leg * LEGEND_ROW_PX + 2 + SUMMARY_GAP), align="left", showarrow=False,
-            bgcolor="#ffffff", bordercolor="#999999", borderwidth=1, borderpad=6,
+            bgcolor="#ffffff", bordercolor="#999999", borderwidth=1, borderpad=SUMMARY_PAD,
             font=dict(size=LEGEND_FONT))          # text colour as the legend's
     return fig, region_text
 
@@ -1741,19 +1742,54 @@ app.clientside_callback(
                 // legend.  Both are anchored at the same paper y; the box is moved down by the
                 // legend's height (known only once drawn) through its yshift, so it stays
                 // under the legend at any window size.  Returns the relayout, or null if in place.
-                var summaryShift = function() {
+                // Both boxes also get the same width, the wider of the two: the counts box
+                // through its 'width' (text width; its frame is width + 2 x borderpad + border),
+                // the legend by setting the width of its background/frame rect (Plotly has no
+                // width setting for a vertical legend: entrywidth only works for horizontal ones).
+                // Natural widths (as Plotly draws them) are kept in gd._segreSum, reset per figure.
+                var sumIndex = function() {
                     var anns = (gd.layout && gd.layout.annotations) || [], i = -1;
                     anns.forEach(function(a, k) { if (a.name === 'idsummary') i = k; });
+                    return i;
+                };
+                var sumWidths = function() {
+                    var i = sumIndex(), S = gd._segreSum || (gd._segreSum = {});
                     if (i < 0) return null;
+                    var leg = gd.querySelector('g.legend rect.bg');
+                    var box = gd.querySelector('g.annotation[data-index="' + i + '"] rect.bg');
+                    if (!leg || !box) return null;
+                    var lw = parseFloat(leg.getAttribute('width'));
+                    if (isFinite(lw) && lw !== S.W) S.legNat = lw;          // drawn by Plotly
+                    if (gd.layout.annotations[i].width == null) S.boxNat = parseFloat(box.getAttribute('width'));
+                    if (!(S.legNat > 0) || !(S.boxNat > 0)) return null;
+                    S.W = Math.max(S.legNat, S.boxNat);
+                    return {i: i, W: S.W, leg: leg, boxNat: S.boxNat};
+                };
+                var fixLegend = function() {
+                    var s = sumWidths();
+                    if (s && parseFloat(s.leg.getAttribute('width')) !== s.W) s.leg.setAttribute('width', s.W);
+                };
+                var summaryShift = function() {
+                    var i = sumIndex();
+                    if (i < 0) return null;
+                    var a = gd.layout.annotations[i], fix = {};
                     var bg = gd.querySelector('g.legend rect.bg'), h = bg ? parseFloat(bg.getAttribute('height')) : NaN;
                     if (!isFinite(h) || h <= 0) h = ((gd._fullLayout.legend || {})._height) || 0;
-                    if (!h) return null;
-                    var want = -Math.round(h + %d);
-                    if (Math.abs((anns[i].yshift || 0) - want) < 1) return null;
-                    var fix = {};
-                    fix['annotations[' + i + '].yshift'] = want;
-                    return fix;
+                    if (h) {
+                        var want = -Math.round(h + %d);
+                        if (Math.abs((a.yshift || 0) - want) >= 1) fix['annotations[' + i + '].yshift'] = want;
+                    }
+                    var s = sumWidths();
+                    if (s && s.boxNat < s.W) {
+                        var tw = s.W - 2 * %d - 1;
+                        if (a.width == null || Math.abs(a.width - tw) >= 1) fix['annotations[' + i + '].width'] = tw;
+                    }
+                    fixLegend();
+                    return Object.keys(fix).length ? fix : null;
                 };
+                // Plotly redraws the legend (back to its own width) on some updates: put ours back
+                new MutationObserver(fixLegend).observe(gd, {subtree: true, childList: true,
+                                                             attributes: true, attributeFilter: ['width']});
                 var placeSummary = function() {
                     var fix = summaryShift();
                     if (!fix) return;
@@ -1923,12 +1959,13 @@ app.clientside_callback(
                 gd._segreSoon = soon;
             }
             gd._segreCover = null;           // a new figure has no labels yet
+            gd._segreSum = {};               // ... and its own legend / counts-box widths
             gd._segrePlaceSummary();         // counts box under the legend straight away
             gd._segreSoon();
         }, 150);
         return window.dash_clientside.no_update;
     }
-    """ % (LABEL_PX, LABEL_PX, SUMMARY_GAP, ALT_LINE_COLOUR, ALT_LINE_COLOUR, ALT_LINE_COLOUR, ALT_LINE_COLOUR),
+    """ % (LABEL_PX, LABEL_PX, SUMMARY_GAP, SUMMARY_PAD, ALT_LINE_COLOUR, ALT_LINE_COLOUR, ALT_LINE_COLOUR, ALT_LINE_COLOUR),
     Output("labels-dummy", "children"),
     Input("chart", "figure"),
 )
