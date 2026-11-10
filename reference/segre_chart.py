@@ -43,7 +43,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import browser, icon, jsonfile, logcapture, logpanel, paths, physics, tabwatch
+from core import browser, icon, jsonfile, logcapture, logpanel, paths, physics, segre_ids, tabwatch
 
 # output also to data/logs/ and the page's Log panel (core/logcapture.py)
 if __name__ == "__main__":
@@ -621,7 +621,17 @@ _CONF_CACHE = {}                      # path -> (mtime, entries)
 
 
 def ids_path():
-    return os.path.join(paths.outputs("identified"), IDS_FILE)
+    return segre_ids.ids_path()         # shared with the other tools (core/segre_ids.py)
+
+
+_OWN_MTIME = [None]                     # file time after this page's last save (not a change from outside)
+
+
+def _ids_mtime():
+    try:
+        return os.path.getmtime(ids_path())
+    except OSError:
+        return None
 
 
 def load_ids():
@@ -643,6 +653,7 @@ def load_ids():
 def save_ids(d):
     # atomic, previous version kept as .bak (core/jsonfile.py); raises on failure
     jsonfile.write(ids_path(), d, indent=1, ensure_ascii=False)
+    _OWN_MTIME[0] = _ids_mtime()
 
 
 def parse_int_list(text, lo, hi):
@@ -1186,6 +1197,7 @@ def serve_layout():
         dcc.Store(id="id-sel", data=None),          # [Z, N] of the square being edited
         dcc.Store(id="id-editing", data=None),      # id of the entry loaded into the form
         dcc.Store(id="id-ver", data=0),             # bumped after every change -> redraw
+        dcc.Store(id="ids-mtime", data=_ids_mtime()),  # file time of segre_identified.json last drawn
         html.Div(id="labels-dummy", style={"display": "none"}),
         dcc.Store(id="view", data={"rev": 0, "mark": None, "x": None, "y": None}),
         # the view on screen (set by the page after every zoom / pan), so a
@@ -1639,6 +1651,25 @@ def _id_lists_refresh(_n, _open, by, current):
         return nu, nu, nu
     return (opts, f"Theia confirmed lists ({len(files)})",
             "" if files else "No confirmed lists in outputs/confirmed.")
+
+
+@app.callback(
+    Output("ids-mtime", "data"), Output("id-ver", "data", allow_duplicate=True),
+    Input("id-lists-tick", "n_intervals"),
+    State("ids-mtime", "data"), State("id-ver", "data"),
+    prevent_initial_call=True,
+)
+def _ids_changed_outside(_n, seen, ver):
+    """segre_identified.json changed by another tool (e.g. Theia's 'Send to
+    PID plot'): redraw the chart and the panel.  This page's own saves already
+    redraw, so they are skipped."""
+    nu = dash.no_update
+    m = _ids_mtime()
+    if m == seen:
+        return nu, nu
+    if m == _OWN_MTIME[0]:
+        return m, nu
+    return m, (ver or 0) + 1
 
 
 @app.callback(

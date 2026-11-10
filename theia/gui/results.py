@@ -17,7 +17,7 @@ import plotly.graph_objects as go
 import dash
 from dash import dash_table, dcc, html, Input, Output, State
 
-from core import physics
+from core import physics, segre_ids
 from core.physics import build_ion_database, hl_allowed
 from core.scan import (db_query, DEFAULTS, list_databases, load_config, load_spectrum,
                        natural_key, parse_settings, read_kv, read_run_info, save_config)
@@ -123,6 +123,12 @@ results_tab = html.Div([
                     html.Button("Confirmation mode", id="btn-confirm-mode",
                                 className="btn btn-outline-secondary btn-sm",
                                 style={"marginRight": "16px"}),
+                    html.Button("Send to PID plot", id="btn-send-pid",
+                                title="Add the ion shown (charge state and harmonic) to the Segrè "
+                                      "chart's identified ions, as confident",
+                                className="btn btn-outline-secondary btn-sm",
+                                style={"marginRight": "8px"}),
+                    html.Span(id="send-pid-msg", style={"fontSize": "12px", "marginRight": "16px"}),
                     dcc.Checklist(id="snippet-show-excluded", value=["on"],
                                   options=[{"label": " Show ions excluded by half-life cut",
                                             "value": "on"}],
@@ -655,6 +661,42 @@ def show_snippet(idx, half_width, show_excluded, rows, path):
     except Exception as exc:
         traceback.print_exc()
         return empty_fig(f"Could not load spectrum: {exc}")
+
+
+@app.callback(
+    Output("send-pid-msg", "children"),
+    Input("btn-send-pid", "n_clicks"),
+    Input("snippet-idx", "data"),
+    State("hits-table", "derived_virtual_data"),
+    State("db-select", "value"),
+    prevent_initial_call=True,
+)
+def send_to_pid_plot(_n, idx, rows, path):
+    """'Send to PID plot': add the ion in the snippet (its charge state and
+    harmonic) to the Segrè chart as a confident identification of your own
+    (core/segre_ids.py).  Already there -> left as it is.  The message is
+    cleared when the snippet moves to another peak."""
+    trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
+    if not trig.startswith("btn-send-pid"):
+        return ""
+    if not rows or not path or idx is None or int(idx) >= len(rows):
+        return "No identification shown."
+    row = rows[int(idx)]
+    try:
+        r = db_query(path, "SELECT Z, N FROM identifications WHERE spectrum_id = ? AND peak_id = ? "
+                           "AND ion = ? AND harmonic = ? LIMIT 1",
+                     (int(row["spectrum_id"]), int(row["peak_id"]), row["ion"], int(row["harmonic"])))
+        if not len(r):
+            return "✗ This identification is not in the database any more."
+        note = (f"Sent from Theia: {row['spectrum']}, peak {float(row['peak_freq']):.1f} Hz, "
+                f"Δ = {float(row['delta_hz']):+.1f} Hz ({os.path.basename(path)})")
+        added, msg = segre_ids.add_identification(int(r.iloc[0]["Z"]), int(r.iloc[0]["N"]), row["ion"],
+                                                   int(row["harmonic"]), "confident", note)
+        print(f"Send to PID plot: {msg}", flush=True)
+        return msg
+    except Exception as exc:
+        traceback.print_exc()
+        return f"✗ Could not add it to the Segrè chart: {exc}"
 
 
 @app.callback(
