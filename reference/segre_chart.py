@@ -18,6 +18,9 @@ after its tab is closed, or with Stop on the home page.
     physics.json) and the reference ion (★).  Reloading the page reads
     physics.json again.
   * Magic numbers: lines around Z, N = 8, 20, 28, 50, 82, 126.
+  * Identified ions: a box under the legend counts the identified ground
+    states, isomers, new isomers and the half-lives / masses still to measure
+    (per nuclide state; unsure ones in brackets).
   * Search: "198Ir", "Ir198", "Ir-198", "198Ir77+", "m186Hf" – zooms to it and
     marks it.  Zoomed in far enough, the squares are labelled A + symbol.
 
@@ -331,6 +334,8 @@ NEW_STAR_COLOUR = "#ffd21f"        # bottom-left star: a new isomer (not in NUBA
                                    # NUBASE isomer is flagged as a first observation (predicted, not seen before)
 LEGEND_FONT = 15                   # legend text size (px; was the 12 px page font)
 LEGEND_MARK = 15                   # legend symbol size of the square marks (was 11)
+LEGEND_ROW_PX = 24                 # approximate legend row height (first guess for the counts box)
+SUMMARY_GAP = 6                    # px between the legend and the counts box under it
 STAR_R = 0.15                      # outer radius of that star, in squares
 ALT_COLOUR = "#1f4e9e"             # "Alternatives:" text in the entry cards
 ALT_LINE_COLOUR = "#000000"        # curved double arrow (and its label) between an identification and an alternative
@@ -549,6 +554,17 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
                    zeroline=False, scaleanchor="x", scaleratio=1, ticks="outside"),
         font=dict(family='-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif', size=12),
     )
+    if by == "identified":
+        # counts box just under the legend, styled like it.  Its height in px is only known in
+        # the browser, so the page moves the box ("idsummary") to the legend's bottom edge after
+        # each draw / resize; y here is an estimate (legend rows of LEGEND_ROW_PX) so it starts close.
+        n_leg = sum(1 for t in fig.data if t.showlegend)
+        fig.add_annotation(
+            name="idsummary", text=id_summary_text([e for es in id_cells.values() for e in es]),
+            xref="paper", yref="paper", x=0.01, y=0.99, xanchor="left", yanchor="top",
+            yshift=-(n_leg * LEGEND_ROW_PX + 2 + SUMMARY_GAP), align="left", showarrow=False,
+            bgcolor="#ffffff", bordercolor="#999999", borderwidth=1, borderpad=6,
+            font=dict(size=LEGEND_FONT))          # text colour as the legend's
     return fig, region_text
 
 
@@ -801,6 +817,50 @@ def cell_status(es):
     if any(e["status"] == "confident" for e in es):
         return "confident"
     return "unsure" if es else "not identified"
+
+
+# NUBASE "measured" flags of every state (same rule as the Measured masses / half-lives lines)
+MEASURED = {(int(z), int(n), s): (bool(h), bool(m)) for z, n, s, h, m in
+            zip(TABLE["Z"], TABLE["N"], TABLE["state"], TABLE["hl_measured"], TABLE["mass_measured"])}
+
+
+def id_summary(entries):
+    """Counts for the box under the legend (Identified ions), per nuclide state: one count per
+    ground state / NUBASE isomer / new isomer (told apart by energy), however many charge states
+    and harmonics.  A state is confident if any of its entries is, else unsure.
+    Returns [(label, confident, unsure)]:
+      Ground states, Isomers (NUBASE + new), New isomers (new + first observations),
+      New half-lives / masses to measure (identified states whose NUBASE half-life / mass excess
+      is not measured, as for the limit lines; a new isomer counts as both)."""
+    states = {}                                     # key -> [confident?, new?, first_obs?]
+    for e in entries:
+        iso = e.get("isomer", "g") or "g"
+        key = (int(e["Z"]), int(e["N"]), iso, e.get("new_ex") if iso == NEW_ISOMER else None)
+        s = states.setdefault(key, [False, iso == NEW_ISOMER, False])
+        s[0] = s[0] or e.get("status") == "confident"
+        s[2] = s[2] or is_first_obs(e)
+    rows = {k: [0, 0] for k in ("gs", "iso", "new", "hl", "mass")}
+    for (zz, nn, iso, _), (conf, new, first) in states.items():
+        i = 0 if conf else 1
+        rows["gs" if iso == "g" else "iso"][i] += 1
+        if new or first:
+            rows["new"][i] += 1
+        hl, mass = (False, False) if new else MEASURED.get((zz, nn, iso), (False, False))
+        if not hl:
+            rows["hl"][i] += 1
+        if not mass:
+            rows["mass"][i] += 1
+    labels = [("gs", "Ground states"), ("iso", "Isomers"), ("new", "New isomers"),
+              ("hl", "New half-lives to measure"), ("mass", "New masses to measure")]
+    return [(lbl, rows[k][0], rows[k][1]) for k, lbl in labels]
+
+
+def id_summary_text(entries):
+    """The box's text: 'Ground states: 42 (+7 unsure)', one line per count."""
+    lines = []
+    for lbl, conf, uns in id_summary(entries):
+        lines.append(f"{lbl}: <b>{conf}</b>" + (f" (+{uns} unsure)" if uns else ""))
+    return "<br>".join(lines)
 
 
 _ALT_RE = re.compile(r"([a-z])?(\d{1,3})([A-Z][a-z]?)(\d{1,3})\+(?:\s*h\s*=?\s*(\d+))?")
@@ -1666,14 +1726,42 @@ app.clientside_callback(
                         gd._segreView = cvKey;
                         window.dash_clientside.set_props('cur-view', {data: cv});
                     }
-                    if (!jobs.length && relayoutHD === null) return;
+                    var sumFix = summaryShift();
+                    if (!jobs.length && relayoutHD === null && !sumFix) return;
                     gd._segreBusy = true;
                     var p = Promise.resolve();
                     if (relayoutHD !== null)
                         p = p.then(function() { return Plotly.relayout(gd, {hoverdistance: relayoutHD}); });
+                    if (sumFix)
+                        p = p.then(function() { return Plotly.relayout(gd, sumFix); });
                     jobs.forEach(function(j) { p = p.then(function() { return Plotly.restyle(gd, j[0], j[1]); }); });
                     p.then(function() { gd._segreBusy = false; }, function() { gd._segreBusy = false; });
                 };
+                // Identified ions: the counts box ("idsummary" annotation) sits just under the
+                // legend.  Both are anchored at the same paper y; the box is moved down by the
+                // legend's height (known only once drawn) through its yshift, so it stays
+                // under the legend at any window size.  Returns the relayout, or null if in place.
+                var summaryShift = function() {
+                    var anns = (gd.layout && gd.layout.annotations) || [], i = -1;
+                    anns.forEach(function(a, k) { if (a.name === 'idsummary') i = k; });
+                    if (i < 0) return null;
+                    var bg = gd.querySelector('g.legend rect.bg'), h = bg ? parseFloat(bg.getAttribute('height')) : NaN;
+                    if (!isFinite(h) || h <= 0) h = ((gd._fullLayout.legend || {})._height) || 0;
+                    if (!h) return null;
+                    var want = -Math.round(h + %d);
+                    if (Math.abs((anns[i].yshift || 0) - want) < 1) return null;
+                    var fix = {};
+                    fix['annotations[' + i + '].yshift'] = want;
+                    return fix;
+                };
+                var placeSummary = function() {
+                    var fix = summaryShift();
+                    if (!fix) return;
+                    gd._segreBusy = true;
+                    Plotly.relayout(gd, fix).then(function() { gd._segreBusy = false; },
+                                                  function() { gd._segreBusy = false; });
+                };
+                gd._segrePlaceSummary = placeSummary;
                 var soon = function() {
                     clearTimeout(timer);
                     timer = setTimeout(function run() {
@@ -1835,11 +1923,12 @@ app.clientside_callback(
                 gd._segreSoon = soon;
             }
             gd._segreCover = null;           // a new figure has no labels yet
+            gd._segrePlaceSummary();         // counts box under the legend straight away
             gd._segreSoon();
         }, 150);
         return window.dash_clientside.no_update;
     }
-    """ % (LABEL_PX, LABEL_PX, ALT_LINE_COLOUR, ALT_LINE_COLOUR, ALT_LINE_COLOUR, ALT_LINE_COLOUR),
+    """ % (LABEL_PX, LABEL_PX, SUMMARY_GAP, ALT_LINE_COLOUR, ALT_LINE_COLOUR, ALT_LINE_COLOUR, ALT_LINE_COLOUR),
     Output("labels-dummy", "children"),
     Input("chart", "figure"),
 )
