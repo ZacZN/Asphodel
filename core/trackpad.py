@@ -1,27 +1,39 @@
 """
-Touchpad zoom in the suite's Plotly graphs.
+Touchpad (and mouse-wheel) zoom in the suite's Plotly graphs.
 
 Plotly zooms on every wheel event it gets. A mouse wheel sends a few large
-steps, which works well; a touchpad sends a stream of small ones, and three
-things went wrong with that:
+steps; a touchpad sends a stream of small ones, and with that:
 
-* too sensitive: every touchpad event counted as much as Plotly's per-step
-  zoom, so a short finger movement zoomed a long way;
-* slow / lagging: while a plot was redrawing (the Segrè chart takes a few
-  hundred ms) the touchpad events queued up, and were all zoomed afterwards;
-* coasting: Firefox keeps sending scroll events after the fingers leave the
-  touchpad (kinetic scrolling), so the zoom carried on after letting go.
+* every Plotly zoom step redraws the layout shapes at the new scale. The
+  Segrè chart's squares are shapes (~120k characters of path), so a step
+  took ~80 ms (15 ms without the shapes) and the touchpad stream lagged;
+* 50 ms after the last wheel event Plotly does a full redraw (the Segrè
+  chart: a few hundred ms), so every short pause in a touchpad gesture
+  froze the page while the fingers kept moving;
+* Firefox kept sending scroll events after the fingers left the touchpad
+  (kinetic scrolling), so the zoom carried on after letting go.
 
 The page script `js()` sits in front of Plotly's wheel handling (a capture
 listener on the window). For a 2-D Plotly plot with scrollZoom on:
 
-* mouse wheel (line / page steps, or large whole-pixel steps): passed to
-  Plotly as before, the same zoom per click;
+* every zoom step is handed to Plotly with the shapes left out of its
+  per-step redraw (the axes' _shapeIndices emptied for the duration of the
+  call); the shape layers are moved with an SVG transform instead (exact for
+  linear axes: a zoom is a scale + shift in pixels), clipped to the plot
+  area. Plotly's full redraw at the end draws them properly again and the
+  transform is removed. Plots with log / category axes or several subplots
+  are zoomed by Plotly as before.
+* mouse wheel (line / page steps, or large whole-pixel steps): one Plotly
+  step per click, the same zoom per click as before;
 * touchpad: the events of one animation frame are added up, scaled by
-  BASE x the speed setting, and handed to Plotly as one wheel step at the
-  latest mouse position. Events that were already older than STALE_MS when
-  the page got to them (they waited for a redraw) are dropped, and so is the
-  rest of a gesture once it looks like coasting (the steps shrinking at a
+  BASE x the speed setting, and handed to Plotly as up to MAX_STEPS steps
+  (Plotly limits one step to 20 units = 1.105x) at the latest mouse
+  position. Plotly's full redraw, which it schedules 50 ms (REDRAW_MS)
+  after each step, is held back while the fingers are on the touchpad
+  (events less than HOLD_MS apart; the setTimeout call it makes during our
+  step is caught) and run once when the gesture ends, or at once when a
+  mouse button is pressed. The rest of a
+  gesture is dropped once it looks like coasting (steps shrinking at a
   steady rate frame after frame). Sideways swipes do nothing; ctrl + wheel
   (pinch) is left to the browser.
 
@@ -47,12 +59,14 @@ from . import jsonfile, paths
 URL = "/_touchpad"
 SETTING_KEY = "touchpad_zoom_speed"
 DEFAULT_SPEED = 1.0
-SPEEDS = (0.25, 0.35, 0.5, 0.7, 1.0, 1.4, 2.0, 2.8, 4.0)   # choices on the home page
+SPEEDS = (0.25, 0.35, 0.5, 0.7, 1.0, 1.4, 2.0, 2.8, 4.0, 5.6, 8.0)   # choices on the home page
 MIN_SPEED, MAX_SPEED = 0.1, 10.0
 
-BASE = 0.35          # Plotly wheel units per touchpad pixel at speed 1 (Plotly itself: 1)
-STALE_MS = 80        # touchpad events older than this when handled are dropped
-GAP_MS = 250         # a pause this long ends a touchpad gesture
+BASE = 0.5           # Plotly wheel units per touchpad pixel at speed 1 (Plotly itself: 1)
+MAX_STEPS = 4        # Plotly steps per frame at most (one step: up to 20 units)
+GAP_MS = 250         # a pause this long ends a touchpad gesture (mouse / touchpad decided anew)
+HOLD_MS = 150        # fingers taken as still on the touchpad this long after an event
+REDRAW_MS = 50       # Plotly's REDRAWDELAY: its full redraw this long after a wheel step
 COAST_STEPS = 4      # this many steadily shrinking steps in a row = coasting
 
 
@@ -101,11 +115,11 @@ def js(url=URL):
     """Page script (no <script> tags)."""
     return """
 (function() {
-  // Touchpad zoom for the Plotly plots of this page: core/trackpad.py
+  // Touchpad / wheel zoom for the Plotly plots of this page: core/trackpad.py
   if (window.__asphodelTouchpad) return;
   window.__asphodelTouchpad = true;
-  var URL = %(url)s, BASE = %(base)s, STALE_MS = %(stale)s, GAP_MS = %(gap)s,
-      COAST_STEPS = %(coast)s, SPEED = %(speed)s;
+  var URL = %(url)s, BASE = %(base)s, MAX_STEPS = %(steps)s, GAP_MS = %(gap)s,
+      HOLD_MS = %(hold)s, REDRAW_MS = %(redraw)s, COAST_STEPS = %(coast)s, SPEED = %(speed)s;
   function load() {
     fetch(URL + '?t=' + Date.now(), {cache: 'no-store'})
       .then(function(r) { return r.json(); })
@@ -116,11 +130,14 @@ def js(url=URL):
   window.addEventListener('focus', load);
   document.addEventListener('visibilitychange', function() { if (!document.hidden) load(); });
 
+  var NS = 'http://www.w3.org/2000/svg';
   var ours = new WeakSet();        // the wheel events this script hands to Plotly
   var g = {last: -1e9, pad: false, prev: 0, ratio: 0, steady: 0, coasting: false};
   var pend = null, raf = 0;
+  var realTimeout = window.setTimeout.bind(window);
+  var held = null, endTimer = 0;   // Plotly's full redraw, held back during a touchpad gesture
 
-  // 2-D Plotly plot with scroll zoom under the event, else null
+  // 2-D Plotly plot with scroll zoom under the element, else null
   function plotOf(t) {
     if (!t || !t.closest) return null;
     var gd = t.closest('.js-plotly-plot');
@@ -128,32 +145,132 @@ def js(url=URL):
     var sz = gd._context && gd._context.scrollZoom;
     return sz ? gd : null;
   }
-  function send(target, x, y, sx, sy, dy) {
+
+  // ---- shapes moved by a transform during the zoom instead of redrawn per step
+  // one subplot, linear axes, with shapes: {xa, ya, layers} else null
+  function shapeInfo(gd) {
+    var fl = gd._fullLayout;
+    if (!fl || !fl._plots || Object.keys(fl._plots).length !== 1) return null;
+    var xa = fl.xaxis, ya = fl.yaxis;
+    if (!xa || !ya || xa.type !== 'linear' || ya.type !== 'linear') return null;
+    if (!(xa._shapeIndices || []).length && !(ya._shapeIndices || []).length) return null;
+    var layers = [];
+    var add = function(sel) { var n = sel && sel.node && sel.node(); if (n && layers.indexOf(n) < 0) layers.push(n); };
+    add(fl._shapeUpperLayer); add(fl._shapeLowerLayer);
+    for (var k in fl._plots) add(fl._plots[k].shapelayer);
+    return layers.length ? {xa: xa, ya: ya, layers: layers} : null;
+  }
+  function hook(gd) {
+    if (!gd.on || gd.__tpEv === gd._ev) return;
+    gd.__tpEv = gd._ev;
+    gd.on('plotly_afterplot', function() { unmove(gd); });
+    gd.on('plotly_relayout', function(ev) {
+      for (var k in (ev || {})) if (/^[xy]axis\\d*\\.(range|autorange)/.test(k)) { unmove(gd); return; }
+    });
+  }
+  function unmove(gd) {
+    var st = gd.__tpMove;
+    if (!st) return;
+    gd.__tpMove = null;
+    st.layers.forEach(function(n) { n.removeAttribute('transform'); });
+    st.parents.forEach(function(n) { n.removeAttribute('clip-path'); });
+    if (st.clip && st.clip.parentNode) st.clip.parentNode.removeChild(st.clip);
+  }
+  function lin(ax) { return [ax.r2l(ax.range[0]), ax.r2l(ax.range[1])]; }
+  function place(gd) {
+    var st = gd.__tpMove;
+    if (!st) return;
+    var xa = st.xa, ya = st.ya, nx = lin(xa), ny = lin(ya), r = st.r;
+    if (nx[1] === nx[0] || ny[1] === ny[0]) return;
+    var sx = (r[1] - r[0]) / (nx[1] - nx[0]), sy = (r[3] - r[2]) / (ny[1] - ny[0]);
+    var tx = xa._offset * (1 - sx) + (r[0] - nx[0]) / (nx[1] - nx[0]) * xa._length;
+    var ty = (ya._offset + ya._length) * (1 - sy) - (r[2] - ny[0]) / (ny[1] - ny[0]) * ya._length;
+    var tf = 'matrix(' + sx + ',0,0,' + sy + ',' + tx + ',' + ty + ')';
+    st.layers.forEach(function(n) { n.setAttribute('transform', tf); });
+  }
+  function startMove(gd, info) {
+    var xa = info.xa, ya = info.ya, x = lin(xa), y = lin(ya);
+    var st = {xa: xa, ya: ya, layers: info.layers, r: [x[0], x[1], y[0], y[1]], parents: [], clip: null};
+    // clip the moved layers to the plot area (their own clip paths move with them)
+    var svg = gd.querySelector('svg.main-svg');
+    var defs = svg && (svg.querySelector('defs') || svg.insertBefore(document.createElementNS(NS, 'defs'), svg.firstChild));
+    if (defs) {
+      var id = 'tpclip-' + Math.random().toString(36).slice(2, 9);
+      var cp = document.createElementNS(NS, 'clipPath'); cp.setAttribute('id', id);
+      var rc = document.createElementNS(NS, 'rect');
+      rc.setAttribute('x', xa._offset); rc.setAttribute('y', ya._offset);
+      rc.setAttribute('width', xa._length); rc.setAttribute('height', ya._length);
+      cp.appendChild(rc); defs.appendChild(cp); st.clip = cp;
+      info.layers.forEach(function(n) {
+        var p = n.parentNode;
+        if (p && st.parents.indexOf(p) < 0) { p.setAttribute('clip-path', 'url(#' + id + ')'); st.parents.push(p); }
+      });
+    }
+    gd.__tpMove = st;
+  }
+
+  // Plotly's redraw timer set during fn() is kept in `held` instead of started
+  function holding(fn) {
+    var st = window.setTimeout;
+    window.setTimeout = function(cb, ms) {
+      if (ms === REDRAW_MS && typeof cb === 'function' && arguments.length <= 2) { held = cb; return 0; }
+      return st.apply(window, arguments);
+    };
+    try { fn(); } finally { window.setTimeout = st; }
+  }
+  function release() {
+    clearTimeout(endTimer); endTimer = 0;
+    var cb = held; held = null;
+    if (cb) cb();
+  }
+  window.addEventListener('mousedown', release, true);
+
+  // one Plotly zoom step (dy in Plotly units), shapes moved instead of redrawn;
+  // hold: keep Plotly's full redraw back (touchpad)
+  function step(target, x, y, sx, sy, dy, hold) {
+    var gd = plotOf(target);
+    var info = gd && shapeInfo(gd);
     var ev = new WheelEvent('wheel', {deltaY: dy, deltaX: 0, deltaMode: 0,
       clientX: x, clientY: y, screenX: sx, screenY: sy, bubbles: true, cancelable: true});
     ours.add(ev);
-    target.dispatchEvent(ev);
+    var send = function() { target.dispatchEvent(ev); };
+    var run = hold ? function() { holding(send); } : send;
+    if (!info) { run(); return; }
+    hook(gd);
+    if (gd.__tpMove && gd.__tpMove.xa !== info.xa) unmove(gd);   // replotted meanwhile
+    if (!gd.__tpMove) startMove(gd, info);
+    var xs = info.xa._shapeIndices, ys = info.ya._shapeIndices;
+    info.xa._shapeIndices = []; info.ya._shapeIndices = [];
+    try { run(); }
+    finally { info.xa._shapeIndices = xs; info.ya._shapeIndices = ys; }
+    place(gd);
+  }
+  function targetAt(p) {
+    var t = document.elementFromPoint(p.x, p.y);
+    if (plotOf(t)) return t;
+    return p.target && p.target.isConnected && plotOf(p.target) ? p.target : null;
   }
   function flush() {
     raf = 0;
     var p = pend; pend = null;
     if (!p || !p.dy) return;
-    // the plot may have rebuilt its drag layer since: target the element now under the mouse
-    var t = document.elementFromPoint(p.x, p.y);
-    if (!plotOf(t)) t = p.target.isConnected ? p.target : null;
+    var t = targetAt(p);
     if (!t) return;
-    send(t, p.x, p.y, p.sx, p.sy, p.dy * BASE * SPEED);
+    var d = p.dy * BASE * SPEED;
+    for (var i = 0; i < MAX_STEPS && Math.abs(d) > 1e-6; i++) {
+      var s = Math.max(-20, Math.min(20, d));
+      step(t, p.x, p.y, p.sx, p.sy, s, true);
+      d -= s;
+    }
   }
-
   window.addEventListener('wheel', function(e) {
     if (ours.has(e) || e.ctrlKey) return;            // our own step / pinch
     if (!plotOf(e.target)) return;                   // not a plot: page scrolling etc.
     var mode = e.deltaMode, dy = e.deltaY, dx = e.deltaX;   // deltaMode read first (Firefox)
     var now = performance.now();
-    var newGesture = now - g.last > GAP_MS;
-    if (newGesture) {
-      // a wheel click: line / page steps, or a large whole-pixel step with no sideways part
-      // (fractional line steps come from a touchpad)
+    if (now - g.last > GAP_MS) {
+      // a wheel click: line / page steps, or a large whole-pixel step with no sideways
+      // part (fractional line steps come from a touchpad)
       g.pad = mode === 1 ? !Number.isInteger(dy)
             : !(mode === 2 || (dx === 0 && Math.abs(dy) >= 50 && Number.isInteger(dy)));
       g.prev = 0; g.ratio = 0; g.steady = 0; g.coasting = false;
@@ -162,13 +279,16 @@ def js(url=URL):
     e.preventDefault();
     e.stopImmediatePropagation();
     if (!g.pad) {
-      // mouse wheel: as before (Plotly limits a step to 20 units anyway)
+      release();
+      // mouse wheel: one step per click as before (Plotly limits a step to 20 units)
       var px = mode === 1 ? dy * 16 : mode === 2 ? dy * 400 : dy;
-      send(e.target, e.clientX, e.clientY, e.screenX, e.screenY, px);
+      step(e.target, e.clientX, e.clientY, e.screenX, e.screenY, px);
       return;
     }
     // touchpad
-    if (now - e.timeStamp > STALE_MS) return;        // waited for a redraw: drop
+    // Plotly's full redraw once the fingers have been still for HOLD_MS
+    clearTimeout(endTimer);
+    endTimer = realTimeout(release, HOLD_MS);
     if (Math.abs(dx) > Math.abs(dy)) return;         // sideways swipe
     var a = Math.abs(dy);
     if (g.coasting) {
@@ -188,5 +308,5 @@ def js(url=URL):
     if (!raf) raf = requestAnimationFrame(flush);
   }, {capture: true, passive: false});
 })();
-""" % {"url": json.dumps(url), "base": BASE, "stale": STALE_MS, "gap": GAP_MS,
-       "coast": COAST_STEPS, "speed": json.dumps(speed())}
+""" % {"url": json.dumps(url), "base": BASE, "steps": MAX_STEPS, "gap": GAP_MS,
+       "hold": HOLD_MS, "redraw": REDRAW_MS, "coast": COAST_STEPS, "speed": json.dumps(speed())}
