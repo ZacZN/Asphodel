@@ -36,7 +36,10 @@ user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);
 user_pref("browser.tabs.warnOnClose", false);
 user_pref("browser.warnOnQuit", false);
 user_pref("browser.sessionstore.resume_from_crash", false);
+user_pref("apz.gtk.kinetic_scroll.enabled", false);
 """
+# (the last line: no coasting after the fingers leave the touchpad, so a
+# touchpad zoom in the plots stops when you let go; core/trackpad.py)
 
 
 def firefox():
@@ -63,9 +66,19 @@ def profile_dir(exe):
 def _prepare_profile(path):
     os.makedirs(path, exist_ok=True)
     uj = os.path.join(path, "user.js")
-    if not os.path.isfile(uj):
-        with open(uj, "w") as fh:
-            fh.write(_USER_JS)
+    try:
+        with open(uj) as fh:
+            have = fh.read()
+    except OSError:
+        have = ""
+    # add the lines that are missing (a profile made by an older version);
+    # Firefox reads user.js when the suite's Firefox starts
+    missing = [ln for ln in _USER_JS.splitlines() if ln and ln not in have.splitlines()]
+    if missing:
+        with open(uj, "a") as fh:
+            if have and not have.endswith("\n"):
+                fh.write("\n")
+            fh.write("\n".join(missing) + "\n")
 
 
 def _running(path):

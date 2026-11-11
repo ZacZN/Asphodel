@@ -43,7 +43,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import browser, icon, jsonfile, logcapture, logpanel, paths, physics, segre_ids, tabwatch
+from core import browser, icon, jsonfile, logcapture, logpanel, paths, physics, segre_ids, tabwatch, trackpad
 
 # output also to data/logs/ and the page's Log panel (core/logcapture.py)
 if __name__ == "__main__":
@@ -1032,6 +1032,7 @@ app = dash.Dash(__name__, title="Segrè chart", suppress_callback_exceptions=Tru
 app.index_string = app.index_string.replace("</head>", f"<style>{CSS}</style></head>")
 app.index_string = app.index_string.replace(
     "{%scripts%}", "{%scripts%}\n<script>" + tabwatch.watch_js("Segrè chart") + "</script>")
+trackpad.install_dash(app)           # touchpad zoom (core/trackpad.py)
 icon.use_in_dash(app, "segre")       # core/icons/segre.png, else asphodel.png
 
 

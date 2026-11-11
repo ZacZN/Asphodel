@@ -42,7 +42,7 @@ import webbrowser
 
 sys.path.insert(1, os.path.dirname(os.path.abspath(__file__)))
 from core import (browser, corrections, folderpick, icon, jsonfile, labbook, logcapture, logpanel,
-                  paths, physics, sync, tabwatch, version)
+                  paths, physics, sync, tabwatch, trackpad, version)
 
 # output also to data/logs/ and the page's Log panel (core/logcapture.py)
 if __name__ == "__main__":
@@ -556,12 +556,30 @@ def changelog_panel(n=20):
                     className="changelog")
 
 
+def touchpad_panel():
+    """Touchpad zoom speed of the plots in every tool (core/trackpad.py)."""
+    cur = trackpad.speed()
+    marks = {i: f"{v:g}×" for i, v in enumerate(trackpad.SPEEDS)}
+    idx = min(range(len(trackpad.SPEEDS)), key=lambda i: abs(trackpad.SPEEDS[i] - cur))
+    return html.Div([
+        html.Label("Touchpad zoom speed", className="flabel"),
+        dcc.Slider(id="touchpad-speed", min=0, max=len(trackpad.SPEEDS) - 1, step=1,
+                   value=idx, marks=marks, included=False, updatemode="mouseup"),
+        html.Div(id="touchpad-msg", className="note"),
+        html.Div("Two-finger swipe up/down in a plot zooms; this sets how far. "
+                 "Mouse-wheel zoom is not affected. A tool picks up a change when you "
+                 "switch back to its tab.", className="note"),
+    ])
+
+
 def sidebar():
     nub = os.path.join(paths.REPO_ROOT, "core", "nubase_4.mas20")
     return html.Aside([
         html.Div([
             html.Details([html.Summary("Shared physics"), physics_panel()],
                          open=False, className="fold first"),
+            html.Details([html.Summary("Touchpad"), touchpad_panel()],
+                         open=False, className="fold"),
             html.H3("Reference data"),
             html.Div([html.B("NUBASE"), html.Code("core/nubase_4.mas20"),
                       html.Div(_mtime(nub))], className="src"),
@@ -1201,6 +1219,20 @@ def save_physics(_n, values, ids):
     except (TypeError, ValueError) as exc:
         return f"⚠ Not saved: {exc}"
     return f"Saved {datetime.datetime.now():%H:%M:%S}."
+
+
+@app.callback(
+    Output("touchpad-msg", "children"),
+    Input("touchpad-speed", "value"),
+    prevent_initial_call=True,
+)
+def save_touchpad_speed(idx):
+    try:
+        v = trackpad.set_speed(trackpad.SPEEDS[int(idx)])
+    except (OSError, ValueError, TypeError, IndexError) as exc:
+        print(f"Touchpad speed not saved: {exc}", flush=True)
+        return f"Not saved: {exc}"
+    return f"Saved: {v:g}×"
 
 
 @app.callback(

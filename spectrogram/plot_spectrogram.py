@@ -91,7 +91,7 @@ def slice_freq(freq, power, freq_min, freq_max):
 
 _HERE       = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(1, os.path.dirname(_HERE))
-from core import baseline, browser, icon, jsonfile, logcapture, logpanel, offline, paths, tabwatch
+from core import baseline, browser, icon, jsonfile, logcapture, logpanel, offline, paths, tabwatch, trackpad
 
 # output also to data/logs/ and the page's Log panel (core/logcapture.py)
 if __name__ == "__main__":
@@ -1508,6 +1508,7 @@ def loader_parts(file_path=None, fmin=None, fmax=None):
     js = LOADER_JS.replace("__INIT__", json.dumps({"dir": start_dir}).replace("</", "<\\/"))
     # every page has the loader: close the tab when this program stops
     js += tabwatch.watch_js("plot_spectrogram.py", dark=True)
+    js += trackpad.js()        # touchpad zoom in the plots (core/trackpad.py)
     return html, js
 
 
@@ -2957,6 +2958,9 @@ def serve(html, state):
                                   "c_text": physics._fmt_num(x["c"])} for x in profs],
                     "match": name, "custom": corrections.CUSTOM,
                     "custom_label": corrections.CUSTOM_LABEL, "info": info, "warnings": warns})
+
+            elif url.path == trackpad.URL:
+                self._send(200, trackpad.response())
 
             elif url.path == "/get-pref":
                 key = q.get("key", [""])[0]
