@@ -86,10 +86,19 @@ def _running(path):
     return os.path.lexists(os.path.join(path, "lock"))
 
 
+def no_browser():
+    """True when ASPHODEL_NO_BROWSER is set (tests, servers): the tools then
+    only print their address and open no browser."""
+    return os.environ.get("ASPHODEL_NO_BROWSER", "").strip() not in ("", "0")
+
+
 def open_url(url, new_window=False):
     """Open url in the suite's Firefox window (a new tab there, or a new
     window). Returns True if Firefox was used, False if it fell back to the
-    default browser."""
+    default browser (or if no browser is to be opened, see no_browser())."""
+    if no_browser():
+        print(f"(ASPHODEL_NO_BROWSER set: not opening {url})")
+        return False
     exe = firefox()
     if not exe:
         (webbrowser.open_new if new_window else webbrowser.open)(url)

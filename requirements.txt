@@ -1,0 +1,14 @@
+# Python packages Asphodel needs (install.sh installs them into .venv/).
+# System packages (Ubuntu/Debian): python3-venv python3-tk; zenity is recommended
+# (folder dialogs), firefox is recommended (the suite's own window).
+dash>=2.14
+dash-bootstrap-components>=1.5
+plotly>=5.18
+flask>=2.2
+numpy>=1.24
+scipy>=1.10
+pandas>=2.0
+matplotlib>=3.7
+pybaselines>=1.0       # baseline removal (spectrogram, decay fit)
+openpyxl>=3.1          # RionID .xlsx tables
+odfpy>=1.4             # .ods spreadsheets (intensity variation fit)
