@@ -11,7 +11,7 @@ from .common import BOX_BORDER
 
 # ---- ⓘ info buttons: the help text of a section, shown in a popup ----------
 INFO_TEXTS = {
-    "sum": ("Sum spectra", [
+    "sum": ("Sum Spectra", [
         "Each spectrum is added once, however many identifications or files it appears in.",
         "Aligned spectra are shifted by whole bins (never interpolated) so the chosen peak sits "
         "where it is in the first spectrum; what is left over (at most half a bin) is shown.",
@@ -25,19 +25,19 @@ INFO_TEXTS = {
         "reference harmonic), with the scan settings stored in the first loaded file.  Ions in the "
         "loaded files are dark dashed, others light dashed, half-life-excluded dotted.",
         "Data source 'Single spectrum file': any .npz spectrum (e.g. a Tartarus sum in "
-        "summed_1d, or the file open in the Viewer via 'Use Viewer spectrum') is shown as it is, "
+        "summed_1d, or the file open in the Viewer via 'Use Viewer Spectrum') is shown as it is, "
         "for fitting and the energy calculation.  Its simulated lines use the Viewer settings "
         "(no half-life cut), with the strongest peak as the reference.",
         "Search ions…: type part of an ion name to list its simulated lines on the plotted "
         "spectrum; click one to zoom to f_sim ± the width (kHz, default ±10).  h−1 / h+1 then "
         "zoom to the same ion at the neighbouring harmonic.",
     ]),
-    "fit": ("Peak fitting", [
+    "fit": ("Peak Fitting", [
         "Switch it on and click a peak to add it (the start values snap to the nearest maximum).",
         "Edit any value in the table to adjust the curve by hand, or press Fit.  Delete a row to "
         "remove a peak.",
         "The fit region is set by the two orange lines (set from the view when the first peak is "
-        "added).  Drag a line, type the limits, or press 'Region = view'.",
+        "added).  Drag a line, type the limits, or press 'Region = View'.",
         "Drag a peak's × marker to move its centre and amplitude together (cursor ✥); drag below "
         "the marker to move the centre only (cursor ↔); drag a ◆ handle at half height to change "
         "the FWHM.",
@@ -45,12 +45,12 @@ INFO_TEXTS = {
         "peaks added from then on.",
         "χ²/ndf uses a noise σ per bin estimated from the summed spectrum; uncertainties are "
         "scaled by √(χ²/ndf).",
-        "'Send to isocurve' sends every fitted peak to the Isochronicity Curve tab.  Each peak "
+        "'Send to Isocurve' sends every fitted peak to the Isochronicity Curve tab.  Each peak "
         "needs an ion name with its charge (e.g. 207Tl81+, m207Tl81+) and a harmonic: type them "
         "in the ion / h columns, or you are asked for the missing ones (with nearby simulated "
         "ions as suggestions).  Press Fit first.",
     ]),
-    "energy": ("Energy calculation", [
+    "energy": ("Energy Calculation", [
         "Step 1 – calibration: click two peaks, give their NUBASE names (or click a suggested "
         "nearby simulated ion) and press Calibrate.",
         "A click on a peak of the main fit (within half its FWHM) uses its fitted centre; anywhere "
@@ -62,8 +62,8 @@ INFO_TEXTS = {
         "A linear keV-per-Hz calibration is only accurate for pairs close in frequency to the "
         "calibration peaks (ideally the same A/q).",
     ]),
-    "iso": ("Isochronicity curve", [
-        "Points come from 'Send to isocurve' in the peak-fitting box of Aligning and fitting: "
+    "iso": ("Isochronicity Curve", [
+        "Points come from 'Send to Isocurve' in the peak-fitting box of Aligning and fitting: "
         "one row per ion and harmonic, with the fitted centre, FWHM, amplitude, area (± 1σ) and "
         "the revolution frequency f_rev = centre / h.",
         "They are saved in outputs/isocurve/isocurve_points.csv of the active experiment, so "
@@ -72,7 +72,7 @@ INFO_TEXTS = {
         "Delete a row (×) to remove the point from the file.",
         "'fixed' lists parameters held fixed in the fit (their uncertainty is 0).",
     ]),
-    "isofit": ("Isochronicity curve fit", [
+    "isofit": ("Isochronicity Curve Fit", [
         "σ_T(T) = √( ((1/γ² − 1/γ_t²) · σp/p · T)² + σ_sys² ),  with 1/γ² = 1 − (C / (c·T))², "
         "C the ring circumference.  Fitted parameters: γ_t, σp/p, σ_sys, within the min – max "
         "bounds.",
@@ -95,10 +95,10 @@ INFO_TEXTS = {
         "1000 / 2√(2 ln 2), added in quadrature.  With "
         "the auto floor also ticked, the floor is fitted on top of it (what is left over).",
         "Settings are saved per experiment (settings/isocurve.json).",
-        "'Save figure' draws the plot and residuals with matplotlib and saves PNG + PDF in "
+        "'Save Figure' draws the plot and residuals with matplotlib and saves PNG + PDF in "
         "outputs/figures/.",
     ]),
-    "params": ("Fit parameters", [
+    "params": ("Fit Parameters", [
         "centre, amplitude (height above the background), FWHM and – for pseudo-Voigt – η "
         "(Lorentzian fraction) can be edited; the curve is redrawn straight away.",
         "± columns are the 1σ uncertainties from the last Fit (cleared when you change anything "

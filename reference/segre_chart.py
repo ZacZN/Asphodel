@@ -237,7 +237,7 @@ def colouring(rows, by, id_cells=None):
         z = rows["mode"].map(MODE_INDEX).to_numpy(dtype=float)
         n = len(MODES)
         return z, _stepped([c for _, c in MODES]), -0.5, n - 0.5, \
-            dict(title="Main decay", tickvals=list(range(n)), ticktext=[m for m, _ in MODES])
+            dict(title="Main Decay", tickvals=list(range(n)), ticktext=[m for m, _ in MODES])
     raise ValueError(f"unknown colouring {by!r}")
 
 
@@ -1028,10 +1028,10 @@ header .exp{{color:#777;font-family:monospace;font-size:12px}}
 .alllist button{{display:block;width:100%;text-align:left;margin:3px 0;font-family:monospace;font-size:12px}}
 """
 
-app = dash.Dash(__name__, title="Segrè chart", suppress_callback_exceptions=True)
+app = dash.Dash(__name__, title="Segrè Chart", suppress_callback_exceptions=True)
 app.index_string = app.index_string.replace("</head>", f"<style>{CSS}</style></head>")
 app.index_string = app.index_string.replace(
-    "{%scripts%}", "{%scripts%}\n<script>" + tabwatch.watch_js("Segrè chart") + "</script>")
+    "{%scripts%}", "{%scripts%}\n<script>" + tabwatch.watch_js("Segrè Chart") + "</script>")
 trackpad.install_dash(app)           # touchpad zoom (core/trackpad.py)
 icon.use_in_dash(app, "segre")       # core/icons/segre.png, else asphodel.png
 
@@ -1043,9 +1043,9 @@ def id_panel():
     have = {n for n, _ in files}
     lbl = lambda t: html.Label(t, className="f")
     return html.Div([
-        html.H4(["Identified ions", html.Span(id="id-count")]),
+        html.H4(["Identified Ions", html.Span(id="id-count")]),
         html.Details([
-            html.Summary(f"Theia confirmed lists ({len(files)})", id="id-lists-summary"),
+            html.Summary(f"Theia Confirmed Lists ({len(files)})", id="id-lists-summary"),
             html.Div("Lists whose ions are shown as identified too (read-only; "
                      "accepted → confident, only unsure → unsure).", className="hint"),
             dcc.Checklist(id="id-lists", className="lists",
@@ -1074,7 +1074,7 @@ def id_panel():
                                     dcc.Input(id="id-new-ex-unc", type="text", inputMode="decimal",
                                               placeholder="optional", autoComplete="off")])],
                          className="row"),
-                html.Div([html.Div([lbl("Half-life T½"),
+                html.Div([html.Div([lbl("Half-Life T½"),
                                     dcc.Input(id="id-new-t", type="text", inputMode="decimal",
                                               placeholder="optional", autoComplete="off")]),
                           html.Div([lbl("±"),
@@ -1106,7 +1106,7 @@ def id_panel():
                            options=[{"label": "Confident", "value": "confident"},
                                     {"label": "Unsure", "value": "unsure"}]),
             html.Div([
-                lbl("Alternative identifications"),
+                lbl("Alternative Identifications"),
                 dcc.Input(id="id-alts", type="text", className="wide", autoComplete="off",
                           placeholder="e.g. 204Au79+ h214, m203Pt78+"),
                 html.Div("Other ions this peak could be, separated by commas; the harmonic is "
@@ -1115,11 +1115,11 @@ def id_panel():
             lbl("Notes"),
             dcc.Textarea(id="id-notes", value=""),
             html.Div([html.Button("Add", id="id-save", className="btn primary", n_clicks=0),
-                      html.Button("Cancel edit", id="id-cancel", className="btn", n_clicks=0,
+                      html.Button("Cancel Edit", id="id-cancel", className="btn", n_clicks=0,
                                   style={"display": "none"})], className="btns"),
             html.Div(id="id-msg", className="msg"),
         ], id="id-form", className="form", style={"display": "none"}),
-        html.Div("All identified", className="sub"),
+        html.Div("All Identified", className="sub"),
         html.Div(id="id-all", className="alllist"),
     ], id="id-panel", className="panel", style={"display": "none"})
 
@@ -1159,7 +1159,7 @@ def serve_layout():
                               className="exp"),
                      logpanel.dash_button(style={"marginLeft": "auto"})]),
         html.Div([
-            html.Div([html.Label("Colour by", className="t"),
+            html.Div([html.Label("Colour By", className="t"),
                       dcc.Dropdown(id="by", clearable=False, className="dd", value="identified",
                                    options=[{"label": "Half-life", "value": "halflife"},
                                             {"label": "Main decay mode", "value": "mode"},
@@ -1183,9 +1183,9 @@ def serve_layout():
                                 debounce=False, n_submit=0, autoComplete="off",
                                 style={"width": "150px"}),
                       html.Span(id="q-msg", className="msg")], className="grp"),
-            html.Div([html.Button("Experiment region", id="zoom-region", className="btn", n_clicks=0,
+            html.Div([html.Button("Experiment Region", id="zoom-region", className="btn", n_clicks=0,
                                   title="Zoom to the experiment's Z/N window"),
-                      html.Button("Whole chart", id="zoom-all", className="btn", n_clicks=0)],
+                      html.Button("Whole Chart", id="zoom-all", className="btn", n_clicks=0)],
                      className="grp"),
         ], className="bar"),
         html.Div(id="region-info", className="info"),
@@ -1207,7 +1207,7 @@ def serve_layout():
     ], className="page")
 
 
-app.layout = logpanel.dash_layout(serve_layout, "Segrè chart")
+app.layout = logpanel.dash_layout(serve_layout, "Segrè Chart")
 logpanel.register_dash(app)
 
 
@@ -1284,7 +1284,7 @@ def _id_panel_shown(by):
     prevent_initial_call=True,
 )
 def _id_select(click, _go, by):
-    """Click a square (Identified ions only), or a nuclide in the 'All identified' list."""
+    """Click a square (Identified ions only), or a nuclide in the 'All Identified' list."""
     t = ctx.triggered_id
     if isinstance(t, dict) and t.get("type") == "idgo":
         if not (ctx.triggered and ctx.triggered[0]["value"]):
@@ -1516,7 +1516,7 @@ def _id_edit(_save, _cancel, _edit, _del, sel, iso, charge, harm, status, notes,
             return _out(editing=e["id"], iso=e.get("isomer", "g"), charge=str(e["charge"]),
                         harm=str(e["harmonic"]), status=e["status"], notes=e.get("notes", ""),
                         alts=alts_input_text(e), first_obs=["yes"] if is_first_obs(e) else [],
-                        save_label="Save changes", cancel_style={},
+                        save_label="Save Changes", cancel_style={},
                         msg=f"Editing {ion_name(e)} h{e['harmonic']} from a Theia list: only its "
                             "alternatives, notes and first-observation flag are saved here "
                             "(the rest comes from the list).",
@@ -1533,7 +1533,7 @@ def _id_edit(_save, _cancel, _edit, _del, sel, iso, charge, harm, status, notes,
                     new_t=_str(e.get("new_t")), new_t_unc=_str(e.get("new_t_unc")),
                     new_t_unit=e.get("new_t_unit") or "s", alts=alts_input_text(e),
                     first_obs=["yes"] if is_first_obs(e) else [],
-                    msg=f"Editing {ion_name(e)} h{e['harmonic']}", save_label="Save changes",
+                    msg=f"Editing {ion_name(e)} h{e['harmonic']}", save_label="Save Changes",
                     cancel_style={}, **UNLOCKED)
     # Save a Theia-list ion's add-ons (alternatives, notes)
     if editing and str(editing).startswith("theia:"):
@@ -1650,7 +1650,7 @@ def _id_lists_refresh(_n, _open, by, current):
     opts = [{"label": lab, "value": n} for n, lab in files]
     if opts == (current or []):
         return nu, nu, nu
-    return (opts, f"Theia confirmed lists ({len(files)})",
+    return (opts, f"Theia Confirmed Lists ({len(files)})",
             "" if files else "No confirmed lists in outputs/confirmed.")
 
 
@@ -2032,7 +2032,7 @@ app.clientside_callback(
 )
 
 
-_TABS = tabwatch.TabTracker(on_last_closed=lambda: os._exit(0), name="Segrè chart")
+_TABS = tabwatch.TabTracker(on_last_closed=lambda: os._exit(0), name="Segrè Chart")
 tabwatch.install_flask(app.server, _TABS)
 
 

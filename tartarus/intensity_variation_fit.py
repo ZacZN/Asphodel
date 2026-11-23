@@ -126,7 +126,7 @@ def main(path, exclude=()):
     out = os.path.join(paths.outputs("figures"), "linear_fit.png")
     fig.savefig(out, dpi=200, bbox_inches="tight")
     print(f"Saved {out}")
-    logpanel.add_mpl_buttons([0.925, 0.955, 0.07, 0.04], "Intensity variation fit")
+    logpanel.add_mpl_buttons([0.925, 0.955, 0.07, 0.04], "Intensity Variation Fit")
     plt.show()
 
 

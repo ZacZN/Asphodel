@@ -75,14 +75,14 @@ Fit failures
 
 Saving a fit
 ------------
-  The plot window has a "Save fit parameters" button (top left). It writes
+  The plot window has a "Save Fit Parameters" button (top left). It writes
   one JSON record per fit (results only - use the window's own save icon
   for the figure) to data/<experiment>/outputs/fits/ (see core/paths.py):
   fit_<YYYYmmdd_HHMMSS>_<file>[_<title>].json with the input file, the
   windows and options used, every parameter (value, error, fitted/fixed),
   the half-lives (lab and c.o.m.), chi^2/ndf and the error model.
 
-  "Save to log book" (next to it) opens a popout to send the half-lives and
+  "Save to Log Book" (next to it) opens a popout to send the half-lives and
   the figure to the experiment's results log book (one tab per ion; with a
   Bateman / joint fit the parent and daughter half-lives each go to their own
   ion): core/logbook_dialog.py, core/results_logbook.py.
@@ -128,12 +128,12 @@ _NON_GUI_BACKENDS = {"agg", "cairo", "pdf", "pgf", "ps", "svg", "template"}
 def show_window():
     """plt.show(), reporting to the spectrogram page once the window is drawn.
     Every window gets an "Output" button (what this fit printed: core/logpanel.py),
-    next to "Save fit parameters" where there is one."""
+    next to "Save Fit Parameters" where there is one."""
     logpanel.add_mpl_buttons(lambda f: [0.30, 0.945, 0.07, 0.045]
                              if hasattr(f, "_logbook_button") else
                              [0.16, 0.945, 0.07, 0.045]
                              if hasattr(f, "_save_fit_button") else [0.005, 0.945, 0.07, 0.045],
-                             "Decay fit")
+                             "Decay Fit")
     if READY_FILE:
         backend = plt.get_backend().lower()
         if backend in _NON_GUI_BACKENDS:
@@ -732,7 +732,7 @@ def _place_boxes_once(fig, ax, xy_sets, fixed, legend_kw, log, max_iter, pad_px,
 
 
 # ---------------------------------------------------------------------------
-# Fit records (JSON, saved with the "Save fit parameters" button in the plot window)
+# Fit records (JSON, saved with the "Save Fit Parameters" button in the plot window)
 # ---------------------------------------------------------------------------
 
 FIT_RECORD_FORMAT = "asphodel-decay-fit"
@@ -883,14 +883,14 @@ def save_fit_record(record):
 
 
 def add_save_button(fig, record):
-    """'Save fit parameters' button in the top-left corner of the figure. One click saves
+    """'Save Fit Parameters' button in the top-left corner of the figure. One click saves
     the record; later clicks only say where it was saved."""
     ax_btn = fig.add_axes([0.005, 0.945, 0.15, 0.045])
     try:
         ax_btn.set_in_layout(False)               # not moved by constrained layout
     except AttributeError:
         pass
-    btn = Button(ax_btn, "Save fit parameters", color="#fff4ec", hovercolor="#f57d15")
+    btn = Button(ax_btn, "Save Fit Parameters", color="#fff4ec", hovercolor="#f57d15")
     btn.label.set_fontsize(13)
     state = {"path": None}
 
@@ -900,11 +900,11 @@ def add_save_button(fig, record):
                 state["path"] = save_fit_record(record)
             except Exception as exc:
                 print(f"Could not save the fit: {exc}")
-                btn.label.set_text("Save failed")
+                btn.label.set_text("Save Failed")
                 fig.canvas.draw_idle()
                 return
             print(f"Fit saved to {state['path']}")
-            btn.label.set_text("Parameters saved ✓")
+            btn.label.set_text("Parameters Saved ✓")
         else:
             print(f"Already saved: {state['path']}")
         fig.canvas.draw_idle()
@@ -915,7 +915,7 @@ def add_save_button(fig, record):
 
 
 # ---------------------------------------------------------------------------
-# "Save to log book" (results log book, core/results_logbook.py)
+# "Save to Log Book" (results log book, core/results_logbook.py)
 # ---------------------------------------------------------------------------
 
 def _hl_items(hl, slot, who=""):
@@ -935,7 +935,7 @@ def _hl_items(hl, slot, who=""):
 
 
 def logbook_spec(record):
-    """What the "Save to log book" popout (core/logbook_dialog.py) offers for a fit."""
+    """What the "Save to Log Book" popout (core/logbook_dialog.py) offers for a fit."""
     label = record.get("label") or ""
     ions = ["".join(m.groups()[:3]) + m.group(4) + "+" for m in _ION_RE.finditer(label)]
     harm = _HARM_RE.search(label)
@@ -956,23 +956,23 @@ def logbook_spec(record):
         items.append({"label": "χ²/ndf", "value": round(res["chi2_ndf"], 3), "slot": None})
     fw = st.get("freq_window_hz") or []
     if len(fw) == 2 and None not in fw:
-        items.append({"label": "Daughter window" if record.get("mode") == "joint" else "Frequency window",
+        items.append({"label": "Daughter Window" if record.get("mode") == "joint" else "Frequency Window",
                       "value": f"{fw[0]:.1f} – {fw[1]:.1f}", "unit": "Hz", "slot": None,
                       "checked": False})
     pw = st.get("parent_window_hz")
     if pw and None not in pw:
-        items.append({"label": "Parent window", "value": f"{pw[0]:.1f} – {pw[1]:.1f}", "unit": "Hz",
+        items.append({"label": "Parent Window", "value": f"{pw[0]:.1f} – {pw[1]:.1f}", "unit": "Hz",
                       "slot": None, "checked": False})
     tr = res.get("t_range_s") or []
     if len(tr) == 2 and None not in tr:
-        items.append({"label": "Fit time range", "value": f"{tr[0]:.4g} – {tr[1]:.4g}", "unit": "s",
+        items.append({"label": "Fit Time Range", "value": f"{tr[0]:.4g} – {tr[1]:.4g}", "unit": "s",
                       "slot": None, "checked": False})
     mode = {"decay": "exponential decay", "bateman": "Bateman (A → B)",
             "joint": "joint parent + daughter (Bateman)"}.get(record.get("mode"), record.get("mode"))
     context = {"file": record.get("file"), "fit": mode, "model": record.get("model"),
                "error model": res.get("error_model") or "", "γ": st.get("gamma"),
                "fit title": label}
-    return {"source": "Decay fit",
+    return {"source": "Decay Fit",
             "title": f"Half-li{'ves' if two else 'fe'}: {mode}",
             "slots": slots, "items": items,
             "context": {k: v for k, v in context.items() if v not in (None, "")}}
@@ -999,7 +999,7 @@ def _figure_png(fig):
 
 
 def open_logbook_dialog(fig, record):
-    """Open the "Save to log book" popout (own process: Tk) for this fit."""
+    """Open the "Save to Log Book" popout (own process: Tk) for this fit."""
     import subprocess
     import tempfile
     spec = logbook_spec(record)
@@ -1014,14 +1014,14 @@ def open_logbook_dialog(fig, record):
 
 
 def add_logbook_button(fig, record):
-    """'Save to log book' button next to 'Save fit parameters': opens a popout
+    """'Save to Log Book' button next to 'Save Fit Parameters': opens a popout
     to send the half-lives and the figure to the results log book."""
     ax_btn = fig.add_axes([0.16, 0.945, 0.13, 0.045])
     try:
         ax_btn.set_in_layout(False)
     except AttributeError:
         pass
-    btn = Button(ax_btn, "Save to log book", color="#fff4ec", hovercolor="#f57d15")
+    btn = Button(ax_btn, "Save to Log Book", color="#fff4ec", hovercolor="#f57d15")
     btn.label.set_fontsize(13)
 
     def on_click(_event):
@@ -1142,7 +1142,7 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
     if title_full:
         title = title_full
 
-    ax.set_ylabel("Integrated power (arb. units)", fontsize=22)
+    ax.set_ylabel("Integrated Power (arb. units)", fontsize=22)
     ax.tick_params(labelsize=20)
     # narrower panel next to the log plot: keep the legend clear of the
     # parameter box (lower left is empty for a decay)
@@ -1179,7 +1179,7 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
         if ok.any():
             lo = np.min(y_dat[ok]); hi = max(np.max(y_dat[ok]), np.max(y_fit[okf]) if okf.any() else 0)
             ax_log.set_ylim(lo / 2, hi * 2)
-        ax_log.set_ylabel(f"Integrated power{sub} (log)", fontsize=22)
+        ax_log.set_ylabel(f"Integrated Power{sub} (log)", fontsize=22)
         ax_log.tick_params(labelsize=20)
         log_pts = [(time_fit[ok], y_dat[ok]), (t_dense[okf], y_fit[okf])]
         if sigma_fit is not None:
@@ -1524,7 +1524,7 @@ def plot_joint(args, tP, IP, tD, ID, sigmaP, sigmaD, vals, errs,
         else:
             ax.plot(t, I, "o", ms=3, color="black", label=f"{lab} data")
         ax.plot(td, Id, "-", lw=2, color="#dd4444", label="Joint fit")
-        ax.set_ylabel("Integrated power\n(arb. units)", fontsize=20)
+        ax.set_ylabel("Integrated Power\n(arb. units)", fontsize=20)
         ax.tick_params(labelsize=18)
         ax.legend(fontsize=16, loc=loc)
 

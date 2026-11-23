@@ -92,8 +92,8 @@ def dash_component(title, files=False, floating=False):
             html.Span(id="aslog-path", style={"color": "#777", "marginLeft": "10px",
                                               "overflow": "hidden", "textOverflow": "ellipsis",
                                               "whiteSpace": "nowrap", "flex": "1"}),
-            html.Button("Open log file", id="aslog-open-file", n_clicks=0, style=_SMALL_BTN),
-            html.Button("Open log folder", id="aslog-open-folder", n_clicks=0, style=_SMALL_BTN),
+            html.Button("Open Log File", id="aslog-open-file", n_clicks=0, style=_SMALL_BTN),
+            html.Button("Open Log Folder", id="aslog-open-folder", n_clicks=0, style=_SMALL_BTN),
             html.Button("Close", id="aslog-close", n_clicks=0, style=_SMALL_BTN)]
     rows = [html.Div(head, style={"display": "flex", "alignItems": "center",
                                   "padding": "6px 10px", "borderBottom": f"2px solid {ACCENT}",
@@ -261,7 +261,7 @@ def html_snippet(title):
 </style>
 <button id="aslog-btn" title="Output of this program (what would appear in a terminal)">Log <b id="aslog-badge"></b></button>
 <div id="aslog-panel"><div id="aslog-head"><b>Output · {t}</b><span id="aslog-path"></span>
-<button id="aslog-of">Open log file</button><button id="aslog-od">Open log folder</button>
+<button id="aslog-of">Open Log File</button><button id="aslog-od">Open Log Folder</button>
 <button id="aslog-x">Close</button></div><div id="aslog-msg"></div>
 <div id="aslog-scroll"><div id="aslog-body"></div></div></div>
 <script>
@@ -335,7 +335,7 @@ def show_mpl_output(title=None):
         fig.canvas.manager.set_window_title(f"Output · {title or logcapture.tool() or ''}")
     except AttributeError:
         pass
-    fig.text(0.01, 0.985, f"Log file: {logcapture.log_path() or '(not being saved)'}",
+    fig.text(0.01, 0.985, f"Log File: {logcapture.log_path() or '(not being saved)'}",
              fontsize=8, color="#777", va="top", family="monospace")
     y, dy = 0.955, 0.0135
     for _i, t, _s, level, text in entries:
@@ -389,10 +389,10 @@ def open_tk_window(root, title=None):
     win.geometry("900x420")
     bar = tk.Frame(win)
     bar.pack(fill="x")
-    tk.Label(bar, text=f"Log file: {logcapture.log_path() or '(not being saved)'}",
+    tk.Label(bar, text=f"Log File: {logcapture.log_path() or '(not being saved)'}",
              fg="#777", anchor="w").pack(side="left", fill="x", expand=True, padx=6)
-    tk.Button(bar, text="Open log folder", command=lambda: open_target("folder")).pack(side="right")
-    tk.Button(bar, text="Open log file", command=lambda: open_target("file")).pack(side="right")
+    tk.Button(bar, text="Open Log Folder", command=lambda: open_target("folder")).pack(side="right")
+    tk.Button(bar, text="Open Log File", command=lambda: open_target("file")).pack(side="right")
     txt = ScrolledText(win, font=("monospace", 9), wrap="word")
     txt.pack(fill="both", expand=True)
     txt.tag_configure("error", foreground=ERR_COLOUR, background="#fdf0ef")

@@ -1,8 +1,8 @@
 """
-"Save to log book": send what a Theia tab shows to the results log book.
+"Save to Log Book": send what a Theia tab shows to the results log book.
 
 Buttons in the Viewer tab (plot heading) and the Scan Results tab (snippet
-controls, after "Send to PID plot") open one popout: the ion (tab of the log
+controls, after "Send to PID Plot") open one popout: the ion (tab of the log
 book; existing tabs offered, a new name makes a new tab), a title, the values
 of what is shown (editable, ticked = sent), the plot as it is on screen
 (snapshot taken in the browser when the popout opens) and notes.  Save adds
@@ -31,8 +31,8 @@ SOURCES = {"viewer": ("Theia Viewer", "viewer-graph"),
 
 
 def logbook_button(src, **style):
-    """The "Save to log book" button of a tab (src: 'viewer' or 'results')."""
-    return html.Button("Save to log book", id={"type": "lb-open", "src": src}, n_clicks=0,
+    """The "Save to Log Book" button of a tab (src: 'viewer' or 'results')."""
+    return html.Button("Save to Log Book", id={"type": "lb-open", "src": src}, n_clicks=0,
                        title="Send the ion, the values and the plot shown to the results log book",
                        className="btn btn-outline-secondary btn-sm", style=style)
 
@@ -40,7 +40,7 @@ def logbook_button(src, **style):
 lb_modal = html.Div([
     html.Div([
         html.Div([
-            html.Span("Save to log book", style={"fontWeight": "700", "fontSize": "15px"}),
+            html.Span("Save to Log Book", style={"fontWeight": "700", "fontSize": "15px"}),
             html.Button("✕", id="lb-x", className="btn btn-outline-secondary btn-sm"),
         ], style={"display": "flex", "justifyContent": "space-between", "alignItems": "center",
                   "marginBottom": "4px"}),
@@ -57,7 +57,7 @@ lb_modal = html.Div([
         ], style={"display": "flex", "gap": "12px"}),
         html.Small("A new ion name makes a new tab. Charge state and harmonic are stored with the entry.",
                    style=HELP_STYLE),
-        html.Label("Values to send (ticked; edit if needed)", style={**LABEL_STYLE, "marginTop": "10px", "display": "block"}),
+        html.Label("Values to Send (ticked; edit if needed)", style={**LABEL_STYLE, "marginTop": "10px", "display": "block"}),
         dash_table.DataTable(
             id="lb-values", editable=True, row_selectable="multi", selected_rows=[], data=[],
             columns=[{"name": "Quantity", "id": "label"}, {"name": "Value", "id": "value"},
@@ -66,7 +66,7 @@ lb_modal = html.Div([
                         "textAlign": "left", "border": "1px solid #dddddd"},
             style_header={"backgroundColor": "#fff4ec", "fontWeight": "600"},
             style_table={"maxHeight": "240px", "overflowY": "auto"}),
-        html.Button("+ Add value", id="lb-addrow", n_clicks=0, className="btn btn-outline-secondary btn-sm",
+        html.Button("+ Add Value", id="lb-addrow", n_clicks=0, className="btn btn-outline-secondary btn-sm",
                     style={"marginTop": "6px"}),
         html.Label("Plot (as shown now)", style={**LABEL_STYLE, "marginTop": "10px", "display": "block"}),
         html.Div([
@@ -114,12 +114,12 @@ def _results_prefill(idx, rows, db, half_width):
         raise ValueError("No identification shown in the snippet.")
     row = rows[int(idx)]
     values = [{"label": "Harmonic h", "value": row.get("harmonic")},
-              {"label": "Peak frequency", "value": _num(row.get("peak_freq")), "unit": "Hz"},
-              {"label": "Simulated frequency", "value": _num(row.get("sim_freq")), "unit": "Hz"},
+              {"label": "Peak Frequency", "value": _num(row.get("peak_freq")), "unit": "Hz"},
+              {"label": "Simulated Frequency", "value": _num(row.get("sim_freq")), "unit": "Hz"},
               {"label": "Δ (peak − simulated)", "value": _num(row.get("delta_hz")), "unit": "Hz"},
-              {"label": "Peak power", "value": _num(row.get("power")), "checked": False},
+              {"label": "Peak Power", "value": _num(row.get("power")), "checked": False},
               {"label": "SNR (prominence / σ)", "value": _num(row.get("snr"))},
-              {"label": "Peak kind", "value": row.get("kind"), "checked": False}]
+              {"label": "Peak Kind", "value": row.get("kind"), "checked": False}]
     try:
         pk = db_query(db, "SELECT width_hz, height_snr FROM peaks WHERE peak_id = ?", (int(row["peak_id"]),))
         if len(pk) and _num(pk.iloc[0]["width_hz"]) is not None:
@@ -144,10 +144,10 @@ def _viewer_prefill(file_path, spectrum, highlight, zoom, ref_name):
     if isinstance(zoom, dict) and zoom.get("ion"):
         ion = zoom["ion"]
         values += [{"label": "Harmonic h", "value": zoom.get("h")},
-                   {"label": "Simulated frequency", "value": round(float(zoom["f"]), 3), "unit": "Hz"}]
+                   {"label": "Simulated Frequency", "value": round(float(zoom["f"]), 3), "unit": "Hz"}]
     elif highlight:
         ion = str(highlight).split(",")[0].strip()
-    values.append({"label": "Reference ion", "value": ref_name or "", "checked": False})
+    values.append({"label": "Reference Ion", "value": ref_name or "", "checked": False})
     return {"ion": ion,
             "title": f"Viewer: {spectrum}" if spectrum else "Viewer",
             "values": values,

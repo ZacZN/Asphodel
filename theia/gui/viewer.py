@@ -324,9 +324,9 @@ def v_input(label, key, number=False, step=None, help=None, placeholder=None):
 
 
 viewer_sidebar = html.Div([
-    html.H5("Viewer settings", style={"fontWeight": "700", "marginBottom": "4px"}),
+    html.H5("Viewer Settings", style={"fontWeight": "700", "marginBottom": "4px"}),
     *section("Spectrum"),
-    with_browse(v_input("File path", "file_path"), "btn-browse-v-file_path"),
+    with_browse(v_input("File Path", "file_path"), "btn-browse-v-file_path"),
     html.Div([
         html.Label("Spectrum", style=LABEL_STYLE),
         dcc.Dropdown(id="v-spectrum_name", value=str(VCFG["spectrum_name"]), clearable=False,
@@ -334,23 +334,23 @@ viewer_sidebar = html.Div([
                      placeholder="No .npz files in this folder",
                      style={"fontSize": "13px"}),
     ], style=INPUT_STYLE),
-    *section("Reference ion"),
-    v_input("Ion name", "ref_name"),
+    *section("Reference Ion"),
+    v_input("Ion Name", "ref_name"),
     v_input("Frequency (Hz)", "ref_frequency", True, 1),
     v_input("Harmonic", "ref_harmonic", True, 1),
-    v_input("Ref. peak search in the other harmonics ± (Hz)", "ref_search_hz", True, "any",
+    v_input("Ref. Peak Search in the Other Harmonics ± (Hz)", "ref_search_hz", True, "any",
             help="Each harmonic's lines are placed from the reference ion's own peak in that "
                  "harmonic (nearest to f_ref/h_ref·h). 0 = off"),
-    *section("Ion selection"),
-    v_input("Z limits  [min, max]", "z_lims"),
-    v_input("N limits  [min, max]", "n_lims"),
+    *section("Ion Selection"),
+    v_input("Z Limits  [min, max]", "z_lims"),
+    v_input("N Limits  [min, max]", "n_lims"),
     v_input("el1  [A, Z]", "el1"),
     v_input("el2  [A, Z]", "el2"),
     v_input("m/q window  (± value)", "mq_width", True, 0.001),
-    *section("Ring / harmonics"),
+    *section("Ring / Harmonics"),
     v_input("γ_t", "gamma_t", True, 0.001),
     v_input("Harmonics (comma-separated)", "harmonics"),
-    *section("Frequency correction"),
+    *section("Frequency Correction"),
     dcc.Checklist(id="v-correction_enabled",
                   options=[{"label": " Second order correction", "value": "on"}],
                   value=VCFG["correction_enabled"], style={"fontSize": "13px", "marginBottom": "10px"}),
@@ -364,13 +364,13 @@ viewer_sidebar = html.Div([
         v_input("c  (constant)", "corr_c", True, "any"),
     ], id="v-correction-inputs",
        style={"display": "block" if VCFG["correction_enabled"] else "none"}),
-    *section("Highlight ions"),
-    v_input("Ion names (comma-separated)", "highlight_ions", placeholder="e.g. 204Hg, 208Tl79+",
+    *section("Highlight Ions"),
+    v_input("Ion Names (comma-separated)", "highlight_ions", placeholder="e.g. 204Hg, 208Tl79+",
             help="Omit charge state to highlight all charge states (upper or lower case)"),
     # Zoom to each highlighted line in turn (left to right, every harmonic)
     html.Div([
         html.Div([
-            html.Label("Zoom window  ±", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
+            html.Label("Zoom Window  ±", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
             dcc.Input(id="v-zoom-width", type="number", min=0, step="any", debounce=True,
                       value=v_zoom_width_saved(), placeholder="10",
                       className="form-control form-control-sm",
@@ -385,7 +385,7 @@ viewer_sidebar = html.Div([
                         disabled=True, title="Previous highlighted line (lower frequency)"),
             html.Button("▶", id="v-zoom-next", className="btn btn-outline-secondary btn-sm",
                         disabled=True, title="Next highlighted line (higher frequency)"),
-            html.Button("Full view", id="v-zoom-full", className="btn btn-outline-secondary btn-sm",
+            html.Button("Full View", id="v-zoom-full", className="btn btn-outline-secondary btn-sm",
                         disabled=True, title="Show the whole spectrum again"),
         ], style={"display": "flex", "gap": "6px", "flexWrap": "wrap"}),
         html.Div(id="v-zoom-status", style={"fontSize": "12px", "marginTop": "6px",
@@ -420,7 +420,7 @@ viewer_tab = html.Div([
         # plot in a box with its title as the heading, as in the Scan Results tab
         html.Div([
             html.Div([
-                html.H6("Calculated Frequencies overlayed with data",
+                html.H6("Calculated Frequencies Overlayed with Data",
                         style={"fontWeight": "600", "margin": "0"}),
                 logbook_button("viewer", marginLeft="auto"),
             ], style={"display": "flex", "alignItems": "center", "marginBottom": "6px"}),

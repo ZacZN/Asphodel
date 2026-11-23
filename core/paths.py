@@ -177,8 +177,8 @@ def notes_file(exp=None):
 # The folders the tools read from and write to are "connected" on the home
 # page, per experiment, in <experiment>/settings/folders.json:
 #
-#   {"data":   [{"path": "...", "kind": "spectra_1d", "name": "1-D spectra"}, ...],
-#    "output": [{"path": "...", "kind": "scans", "name": "Scan runs"}, ...]}
+#   {"data":   [{"path": "...", "kind": "spectra_1d", "name": "1-D Spectra"}, ...],
+#    "output": [{"path": "...", "kind": "scans", "name": "Scan Runs"}, ...]}
 #
 # Each folder has a kind; a tool that needs e.g. the 1-D spectra uses the first
 # connected data folder of kind "spectra_1d" (spectra_1d() below), and its
@@ -186,12 +186,12 @@ def notes_file(exp=None):
 # folder of a kind) the experiment's standard sub-folders are used, as before,
 # so existing paths keep working.
 
-DATA_KINDS = {"spectra_1d": "1-D spectra", "spectrograms": "Spectrograms", "summed_1d": "Summed 1-D",
-              "levelschemes": "Level schemes", "rionid": "RionID tables", "other": "Other data"}
-OUTPUT_KIND_NAMES = {"scans": "Scan runs", "confirmed": "Confirmed IDs", "fits": "Decay fits",
-                     "figures": "Figures", "isocurve": "Isochronicity curve",
-                     "identified": "Identified ions", "logbook": "Results log book",
-                     "other": "Other output"}
+DATA_KINDS = {"spectra_1d": "1-D Spectra", "spectrograms": "Spectrograms", "summed_1d": "Summed 1-D",
+              "levelschemes": "Level Schemes", "rionid": "RionID Tables", "other": "Other Data"}
+OUTPUT_KIND_NAMES = {"scans": "Scan Runs", "confirmed": "Confirmed IDs", "fits": "Decay Fits",
+                     "figures": "Figures", "isocurve": "Isochronicity Curve",
+                     "identified": "Identified Ions", "logbook": "Results Log Book",
+                     "other": "Other Output"}
 FOLDER_GROUPS = {"data": DATA_KINDS, "output": OUTPUT_KIND_NAMES}
 FOLDERS_FILE = "folders.json"
 
@@ -228,8 +228,11 @@ def load_folders(exp=None):
         for f in (d.get(g) or []) if isinstance(d, dict) else []:
             if isinstance(f, dict) and f.get("path"):
                 kind = f.get("kind") if f.get("kind") in kinds else "other"
+                name = (f.get("name") or "").strip() or os.path.basename(f["path"].rstrip("/"))
+                if name.lower() == kinds[kind].lower():      # a standard name saved in older
+                    name = kinds[kind]                       # capitalisation ("1-D spectra")
                 lst.append({"path": os.path.abspath(os.path.expanduser(f["path"])), "kind": kind,
-                            "name": (f.get("name") or "").strip() or os.path.basename(f["path"].rstrip("/"))})
+                            "name": name})
         out[g] = lst
     return out
 

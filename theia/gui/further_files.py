@@ -30,15 +30,15 @@ from .viewer import load_viewer_config, VIEWER_KEYS
 
 
 PID_FIELDS = [   # key, label
-    ("ref_name", "Reference ion"), ("ref_harmonic", "Reference harmonic"),
-    ("z_lims", "Z limits  [min, max]"), ("n_lims", "N limits  [min, max]"),
+    ("ref_name", "Reference Ion"), ("ref_harmonic", "Reference Harmonic"),
+    ("z_lims", "Z Limits  [min, max]"), ("n_lims", "N Limits  [min, max]"),
     ("el1", "el1  [A, Z]"), ("el2", "el2  [A, Z]"),
     ("mq_width", "m/q window (± value)"), ("gamma_t", "γ_t"),
     ("harmonics", "Harmonics (comma-separated)"),
-    ("ref_search_hz", "Ref. peak search, other harmonics ± (Hz)  [0 = off]"),
+    ("ref_search_hz", "Ref. Peak Search, Other Harmonics ± (Hz)  [0 = off]"),
     ("corr_a", "a  (f² coefficient)"), ("corr_b", "b  (f coefficient)"),
     ("corr_c", "c  (constant)"),
-    ("min_half_life", "Exclude half-life below  [0 = off]"),
+    ("min_half_life", "Exclude Half-Life Below  [0 = off]"),
 ]
 PID_KEYS = [k for k, _ in PID_FIELDS] + ["min_half_life_unit", "correction_enabled",
                                          "exclude_unknown_hl", "corr_profile"]
@@ -61,7 +61,7 @@ def _pid_field(key, label):
 pid_modal = html.Div([
     html.Div([
         html.Div([
-            html.Span("PID Settings – simulated ion lines",
+            html.Span("PID Settings – Simulated Ion Lines",
                       style={"fontWeight": "700", "fontSize": "15px"}),
             html.Button("✕", id="pid-cancel", className="btn btn-outline-secondary btn-sm"),
         ], style={"display": "flex", "justifyContent": "space-between", "alignItems": "center",
@@ -83,7 +83,7 @@ pid_modal = html.Div([
                               style={"fontSize": "13px", "marginBottom": "6px"}),
                 corr_profile_ui("pid-"),
             ] + [_pid_field(k, lab) for k, lab in PID_FIELDS[10:13]] + [
-                html.Label("Exclude half-life below  [0 = off]", style=LABEL_STYLE),
+                html.Label("Exclude Half-Life Below  [0 = off]", style=LABEL_STYLE),
                 html.Div([
                     dcc.Input(id="pid-min_half_life", type="text",
                               className="form-control form-control-sm",
@@ -99,7 +99,7 @@ pid_modal = html.Div([
         ], style={"display": "grid", "gridTemplateColumns": "1fr 1fr", "columnGap": "18px"}),
         html.Div(id="pid-error", style={"fontSize": "13px", "margin": "6px 0"}),
         html.Div([
-            html.Button("Reset to file", id="pid-reset", className="btn btn-outline-secondary btn-sm",
+            html.Button("Reset to File", id="pid-reset", className="btn btn-outline-secondary btn-sm",
                         title="Use the scan settings stored in the first loaded file",
                         style={"marginRight": "auto"}),
             html.Button("Apply", id="pid-apply", className="btn btn-sm",
@@ -208,7 +208,7 @@ def _picker_options(files):
     prevent_initial_call=True,
 )
 def edit_further_files(n_add, chosen, remove_clicks, files):
-    """'+ Add file' shows the picker (files already listed are left out);
+    """'+ Add File' shows the picker (files already listed are left out);
     choosing a file appends it to the list and hides the picker; a row's ✕
     removes that file.  (One callback, because these outputs feed each other.)"""
     files = list(files or [])
@@ -431,7 +431,7 @@ def toggle_further_source(source):
     State("v-spectrum_name", "value"),
 )
 def fsrc_options(directory, _viewer, current, v_dir, v_name):
-    """Single-file source: the .npz files in the folder.  'Use Viewer spectrum'
+    """Single-file source: the .npz files in the folder.  'Use Viewer Spectrum'
     takes the Viewer's folder and file and loads it straight away."""
     trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
     nu = dash.no_update
@@ -696,7 +696,7 @@ def _fit_into_patch(patch, fit_state, cached):
 )
 def show_sum(_, _load, _req, restore, files, align, ion_key, unsure, show_sims, pid_store,
              f_dir, f_name, window):
-    """'Sum spectra' button, 'Load spectrum' / 'Use Viewer spectrum' (single
+    """'Sum Spectra' button, 'Load Spectrum' / 'Use Viewer Spectrum' (single
     spectrum file), or (on page load) rebuild the plot saved last time with
     its zoom; the saved fit is then picked up by update_fit."""
     # imported here: .energy imports this module
@@ -759,7 +759,7 @@ def show_sum(_, _load, _req, restore, files, align, ion_key, unsure, show_sims, 
             how = f"aligned on the strongest peak, tracked ±{window:g} Hz"
         else:
             how = "not aligned"
-        title = f"Sum of {info['n']} spectra ({how})"
+        title = f"Sum of {info['n']} Spectra ({how})"
         meta = {"source": "sum"}
     key = _cache_sum(ff, pp)
     _SUM_META[key] = meta

@@ -3,7 +3,7 @@ Your own identifications for the Segrè chart, shared by the tools.
 
 The file is data/<exp>/outputs/identified/segre_identified.json (format
 asphodel-segre-identified v1, see reference/segre_chart.py for every field).
-The Segrè chart reads and edits it; other tools (Theia's "Send to PID plot")
+The Segrè chart reads and edits it; other tools (Theia's "Send to PID Plot")
 add entries through add_identification().  The open chart notices the file
 changed and redraws.
 """

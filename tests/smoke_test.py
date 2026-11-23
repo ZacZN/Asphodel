@@ -39,11 +39,11 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PACKAGES = ["dash", "dash_bootstrap_components", "plotly", "flask", "numpy", "scipy", "pandas",
             "matplotlib", "pybaselines", "openpyxl", "odf"]
 # (name, script, fixed port or None = read the address from the output)
-SERVERS = [("Home page", "home.py", None),
+SERVERS = [("Home Page", "home.py", None),
            ("Theia", "theia/theia.py", 8052),
-           ("Segrè chart", "reference/segre_chart.py", 8054),
+           ("Segrè Chart", "reference/segre_chart.py", 8054),
            ("GUI correction", "tartarus/gui_2nd_order_correction.py", 8056),
-           ("Results log book", "reference/results_logbook.py", 8058)]
+           ("Results Log Book", "reference/results_logbook.py", 8058)]
 CLI_HELP = ["spectrogram/decay_fit.py", "tartarus/sum_spectra.py"]
 START_TIMEOUT = 90          # s per server
 

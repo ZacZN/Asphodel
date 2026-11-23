@@ -1140,47 +1140,47 @@ def _zn_info(s):
 
 
 SCHEME_FIELDS = [
-    (None, "Nuclide title", "header"),
-    ("mass", "Mass number A", "optint"),
-    ("isomer", "Isomer label (m, m1, m2 …)", "str"),
+    (None, "Nuclide Title", "header"),
+    ("mass", "Mass Number A", "optint"),
+    ("isomer", "Isomer Label (m, m1, m2 …)", "str"),
     ("symbol", "Element symbol, e.g. Pd", "str"),
     ("zn", "", "computed", _zn_info),
     ("show_z", "Show Z (subscript before)", "bool"),
     ("show_n", "Show N (subscript after)", "bool"),
-    ("charge", "Charge state, e.g. 46+", "str"),
+    ("charge", "Charge State, e.g. 46+", "str"),
     ("note", "Note after name, e.g. (Exp.)", "str"),
-    ("title", "Override title (optional)", "str"),
+    ("title", "Override Title (optional)", "str"),
     (None, "Placement", "header"),
-    ("shift", "Energy shift (keV)", "float"),
-    ("column_titles", "Column titles (a | b | c)", "str"),
+    ("shift", "Energy Shift (keV)", "float"),
+    ("column_titles", "Column Titles (a | b | c)", "str"),
 ]
 
 LEVEL_FIELDS = [
     ("energy", "Energy (keV)", "energy"),
     ("spin", "Spin/parity, e.g. (23/2-)", "str"),
-    ("energy_label", "Energy label (blank = auto)", "str"),
-    ("lifetime", "Lifetime label, e.g. 5.9(2) us", "str"),
+    ("energy_label", "Energy Label (blank = auto)", "str"),
+    ("lifetime", "Lifetime Label, e.g. 5.9(2) us", "str"),
     ("column", "Column (0, 1, 2 ...)", "int"),
-    ("x0", "Line start (0-1 of column)", "float"),
-    ("x1", "Line end (0-1 of column)", "float"),
-    ("lw", "Line width pt (blank = default)", "optfloat"),
+    ("x0", "Line Start (0-1 of column)", "float"),
+    ("x1", "Line End (0-1 of column)", "float"),
+    ("lw", "Line Width (pt, blank = default)", "optfloat"),
     ("color", "Colour (blank = default)", "color"),
     ("tentative", "Tentative (dashed)", "bool"),
-    ("y_shift", "Drawn offset (keV)", "float"),
+    ("y_shift", "Drawn Offset (keV)", "float"),
 ]
 
 TRANS_FIELDS = [
-    ("from", "From level", "level"),
-    ("to", "To level", "level"),
-    ("free_energy", "Unknown end at energy (keV)", "optfloat"),
-    ("free_text", "Unknown end label", "str"),
+    ("from", "From Level", "level"),
+    ("to", "To Level", "level"),
+    ("free_energy", "Unknown End at Energy (keV)", "optfloat"),
+    ("free_text", "Unknown End Label", "str"),
     ("label", "Label (blank = auto Eγ)", "str"),
     ("intensity", "Intensity (sets width)", "float"),
     ("multipolarity", "Multipolarity, e.g. E2", "str"),
     ("bwu", "B(σλ) in W.u., e.g. 4.5(3)", "str"),
     ("x", "x position (0-1 of column)", "float"),
     ("x_to", "x at destination column", "optfloat"),
-    ("label_side", "Label side", "choice", ["default", "left", "right", "none"]),
+    ("label_side", "Label Side", "choice", ["default", "left", "right", "none"]),
     ("color", "Colour (blank = black)", "color"),
     ("tentative", "Tentative (dashed)", "bool"),
 ]
@@ -1189,54 +1189,54 @@ STYLE_FIELDS = [
     (None, "Figure", "header"),
     ("fig_width", "Width (inches)", "float"),
     ("fig_height", "Height (inches)", "float"),
-    ("margin_left", "Left margin (fraction)", "float"),
-    ("margin_right", "Right margin (fraction)", "float"),
-    ("margin_bottom", "Bottom margin (fraction)", "float"),
-    ("margin_top", "Top margin (fraction)", "float"),
-    ("y_margin", "Vertical padding (fraction)", "float"),
-    ("dpi", "PNG export dpi", "int"),
-    ("tight_bbox", "Crop to content on export", "bool"),
+    ("margin_left", "Left Margin (fraction)", "float"),
+    ("margin_right", "Right Margin (fraction)", "float"),
+    ("margin_bottom", "Bottom Margin (fraction)", "float"),
+    ("margin_top", "Top Margin (fraction)", "float"),
+    ("y_margin", "Vertical Padding (fraction)", "float"),
+    ("dpi", "PNG Export dpi", "int"),
+    ("tight_bbox", "Crop to Content on Export", "bool"),
     (None, "Fonts", "header"),
-    ("font_family", "Font family", "choice", ["serif", "sans-serif"]),
-    ("mathtext_fontset", "Math font set", "choice", ["stix", "cm", "stixsans", "dejavusans", "dejavuserif"]),
-    ("font_size", "Label size (pt)", "float"),
+    ("font_family", "Font Family", "choice", ["serif", "sans-serif"]),
+    ("mathtext_fontset", "Math Font Set", "choice", ["stix", "cm", "stixsans", "dejavusans", "dejavuserif"]),
+    ("font_size", "Label Size (pt)", "float"),
     ("gamma_font_size", "γ-label size (pt)", "float"),
     ("usetex", "Use LaTeX (needs TeX install)", "bool"),
     (None, "Schemes", "header"),
-    ("scheme_gap", "Gap between schemes", "float"),
-    ("auto_scheme_gap", "Widen gaps to stop overlaps", "bool"),
-    ("scheme_clearance", "Min. clearance between schemes (pt)", "float"),
-    ("scheme_title_pos", "Scheme titles", "choice", ["below", "above", "none"]),
-    ("scheme_title_size", "Scheme title size (pt)", "float"),
+    ("scheme_gap", "Gap Between Schemes", "float"),
+    ("auto_scheme_gap", "Widen Gaps to Stop Overlaps", "bool"),
+    ("scheme_clearance", "Min. Clearance Between Schemes (pt)", "float"),
+    ("scheme_title_pos", "Scheme Titles", "choice", ["below", "above", "none"]),
+    ("scheme_title_size", "Scheme Title Size (pt)", "float"),
     (None, "Levels", "header"),
-    ("column_width", "Column width", "float"),
-    ("column_gap", "Gap between columns", "float"),
-    ("level_lw", "Default line width (pt)", "float"),
-    ("level_color", "Default colour", "color"),
-    ("energy_italic", "Italic energies", "bool"),
-    ("spin_side", "Spin labels", "choice", ["left", "right", "none"]),
-    ("energy_side", "Energy labels", "choice", ["right", "left", "none"]),
-    ("label_pad", "Label gap (pt)", "float"),
-    ("auto_spin_format", "Auto-superscript parity", "bool"),
-    ("fan_close_levels", "Fan out labels of close levels", "bool"),
-    ("label_min_sep", "Closeness threshold / label spacing (pt)", "float"),
-    ("level_min_gap", "Min. gap between close lines (pt)", "float"),
-    ("connector_stub", "Connector horizontal stubs (pt)", "float"),
-    ("connector_diag", "Connector diagonal reach (pt)", "float"),
+    ("column_width", "Column Width", "float"),
+    ("column_gap", "Gap Between Columns", "float"),
+    ("level_lw", "Default Line Width (pt)", "float"),
+    ("level_color", "Default Colour", "color"),
+    ("energy_italic", "Italic Energies", "bool"),
+    ("spin_side", "Spin Labels", "choice", ["left", "right", "none"]),
+    ("energy_side", "Energy Labels", "choice", ["right", "left", "none"]),
+    ("label_pad", "Label Gap (pt)", "float"),
+    ("auto_spin_format", "Auto-Superscript Parity", "bool"),
+    ("fan_close_levels", "Fan Out Labels of Close Levels", "bool"),
+    ("label_min_sep", "Closeness Threshold / Label Spacing (pt)", "float"),
+    ("level_min_gap", "Min. Gap Between Close Lines (pt)", "float"),
+    ("connector_stub", "Connector Horizontal Stubs (pt)", "float"),
+    ("connector_diag", "Connector Diagonal Reach (pt)", "float"),
     (None, "Transitions", "header"),
-    ("arrow_max_width", "Max arrow width (pt)", "float"),
-    ("arrow_min_width", "Min arrow width (pt)", "float"),
-    ("head_length", "Head length (pt)", "float"),
-    ("head_extra", "Head extra width (pt)", "float"),
-    ("intensity_norm", "Width scaling", "choice", ["per scheme", "global"]),
-    ("gamma_label_side", "Label side", "choice", ["left", "right", "none"]),
-    ("gamma_label_rotation", "Label rotation", "choice", ["0", "90"]),
-    ("gamma_label_pad", "Label gap (pt)", "float"),
-    ("show_bwu", "Show B(σλ) labels", "bool"),
-    ("avoid_label_overlaps", "Move labels to avoid overlaps", "bool"),
+    ("arrow_max_width", "Max Arrow Width (pt)", "float"),
+    ("arrow_min_width", "Min Arrow Width (pt)", "float"),
+    ("head_length", "Head Length (pt)", "float"),
+    ("head_extra", "Head Extra Width (pt)", "float"),
+    ("intensity_norm", "Width Scaling", "choice", ["per scheme", "global"]),
+    ("gamma_label_side", "Label Side", "choice", ["left", "right", "none"]),
+    ("gamma_label_rotation", "Label Rotation", "choice", ["0", "90"]),
+    ("gamma_label_pad", "Label Gap (pt)", "float"),
+    ("show_bwu", "Show B(σλ) Labels", "bool"),
+    ("avoid_label_overlaps", "Move Labels to Avoid Overlaps", "bool"),
     (None, "Annotations", "header"),
-    ("title", "Figure title (under everything)", "str"),
-    ("title_size", "Title size (pt)", "float"),
+    ("title", "Figure Title (under everything)", "str"),
+    ("title_size", "Title Size (pt)", "float"),
 ]
 
 HELP_TEXT = """\
@@ -1265,7 +1265,7 @@ Building a scheme
     intensity (per scheme, or across all schemes: Style ▸ Width scaling).
   • Hanging transitions (unknown initial or final state): pick '(unknown ?)' as the
     From or To level. The arrow then starts or stops in mid-air at 'Unknown end at
-    energy (keV)', with '?' (or your 'Unknown end label') beyond its head or tail.
+    energy (keV)', with '?' (or your 'Unknown End Label') beyond its head or tail.
     No Eγ is shown unless you type a Label; the '?' can be dragged.
   • Transition strengths: enter a Multipolarity (E2, M1 …) and B(σλ) in W.u.
     (e.g. 4.5(3), >12 or 2.1(+5-4) for asymmetric errors). It is drawn as
@@ -1291,7 +1291,7 @@ Mouse (preview)
     to nudge it.
   • Right-drag from one level to another in the same scheme to create a transition.
   • Double-click empty space to add a level to the scheme under the mouse.
-  • 'Reset labels' puts the selected item's labels back.
+  • 'Reset Labels' puts the selected item's labels back.
 
 Output
   • File ▸ Export figure: PDF / SVG / EPS / PNG at the size set in the Style tab.
@@ -1344,13 +1344,13 @@ class App:
         f.add_command(label="New", accelerator="Ctrl+N", command=self.new_file)
         f.add_command(label="Open…", accelerator="Ctrl+O", command=self.open_dialog)
         f.add_command(label="Save", accelerator="Ctrl+S", command=self.save)
-        f.add_command(label="Save as…", command=self.save_as)
+        f.add_command(label="Save As…", command=self.save_as)
         f.add_separator()
-        f.add_command(label="Export figure (PDF/SVG/EPS/PNG)…", accelerator="Ctrl+E",
+        f.add_command(label="Export Figure (PDF/SVG/EPS/PNG)…", accelerator="Ctrl+E",
                       command=self.export_figure)
-        f.add_command(label="Export Python script…", command=self.export_script)
+        f.add_command(label="Export Python Script…", command=self.export_script)
         f.add_separator()
-        f.add_command(label="Load example scheme", command=self.load_example)
+        f.add_command(label="Load Example Scheme", command=self.load_example)
         f.add_separator()
         f.add_command(label="Quit", command=self.quit)
         m.add_cascade(label="File", menu=f)
@@ -1358,15 +1358,15 @@ class App:
         e.add_command(label="Undo", accelerator="Ctrl+Z", command=self.undo)
         e.add_command(label="Redo", accelerator="Ctrl+Y", command=self.redo)
         e.add_separator()
-        e.add_command(label="Add scheme", command=self.add_scheme)
-        e.add_command(label="Add level", command=self.add_level)
-        e.add_command(label="Add transition", command=self.add_transition)
-        e.add_command(label="Delete selected", accelerator="Del", command=self.delete_selected)
-        e.add_command(label="Reset labels of selected", command=self.reset_labels)
-        e.add_command(label="Reset all label positions", command=self.reset_all_labels)
+        e.add_command(label="Add Scheme", command=self.add_scheme)
+        e.add_command(label="Add Level", command=self.add_level)
+        e.add_command(label="Add Transition", command=self.add_transition)
+        e.add_command(label="Delete Selected", accelerator="Del", command=self.delete_selected)
+        e.add_command(label="Reset Labels of Selected", command=self.reset_labels)
+        e.add_command(label="Reset All Label Positions", command=self.reset_all_labels)
         m.add_cascade(label="Edit", menu=e)
         h = tk.Menu(m, tearoff=0)
-        h.add_command(label="Quick guide", command=self.show_help)
+        h.add_command(label="Quick Guide", command=self.show_help)
         m.add_cascade(label="Help", menu=h)
         # what the program printed (would otherwise only be in a terminal)
         m.add_command(label="Output", command=lambda: logpanel.open_tk_window(self.root,
@@ -1387,7 +1387,7 @@ class App:
         left = ttk.Frame(pw, width=380)
         top = ttk.Frame(left)
         top.pack(fill="x", padx=6, pady=(6, 0))
-        ttk.Label(top, text="Active scheme:").pack(side="left")
+        ttk.Label(top, text="Active Scheme:").pack(side="left")
         self.scheme_var = tk.StringVar()
         self.scheme_combo = ttk.Combobox(top, textvariable=self.scheme_var, state="readonly")
         self.scheme_combo.pack(side="left", fill="x", expand=True, padx=(4, 2))
@@ -1421,7 +1421,7 @@ class App:
                                             ("life", "Lifetime", 90), ("col", "Col", 35)], height=6)
         self.lv_tree.bind("<<TreeviewSelect>>", lambda e: self._tree_select("level", self.lv_tree))
         self._buttons(lt, (("Add", self.add_level), ("Duplicate", self.duplicate_selected),
-                           ("Delete", self.delete_selected), ("Reset labels", self.reset_labels)))
+                           ("Delete", self.delete_selected), ("Reset Labels", self.reset_labels)))
         self.lv_form = PropertyForm(lt, LEVEL_FIELDS, self.on_item_change)
         self.lv_form.pack(fill="x", pady=4)
 
@@ -1432,7 +1432,7 @@ class App:
                                             ("to", "To", 80), ("I", "I", 50)])
         self.tr_tree.bind("<<TreeviewSelect>>", lambda e: self._tree_select("trans", self.tr_tree))
         self._buttons(tt, (("Add", self.add_transition), ("Duplicate", self.duplicate_selected),
-                           ("Delete", self.delete_selected), ("Reset labels", self.reset_labels)))
+                           ("Delete", self.delete_selected), ("Reset Labels", self.reset_labels)))
         self.tr_form = PropertyForm(tt, TRANS_FIELDS, self.on_item_change)
         self.tr_form.pack(fill="x", pady=4)
 
@@ -2241,7 +2241,7 @@ class App:
 
     def show_help(self):
         w = tk.Toplevel(self.root)
-        w.title("Quick guide")
+        w.title("Quick Guide")
         txt = tk.Text(w, width=86, height=34, wrap="word", padx=10, pady=10)
         txt.insert("1.0", HELP_TEXT)
         txt.configure(state="disabled")

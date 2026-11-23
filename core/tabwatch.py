@@ -116,7 +116,7 @@ def watch_js(app_name, alive_path=ALIVE_PATH, interval_ms=2000, misses=2, dark=F
     colour, accent = ("#e5e7eb", "#f57d15") if dark else ("#222222", "#f57d15")
     msg = ('<div style="font-family:system-ui,sans-serif;padding:60px;text-align:center;'
            f'color:{colour}">'
-           f'<h3 style="color:{accent}">{app_name} has stopped</h3>'
+           f'<h3 style="color:{accent}">{app_name} Has Stopped</h3>'
            '<p>You can close this tab.</p></div>')
     return f"""
 (function() {{

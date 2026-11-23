@@ -37,8 +37,8 @@ TABLE_CELL    = {"fontSize": "12px", "padding": "3px 8px", "textAlign": "right",
                  "fontFamily": "monospace"}
 TABLE_ODD     = [{"if": {"row_index": "odd"}, "backgroundColor": ACCENT_PALE}]
 
-REF_TABLE_COLS = [("h", "h"), ("status", "status"), ("predicted", "expected (Hz)"),
-                  ("freq", "found at (Hz)"), ("offset", "offset (Hz)")]
+REF_TABLE_COLS = [("h", "h"), ("status", "Status"), ("predicted", "Expected (Hz)"),
+                  ("freq", "Found at (Hz)"), ("offset", "Offset (Hz)")]
 
 
 def _ref_table_records(rows, ref_f_label=None):
@@ -124,7 +124,7 @@ def hl_cut_inputs():
         val = 0.0
     unit = CFG["min_half_life_unit"] if CFG["min_half_life_unit"] in HL_UNITS else "ms"
     return html.Div([
-        html.Label("Exclude ions with half-life below  [0 = off]", style=LABEL_STYLE),
+        html.Label("Exclude Ions with Half-Life Below  [0 = off]", style=LABEL_STYLE),
         html.Div([
             dcc.Input(id="s-min_half_life", type="number", step="any", min=0, value=val,
                       debounce=True, className="form-control form-control-sm",
@@ -143,9 +143,18 @@ def section(title):
     return [html.Hr(style={"margin": "10px 0"}), html.P(title, style=SECTION_STYLE)]
 
 
+# column headings of the tables made by _table (the ids stay the database column
+# names, and an exported CSV keeps them as its header row)
+COLUMN_TITLES = {"spectrum": "Spectrum", "ion": "Ion", "harmonic": "Harmonic",
+                 "peak_freq": "Peak Freq (Hz)", "sim_freq": "Sim Freq (Hz)", "delta_hz": "Δ (Hz)",
+                 "power": "Power", "snr": "SNR", "kind": "Kind", "closest_for_ion": "Closest for Ion",
+                 "closest_for_peak": "Closest for Peak", "key": "Key", "value": "Value"}
+
+
 def _table(id_, columns, page_size=20, height=None, overflow_x="auto", **kw):
+    kw.setdefault("export_headers", "ids")
     return dash_table.DataTable(
-        id=id_, columns=[{"name": c, "id": c} for c in columns], data=[],
+        id=id_, columns=[{"name": COLUMN_TITLES.get(c, c), "id": c} for c in columns], data=[],
         page_size=page_size, sort_action="native", filter_action="native",
         style_table={"overflowX": overflow_x,
                      **({"maxHeight": height, "overflowY": "auto"} if height else {})},

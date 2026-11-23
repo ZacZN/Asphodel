@@ -22,11 +22,11 @@ from .isocurve import isochronicity_tab
 
 
 align_fit_tab = html.Div([
-    html.H5("Aligning and fitting", style={"fontWeight": "700"}),
+    html.H5("Aligning and Fitting", style={"fontWeight": "700"}),
     # Data source: the sum of the spectra in the confirmation files, or one
     # spectrum file (e.g. a Tartarus sum, or the file open in the Viewer)
     html.Div([
-        html.Span("Data source:", style={**LABEL_STYLE, "margin": "0 8px 0 0"}),
+        html.Span("Data Source:", style={**LABEL_STYLE, "margin": "0 8px 0 0"}),
         dcc.RadioItems(id="further-source", value="sum", inline=True,
                        options=[{"label": "Confirmation files (summed)", "value": "sum"},
                                 {"label": "Single spectrum file", "value": "file"}],
@@ -34,11 +34,11 @@ align_fit_tab = html.Div([
                        labelStyle={"marginRight": "14px", "fontSize": "13px"}),
     ], style={"display": "flex", "alignItems": "center", "marginBottom": "8px"}),
     html.Div([
-        # Numbered list of loaded confirmation files (any number); "+ Add file"
+        # Numbered list of loaded confirmation files (any number); "+ Add File"
         # opens a picker, choosing a file appends it to the list.
         html.Div(id="further-list"),
         html.Div([
-            html.Button("+ Add file", id="btn-further-add", className="btn btn-sm",
+            html.Button("+ Add File", id="btn-further-add", className="btn btn-sm",
                         style={"backgroundColor": ACCENT, "color": "white", "marginRight": "10px"}),
             html.Div([
                 dcc.Dropdown(id="further-file", options=[], placeholder="Choose a confirmation file…",
@@ -62,7 +62,7 @@ align_fit_tab = html.Div([
         dcc.Dropdown(id="fsrc-name", options=[], placeholder="Choose a .npz spectrum…",
                      clearable=False, style={"fontSize": "13px", "width": "320px",
                                              "marginRight": "14px"}),
-        html.Button("Use Viewer spectrum", id="btn-fsrc-viewer",
+        html.Button("Use Viewer Spectrum", id="btn-fsrc-viewer",
                     className="btn btn-outline-secondary btn-sm",
                     title="Load the spectrum that is open in the Viewer tab"),
     ], id="further-file-src", style={"display": "none"}),
@@ -72,9 +72,9 @@ align_fit_tab = html.Div([
         # Sum the spectra referenced by the loaded files, optionally aligned.
         html.Div([
             html.Div([
-                html.Span("Sum spectra", style={"fontWeight": "700", "marginRight": "4px"}),
+                html.Span("Sum Spectra", style={"fontWeight": "700", "marginRight": "4px"}),
                 info_button("sum", {"marginRight": "14px"}),
-                html.Span("Align on:", style={**LABEL_STYLE, "marginRight": "8px"}),
+                html.Span("Align On:", style={**LABEL_STYLE, "marginRight": "8px"}),
                 dcc.RadioItems(id="sum-align", value="none", inline=True,
                                options=[{"label": "Not aligned", "value": "none"},
                                         {"label": "Strongest peak", "value": "strongest"},
@@ -96,18 +96,18 @@ align_fit_tab = html.Div([
                 dcc.Checklist(id="sum-unsure", value=["on"],
                               options=[{"label": " include unsure", "value": "on"}],
                               style={"fontSize": "13px", "marginRight": "14px"}),
-                html.Button("Sum spectra", id="btn-sum", className="btn btn-sm",
+                html.Button("Sum Spectra", id="btn-sum", className="btn btn-sm",
                             style={"backgroundColor": ACCENT, "color": "white",
                                    "marginRight": "14px"}),
             ], id="sum-only-controls", style=SUM_CONTROLS_SHOWN),
-            html.Button("Load spectrum", id="btn-fsrc-load", className="btn btn-sm",
+            html.Button("Load Spectrum", id="btn-fsrc-load", className="btn btn-sm",
                         title="Show the chosen spectrum file for fitting",
                         style={"backgroundColor": ACCENT, "color": "white", "marginRight": "14px",
                                "display": "none"}),
             html.Button("PID Settings", id="btn-pid", className="btn btn-outline-secondary btn-sm",
                         title="Settings used for the simulated ion lines",
                         style={"marginRight": "8px"}),
-            html.Button("Search ions…", id="btn-srch", className="btn btn-outline-secondary btn-sm",
+            html.Button("Search Ions…", id="btn-srch", className="btn btn-outline-secondary btn-sm",
                         title="Find an ion's simulated lines and zoom to a window around one",
                         style={"marginRight": "8px"}),
             # h−1 / h+1, q−1 / q+1 (charge state) and A−1 / A+1 (isotope) for
@@ -154,7 +154,7 @@ align_fit_tab = html.Div([
         # the mode is on or there is a calibration / picks
         html.Div([
         html.Div([
-            html.Button("Energy calculation", id="btn-energy-mode",
+            html.Button("Energy Calculation", id="btn-energy-mode",
                         className="btn btn-outline-secondary btn-sm",
                         title="Calibrate keV per Hz on two known peaks, then get the energy "
                               "difference between any two peaks",
@@ -170,7 +170,7 @@ align_fit_tab = html.Div([
             html.Table([
                 html.Thead(html.Tr([html.Th("", style=CALIB_TH)] + [
                     html.Th(h, style=CALIB_TH) for h in
-                    ("Name", "Mass excess (keV)", "Frequency (Hz)", "FWHM (Hz)")])),
+                    ("Name", "Mass Excess (keV)", "Frequency (Hz)", "FWHM (Hz)")])),
                 html.Tbody([
                     html.Tr([
                         html.Td(f"{i}", style={**CALIB_TD, "fontWeight": "700", "color": ACCENT}),
@@ -197,17 +197,17 @@ align_fit_tab = html.Div([
             html.Div([
                 html.Button("Calibrate", id="btn-energy-calibrate", className="btn btn-sm",
                             style={"backgroundColor": ACCENT, "color": "white", "marginRight": "8px"}),
-                html.Button("Reset calibration", id="btn-energy-reset",
+                html.Button("Reset Calibration", id="btn-energy-reset",
                             className="btn btn-outline-secondary btn-sm", style={"marginRight": "8px"}),
-                html.Button("Clear pairs", id="btn-energy-clear-pairs",
+                html.Button("Clear Pairs", id="btn-energy-clear-pairs",
                             className="btn btn-outline-secondary btn-sm"),
             ], style={"margin": "6px 0"}),
             dash_table.DataTable(
                 id="energy-table", data=[],
-                columns=[{"name": "pair", "id": "pair"}, {"name": "f_A (Hz)", "id": "f_A"},
+                columns=[{"name": "Pair", "id": "pair"}, {"name": "f_A (Hz)", "id": "f_A"},
                          {"name": "f_B (Hz)", "id": "f_B"}, {"name": "f_B − f_A (Hz)", "id": "df"},
                          {"name": "E(B) − E(A) (keV)", "id": "de"},
-                         {"name": "frequencies from", "id": "src"}],
+                         {"name": "Frequencies From", "id": "src"}],
                 style_header=TABLE_HEADER, style_cell=TABLE_CELL, style_data_conditional=TABLE_ODD,
                 style_cell_conditional=[{"if": {"column_id": "src"}, "textAlign": "left",
                                          "fontFamily": "inherit", "color": "#666"}],
@@ -222,14 +222,14 @@ align_fit_tab = html.Div([
         html.Div([
         html.Div([
             html.Div([
-                html.Button("Peak fitting", id="btn-fit-mode",
+                html.Button("Peak Fitting", id="btn-fit-mode",
                             className="btn btn-outline-secondary btn-sm",
                             title="Turn on, then click peaks in the plot to add them to the fit",
                             style={"marginRight": "12px", "fontWeight": "600"}),
                 info_button("fit"),
             ], style={"display": "flex", "alignItems": "center", "marginBottom": "8px"}),
             html.Div([
-                html.Span("Shape for new peaks:", style={**LABEL_STYLE, "margin": "0 6px 0 0",
+                html.Span("Shape for New Peaks:", style={**LABEL_STYLE, "margin": "0 6px 0 0",
                                                          "minWidth": "135px"}),
                 dcc.Dropdown(id="fit-shape", value="gauss", clearable=False,
                              options=[{"label": "Gaussian", "value": "gauss"},
@@ -248,7 +248,7 @@ align_fit_tab = html.Div([
                                labelStyle={"marginRight": "10px", "fontSize": "13px"}),
             ], style={"display": "flex", "alignItems": "center", "marginBottom": "8px"}),
             html.Div([
-                html.Span("Fit region (Hz):", style={**LABEL_STYLE, "margin": "0 6px 0 0",
+                html.Span("Fit Region (Hz):", style={**LABEL_STYLE, "margin": "0 6px 0 0",
                                                      "minWidth": "135px"}),
                 dcc.Input(id="fit-region-lo", type="number", step="any", debounce=True,
                           className="form-control form-control-sm",
@@ -257,7 +257,7 @@ align_fit_tab = html.Div([
                 dcc.Input(id="fit-region-hi", type="number", step="any", debounce=True,
                           className="form-control form-control-sm",
                           style={"width": "170px", "marginRight": "8px"}),
-                html.Button("Region = view", id="btn-fit-region-view",
+                html.Button("Region = View", id="btn-fit-region-view",
                             className="btn btn-outline-secondary btn-sm",
                             title="Set the fit region to the current zoom range (you can also "
                                   "drag the two orange lines in the plot)"),
@@ -268,10 +268,10 @@ align_fit_tab = html.Div([
                                   "starting from the values in the table",
                             style={"backgroundColor": ACCENT, "color": "white",
                                    "marginRight": "8px", "minWidth": "70px"}),
-                html.Button("Clear peaks", id="btn-fit-clear",
+                html.Button("Clear Peaks", id="btn-fit-clear",
                             className="btn btn-outline-secondary btn-sm",
                             style={"marginRight": "8px"}),
-                html.Button("Send to isocurve", id="btn-iso-send",
+                html.Button("Send to Isocurve", id="btn-iso-send",
                             className="btn btn-outline-secondary btn-sm",
                             title="Send the fitted peaks (each needs an ion name and harmonic) "
                                   "to the Isochronicity Curve tab"),
@@ -280,7 +280,7 @@ align_fit_tab = html.Div([
             html.Div(id="iso-send-status", style={"fontSize": "12px", "marginTop": "2px"}),
         ]),
             html.Div([
-                html.Div(["Fit parameters", info_button("params", {"marginLeft": "6px"}),
+                html.Div(["Fit Parameters", info_button("params", {"marginLeft": "6px"}),
                           dcc.Checklist(id="fit-show-limits", value=[],
                                         options=[{"label": "limit columns", "value": "on"}],
                                         inputStyle={"marginRight": "4px"},
@@ -377,7 +377,7 @@ align_fit_tab = html.Div([
 
         # each plot in its own box, as in the Scan Results tab
         html.Div(
-            dcc.Graph(id="sum-graph", figure=empty_fig("Load files and click “Sum spectra”"),
+            dcc.Graph(id="sum-graph", figure=empty_fig("Load files and click “Sum Spectra”"),
                       # doubleClick off: a touchpad double-tap (to drag/pan)
                       # otherwise triggers Plotly's reset/autoscale, which
                       # redraws all ~131k points and stalls the page.
@@ -400,7 +400,7 @@ align_fit_tab = html.Div([
 FURTHER_PAGES = {"align": "further-page-align", "iso": "further-page-iso"}
 further_tab = html.Div([
     dcc.Tabs(id="further-subtabs", value="align", children=[
-        dcc.Tab(label="Aligning and fitting", value="align", style=SUBTAB_STYLE,
+        dcc.Tab(label="Aligning and Fitting", value="align", style=SUBTAB_STYLE,
                 selected_style=SUBTAB_SEL),
         dcc.Tab(label="Isochronicity Curve", value="iso", style=SUBTAB_STYLE,
                 selected_style=SUBTAB_SEL),

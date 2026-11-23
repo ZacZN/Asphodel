@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-logbook_dialog.py  –  "Save to log book" popout for the desktop tools (Tk)
+logbook_dialog.py  –  "Save to Log Book" popout for the desktop tools (Tk)
 
 The decay-fit window (matplotlib) opens this as its own process, so Tk and the
 plot window's GUI toolkit never share a process:
@@ -9,7 +9,7 @@ plot window's GUI toolkit never share a process:
 
 spec.json:
 
-    {"source": "Decay fit", "title": "...", "notes": "",
+    {"source": "Decay Fit", "title": "...", "notes": "",
      "slots": [{"label": "Ion", "value": "m186Hf72+"}],          # 1 or 2 ion fields
      "items": [{"label": "T½ (c.o.m.)", "value": 1.65, "error": 0.09, "unit": "s",
                 "slot": 0,               # sent with that ion only; null = with every ion
@@ -46,7 +46,7 @@ def run(spec, spec_path=None):
     from tkinter import ttk
 
     root = tk.Tk()
-    root.title(f"Save to log book · {spec.get('source', '')}")
+    root.title(f"Save to Log Book · {spec.get('source', '')}")
     root.configure(bg="white")
     root.minsize(560, 300)
     style = ttk.Style(root)
@@ -92,7 +92,7 @@ def run(spec, spec_path=None):
              highlightthickness=0).pack(fill="x")
 
     # --- values
-    label(body, "Values to send (edit if needed)").pack(fill="x", pady=(10, 2))
+    label(body, "Values to Send (edit if needed)").pack(fill="x", pady=(10, 2))
     vals = tk.Frame(body, bg="white")
     vals.pack(fill="x")
     for c, t in enumerate(["", "Quantity", "Value", "± Error", "Unit", ""]):
@@ -129,7 +129,7 @@ def run(spec, spec_path=None):
 
     for item in spec.get("items") or []:
         add_row(item)
-    tk.Button(body, text="+ Add value", relief="solid", bd=1, bg="white", activebackground=PALE,
+    tk.Button(body, text="+ Add Value", relief="solid", bd=1, bg="white", activebackground=PALE,
               command=lambda: add_row({"label": "", "checked": True}, editable_label=True)
               ).pack(anchor="w", pady=(4, 0))
 

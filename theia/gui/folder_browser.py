@@ -66,7 +66,7 @@ def _fb_start_dir(path):
 
 folder_browser = html.Div([
     html.Div([
-        html.Div("Choose a folder", style={"fontWeight": "700", "fontSize": "15px",
+        html.Div("Choose a Folder", style={"fontWeight": "700", "fontSize": "15px",
                                            "marginBottom": "8px"}),
         html.Div([
             html.Button("⬆ Up", id="fb-up", className="btn btn-outline-secondary btn-sm",
@@ -87,7 +87,7 @@ folder_browser = html.Div([
         html.Div([
             html.Button("Cancel", id="fb-cancel", className="btn btn-outline-secondary btn-sm",
                         style={"marginRight": "8px"}),
-            html.Button("Select this folder", id="fb-select", className="btn btn-sm",
+            html.Button("Select This Folder", id="fb-select", className="btn btn-sm",
                         style={"backgroundColor": ACCENT, "color": "white", "fontWeight": "600"}),
         ], style={"display": "flex", "justifyContent": "flex-end", "marginTop": "10px"}),
     ], className="theia-box",
@@ -154,7 +154,7 @@ def _fb_listing(path):
 )
 def folder_browser_cb(*args):
     """Open the browser at the field's current folder, navigate, and on
-    'Select this folder' write the folder into the field that opened it."""
+    'Select This Folder' write the folder into the field that opened it."""
     fields = list(BROWSE_TARGETS.values())
     nf = len(fields)
     path, target = args[-nf - 2:-nf]
@@ -222,6 +222,6 @@ def _fb_connected(current):
                    "background": ACCENT if here else "white", "color": "white" if here else "#333",
                    "opacity": 1 if os.path.isdir(f["path"]) else 0.5}))
     if out:
-        out.insert(0, html.Span("Connected folders:", style={"fontSize": "12px", "color": "#666",
+        out.insert(0, html.Span("Connected Folders:", style={"fontSize": "12px", "color": "#666",
                                                               "alignSelf": "center"}))
     return out

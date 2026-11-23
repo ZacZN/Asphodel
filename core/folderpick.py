@@ -38,7 +38,7 @@ def available():
         return None
 
 
-def pick_folder(title="Choose a folder", initial=None, timeout=600):
+def pick_folder(title="Choose a Folder", initial=None, timeout=600):
     """Open the desktop's folder dialog; the chosen folder, or None."""
     initial = initial if initial and os.path.isdir(initial) else os.path.expanduser("~")
     tool = available()

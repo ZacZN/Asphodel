@@ -52,7 +52,7 @@ app.clientside_callback(
             setTimeout(function() {
                 document.body.innerHTML =
                     '<div style="font-family:sans-serif;padding:60px;text-align:center;">' +
-                    '<h3 style="color:#f57d15">Theia has stopped</h3>' +
+                    '<h3 style="color:#f57d15">Theia Has Stopped</h3>' +
                     '<p>You can close this tab.</p></div>';
             }, 300);
         });

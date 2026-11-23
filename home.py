@@ -11,7 +11,7 @@ The suite's launcher and overview, as a Dash app (http://127.0.0.1:8050/):
     as a separate process with the experiment fixed (ASPHODEL_EXPERIMENT), so
     a running tool stays on its experiment if the home page switches.
   * folders: the data and output folders the tools use, connected per
-    experiment ("Connect data folder…" / "Connect output folder…", each with a
+    experiment ("Connect Data Folder…" / "Connect Output Folder…", each with a
     kind; core/paths.py keeps them in <experiment>/settings/folders.json)
   * the shared physics settings (physics.json) and the overrides of each tool
   * lab book per experiment: time-stamped notes under a heading per day
@@ -82,9 +82,9 @@ TOOLS = {
                         "2-D / 3-D time × frequency view, simulated lines, region selection "
                         "for decay fits.", False),
     # no card: started from the spectrogram, or re-run from the Decay fits tab
-    "decay_fit":       (None, "Decay fit", "spectrogram/decay_fit.py",
+    "decay_fit":       (None, "Decay Fit", "spectrogram/decay_fit.py",
                         "Exponential / Bateman / joint fits and half-lives.", False),
-    "sum_spectra":     ("Tartarus", "Sum spectra", "tartarus/sum_spectra.py",
+    "sum_spectra":     ("Tartarus", "Sum Spectra", "tartarus/sum_spectra.py",
                         "Sum all 1-D spectra of a folder (raw and drift-aligned).", False),
     # (tartarus/new_2nd_order_correction_plot.py has no card any more: the GUI
     #  correction tool replaces it and opens its figure with its "Plot" button)
@@ -93,10 +93,10 @@ TOOLS = {
                         "place, assign peaks, fit and save a correction per harmonic.", True),
     "levelschemer":    ("Elysium", "LevelSchemer", "elysium/levelschemer.py",
                         "Draw nuclear level schemes (Tk window).", False),
-    "segre":           ("Reference", "Segrè chart", "reference/segre_chart.py",
+    "segre":           ("Reference", "Segrè Chart", "reference/segre_chart.py",
                         "Chart of nuclides from NUBASE2020: colour by half-life, decay mode or "
                         "identified ions; ground states or isomers; hover for the data.", True),
-    "results_logbook": ("Reference", "Results log book", "reference/results_logbook.py",
+    "results_logbook": ("Reference", "Results Log Book", "reference/results_logbook.py",
                         "What you found out about each ion, one tab per ion: half-lives, peaks, "
                         "plots and notes sent with \u201cSave to log book\u201d from the decay fit, "
                         "spectrogram and Theia.", True),
@@ -258,8 +258,8 @@ def _update_json(path, changes):
 def tool_overrides():
     """{tool label: {key: value}} physics values a tool keeps for itself."""
     out = {}
-    for label, fname, sub in (("Theia scanner", "scanner_config.json", None),
-                              ("Theia viewer", "viewer_config.json", None),
+    for label, fname, sub in (("Theia Scanner", "scanner_config.json", None),
+                              ("Theia Viewer", "viewer_config.json", None),
                               ("Spectrogram", "spectrogram_prefs.json", "sim")):
         d = _read_json(paths.settings_file(fname))
         if sub:
@@ -349,10 +349,10 @@ def tool_card(key):
                   act("stop", "theia", "Stop")],
         "spectrogram": [act("start", "spectrogram", "Open", "btn primary small",
                             title="Reopens the last session, or the file chooser"),
-                        act("stop", "spectrogram", "Stop all")],
+                        act("stop", "spectrogram", "Stop All")],
         "levelschemer": [act("start", "levelschemer", "Open", "btn primary small",
                              title="Reopens the last scheme"),
-                         act("stop", "levelschemer", "Stop all")],
+                         act("stop", "levelschemer", "Stop All")],
         "gui_correction": [act("start", "gui_correction", "Open", "btn primary small",
                                title="Opens in a new tab, at the last spectrum"),
                            act("stop", "gui_correction", "Stop")],
@@ -407,23 +407,23 @@ def tool_forms():
     lbl = lambda t: html.Label(t, className="flabel")
     return {
         "sum_spectra": html.Div([
-            lbl("Input folder"),
+            lbl("Input Folder"),
             dcc.Dropdown(id="ss-in", options=_folder_opts("data", "spectra_1d"), clearable=False,
                          value=paths.spectra_1d()),
-            lbl("Output folder"),
+            lbl("Output Folder"),
             dcc.Dropdown(id="ss-out", options=_folder_opts("data", "summed_1d"), clearable=False,
                          value=paths.summed_1d()),
-            lbl("Peak tracking window ± (Hz)"),
+            lbl("Peak Tracking Window ± (Hz)"),
             html.Div(dcc.Input(id="ss-window", type="number", min=1, value=500, debounce=True),
                      title="The drift-corrected sum follows the strongest peak: each spectrum's "
                            "peak is looked for within ± this of the previous one's"),
             html.Button("Run", id="ss-run", className="btn primary small", n_clicks=0),
         ], className="form"),
         "levelschemer": html.Div([
-            lbl("Open a scheme"),
+            lbl("Open a Scheme"),
             dcc.Dropdown(id="ls-file", options=schemes, clearable=False,
                          value=schemes[0]["value"] if schemes else None),
-            html.Button("Open scheme", id="ls-run", className="btn small", n_clicks=0),
+            html.Button("Open Scheme", id="ls-run", className="btn small", n_clicks=0),
         ], className="form"),
     }
 
@@ -439,11 +439,11 @@ def nubase_card():
         body = [
             dcc.Store(id="nub-index", data=pages),
             html.Div([
-                html.Label("Go to a nuclide (e.g. 198Ir, Ir198, Ir-198)", className="flabel"),
+                html.Label("Go to a Nuclide (e.g. 198Ir, Ir198, Ir-198)", className="flabel"),
                 dcc.Input(id="nub-q", type="text", list="nub-names", debounce=False,
                           className="wide", placeholder="198Ir", autoComplete="off", n_submit=0),
                 html.Datalist(id="nub-names", children=[html.Option(value=k) for k in pages]),
-                html.Div([html.A("Open at page", id="nub-go", href=NUBASE_URL, target="asphodel-nubase",
+                html.Div([html.A("Open at Page", id="nub-go", href=NUBASE_URL, target="asphodel-nubase",
                                  className="btn small"),
                           html.Span(id="nub-msg", className="note")], className="below"),
             ], className="form"),
@@ -497,13 +497,13 @@ def tools_section():
 # --------------------------------------------------------------------------- sidebar
 
 PHYS_LABELS = {
-    "ref_name": "Reference ion", "ref_frequency": "f_ref (Hz)", "ref_harmonic": "Ref. harmonic",
-    "gamma_t": "γ_t", "harmonics": "Harmonics", "z_lims": "Z min, max", "n_lims": "N min, max",
+    "ref_name": "Reference Ion", "ref_frequency": "f_ref (Hz)", "ref_harmonic": "Ref. Harmonic",
+    "gamma_t": "γ_t", "harmonics": "Harmonics", "z_lims": "Z Min, Max", "n_lims": "N Min, Max",
     "el1": "el1 (A, Z)", "el2": "el2 (A, Z)", "mq_width": "m/q window (±)",
     "correction_enabled": "2nd-order correction", "corr_a": "a", "corr_b": "b", "corr_c": "c",
-    "min_half_life": "Min T½", "min_half_life_unit": "T½ unit",
-    "exclude_unknown_hl": "Exclude unknown T½",
-    "corr_profile": "Correction profile", "ref_search_hz": "Ref. peak search, other h ± (Hz)",
+    "min_half_life": "Min T½", "min_half_life_unit": "T½ Unit",
+    "exclude_unknown_hl": "Exclude Unknown T½",
+    "corr_profile": "Correction Profile", "ref_search_hz": "Ref. Peak Search, Other h ± (Hz)",
 }
 
 
@@ -537,7 +537,7 @@ def physics_panel():
             profs = corrections.load_profiles()
             r = corrections.resolve(sh.get("corr_profile"), sh["corr_a"], sh["corr_b"], sh["corr_c"],
                                     profiles=profs)
-            fields += [html.Label("Correction profile"),
+            fields += [html.Label("Correction Profile"),
                        dcc.Dropdown(id={"type": "phys", "k": "corr_profile"},
                                     options=corrections.options(profs), value=r["name"],
                                     clearable=False, className="unit")]
@@ -555,9 +555,9 @@ def physics_panel():
                  for t, d in ov.items()] or [html.Div("none")])
     return html.Div([
         html.Div(fields, className="kv"),
-        html.Div([html.Button("Save physics", id="phys-save", className="btn primary small", n_clicks=0),
+        html.Div([html.Button("Save Physics", id="phys-save", className="btn primary small", n_clicks=0),
                   html.Span(id="phys-msg", className="note")], className="below"),
-        html.Div([html.Div("Tool overrides (tool settings that differ from these):", className="note"),
+        html.Div([html.Div("Tool Overrides (tool settings that differ from these):", className="note"),
                   html.Div(ov_lines, className="note")], className="below"),
         html.Div("Tools read these when they start (Theia: on page reload).", className="note"),
     ])
@@ -584,7 +584,7 @@ def touchpad_panel():
     marks = {i: f"{v:g}×" for i, v in enumerate(trackpad.SPEEDS)}
     idx = min(range(len(trackpad.SPEEDS)), key=lambda i: abs(trackpad.SPEEDS[i] - cur))
     return html.Div([
-        html.Label("Touchpad zoom speed", className="flabel"),
+        html.Label("Touchpad Zoom Speed", className="flabel"),
         dcc.Slider(id="touchpad-speed", min=0, max=len(trackpad.SPEEDS) - 1, step=1,
                    value=idx, marks=marks, included=False, updatemode="mouseup"),
         html.Div(id="touchpad-msg", className="note"),
@@ -598,11 +598,11 @@ def sidebar():
     nub = os.path.join(paths.REPO_ROOT, "core", "nubase_4.mas20")
     return html.Aside([
         html.Div([
-            html.Details([html.Summary("Shared physics"), physics_panel()],
+            html.Details([html.Summary("Shared Physics"), physics_panel()],
                          open=False, className="fold first"),
             html.Details([html.Summary("Touchpad"), touchpad_panel()],
                          open=False, className="fold"),
-            html.H3("Reference data"),
+            html.H3("Reference Data"),
             html.Div([html.B("NUBASE"), html.Code("core/nubase_4.mas20"),
                       html.Div(_mtime(nub))], className="src"),
         ], className="side-top"),
@@ -695,8 +695,8 @@ def folders_section():
                 " for the kind it needs, and its folder and file choosers list all connected folders. "
                 "Without a folder of a kind, the experiment's standard sub-folder is used."],
                className="note"),
-        html.Div([_folder_group("data", "Data folders", "Connect data folder…"),
-                  _folder_group("output", "Output folders", "Connect output folder…")],
+        html.Div([_folder_group("data", "Data Folders", "Connect Data Folder…"),
+                  _folder_group("output", "Output Folders", "Connect Output Folder…")],
                  className="fgrid"),
         dcc.Store(id="fold-ver", data=0),
     )
@@ -724,7 +724,7 @@ def _labbook_log():
               for e in reversed(day["entries"])],
         ], className="lb-dayblock"))
     if earlier:
-        out.append(html.Div([html.Div("Earlier notes (before the lab book)", className="lb-day"),
+        out.append(html.Div([html.Div("Earlier Notes (before the lab book)", className="lb-day"),
                              html.Div(earlier, className="lb-text lb-earlier")], className="lb-dayblock"))
     if not out:
         out = [html.Div("No entries yet.", className="note")]
@@ -733,10 +733,10 @@ def _labbook_log():
 
 def notes_section():
     return section(
-        "Lab book",
+        "Lab Book",
         dcc.Textarea(id="notes", value="", className="notes",
                      placeholder="New entry for today (time-stamped when added)…"),
-        html.Div([html.Button("Add entry", id="notes-add", className="btn primary small", n_clicks=0),
+        html.Div([html.Button("Add Entry", id="notes-add", className="btn primary small", n_clicks=0),
                   html.Span(id="notes-msg", className="note"),
                   html.Span("Entries can't be changed once added; add a new one to correct.",
                             className="note lb-hint")], className="below"),
@@ -750,7 +750,7 @@ def header():
     return html.Header([
         html.Div(["Asphodel", html.Span(" ·")], className="logo"),
         dcc.Dropdown(id="exp-select", options=exps, value=cur, clearable=False, className="exp"),
-        html.Button("+ New experiment…", id="exp-new-open", className="btn small", n_clicks=0),
+        html.Button("+ New Experiment…", id="exp-new-open", className="btn small", n_clicks=0),
         html.Span(paths.experiment_dir(), className="path"),
         html.Span(className="spacer"),
         html.Button("⇅ Sync with APPC256", id="sync-open", className="btn small", n_clicks=0,
@@ -768,12 +768,12 @@ def header():
 def new_experiment_modal():
     exps = paths.list_experiments()
     return html.Div(id="exp-modal", className="modal", style={"display": "none"}, children=html.Div([
-        html.H2("New experiment"),
+        html.H2("New Experiment"),
         html.Label("Name", className="flabel"),
         dcc.Input(id="exp-name", type="text", placeholder="e.g. E0204", className="wide"),
-        html.Label("Data folder (empty = data/<name> in the Asphodel folder)", className="flabel"),
+        html.Label("Data Folder (empty = data/<name> in the Asphodel folder)", className="flabel"),
         dcc.Input(id="exp-dir", type="text", className="wide", placeholder=paths.DATA_ROOT + "/<name>"),
-        html.Label("Copy the shared physics settings from", className="flabel"),
+        html.Label("Copy the Shared Physics Settings From", className="flabel"),
         dcc.Dropdown(id="exp-copy", options=[{"label": "(built-in defaults)", "value": ""}] + exps,
                      value=paths.experiment(), clearable=False),
         html.Div([html.Button("Create", id="exp-create", className="btn primary small", n_clicks=0),
@@ -799,18 +799,18 @@ def sync_modal():
         html.Label("lxlogin password (not stored; leave empty if a connection to appc256 is "
                    "already open, e.g. an ssh session from the last 4 h)", className="flabel"),
         dcc.Input(id="sync-pw", type="password", className="wide", autoComplete="off"),
-        html.Div([html.Button("Check and send confirmed lists", id="sync-check",
+        html.Div([html.Button("Check and Send Confirmed Lists", id="sync-check",
                               className="btn primary small", n_clicks=0),
                   html.Button("Close", id="sync-close", className="btn small", n_clicks=0)],
                  className="below"),
         dcc.Loading(html.Div(id="sync-result", className="below"), type="dot", color=ACCENT),
         html.Div(id="sync-pull-box", style=hidden, className="below", children=[
-            html.Label("Summed spectrograms on APPC256 that are not here (subfolders are kept)",
+            html.Label("Summed Spectrograms on APPC256 That Are Not Here (subfolders are kept)",
                        className="flabel"),
             dcc.Checklist(id="sync-pull-list", options=[], value=[], className="pull-list"),
             html.Div(id="sync-space", className="note below"),
-            html.Div([html.Button("Pull selected", id="sync-pull", className="btn primary small", n_clicks=0),
-                      html.Button("Cancel pull", id="sync-cancel", className="btn small", n_clicks=0),
+            html.Div([html.Button("Pull Selected", id="sync-pull", className="btn primary small", n_clicks=0),
+                      html.Button("Cancel Pull", id="sync-cancel", className="btn small", n_clicks=0),
                       html.Span(id="sync-msg", className="note")], className="below"),
         ]),
         html.Div(id="sync-progress", className="below"),
@@ -969,7 +969,7 @@ app.index_string = app.index_string.replace("</head>", f"<style>{CSS}</style></h
 app.index_string = app.index_string.replace(
     "{%scripts%}", "{%scripts%}\n<script>" + tabwatch.watch_js("Asphodel") + "</script>")
 icon.use_in_dash(app, "asphodel")          # browser-tab icon (core/icons/)
-app.layout = logpanel.dash_layout(serve_layout, "Home page", files=True)
+app.layout = logpanel.dash_layout(serve_layout, "Home Page", files=True)
 logpanel.register_dash(app, files=True)
 
 
@@ -1454,7 +1454,7 @@ def _home_tab_closed():
     os._exit(0)
 
 
-_TABS = tabwatch.TabTracker(on_last_closed=_home_tab_closed, name="Asphodel home page")
+_TABS = tabwatch.TabTracker(on_last_closed=_home_tab_closed, name="Asphodel Home Page")
 tabwatch.install_flask(app.server, _TABS)
 
 
@@ -1528,7 +1528,7 @@ app.clientside_callback(
             setTimeout(function() {
                 document.body.innerHTML =
                     '<div style="font-family:sans-serif;padding:60px;text-align:center;">' +
-                    '<h3 style="color:#f57d15">Asphodel has stopped</h3>' +
+                    '<h3 style="color:#f57d15">Asphodel Has Stopped</h3>' +
                     '<p>All tools are closed. You can close this tab; start again with ' +
                     '<code>python home.py</code>.</p></div>';
             }, 300);

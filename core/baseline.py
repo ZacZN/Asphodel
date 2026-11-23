@@ -29,11 +29,11 @@ FIELDS = {
     "lam":        ("λ (smoothness)",
                    "Larger = stiffer, smoother baseline. Scales with the number of "
                    "frequency bins in the window: try 1e4 – 1e8."),
-    "diff_order": ("Difference order",
+    "diff_order": ("Difference Order",
                    "Order of the difference penalty (2 is usual; 1 = flatter, 3 = curvier)."),
-    "max_iter":   ("Max iterations (inner)", "Maximum reweighting iterations per fit."),
+    "max_iter":   ("Max Iterations (inner)", "Maximum reweighting iterations per fit."),
     "tol":        ("Tolerance (inner)", "Stop the inner loop when the change is below this."),
-    "max_iter_2": ("Max iterations (outer)", "Maximum iterations of the outer β update."),
+    "max_iter_2": ("Max Iterations (outer)", "Maximum iterations of the outer β update."),
     "tol_2":      ("Tolerance (outer)", "Stop the outer loop when β changes by less than this."),
 }
 _INTS = ("diff_order", "max_iter", "max_iter_2")

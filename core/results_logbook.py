@@ -2,7 +2,7 @@
 results_logbook.py  –  the experiment's results log book (one page per ion)
 
 Results about each ion (half-lives, peak frequencies, plots, notes) are sent
-here from the tools ("Save to log book" in the decay-fit window, the
+here from the tools ("Save to Log Book" in the decay-fit window, the
 spectrogram page and Theia's Viewer / Scan Results) and shown by
 reference/results_logbook.py, one vertical tab per ion.
 
@@ -21,7 +21,7 @@ results_logbook.json (format asphodel-results-logbook v1):
                          "created": "2026-11-23T10:00:00"}},
      "entries": [{"id": "a1b2c3d4e5", "ion": "198mIr",
                   "created": "...", "updated": "...",
-                  "source": "Decay fit",          # tool that sent it
+                  "source": "Decay Fit",          # tool that sent it
                   "title": "...", "notes": "...",
                   "values": [{"label": "T½ (c.o.m.)", "value": 1.4, "error": 0.1,
                               "unit": "s"}, ...],
@@ -247,13 +247,13 @@ def _store_plots(eid, plots, exp=None, start=0):
 
 def add_entry(ion, source, title="", notes="", values=(), plots=(), context=None, exp=None):
     """Add an entry to an ion's tab (made if new).  `ion` is a name parse_ion
-    reads; a charge state in it ('198Ir77+') is added as the value 'Charge state q'
+    reads; a charge state in it ('198Ir77+') is added as the value 'Charge State q'
     unless the values already have one.  `plots` = [{"png": bytes | data URL |
     path, "caption": str}].  Returns (entry id, ion key)."""
     info = parse_ion(ion)
     vals = clean_values(values)
     if info["charge"] is not None and not any(v["label"].lower().startswith("charge") for v in vals):
-        vals.insert(0, {"label": "Charge state q", "value": info["charge"]})
+        vals.insert(0, {"label": "Charge State q", "value": info["charge"]})
     eid = uuid.uuid4().hex[:10]
     stored = _store_plots(eid, plots, exp)          # before the lock: files only
     path = logbook_path(exp)

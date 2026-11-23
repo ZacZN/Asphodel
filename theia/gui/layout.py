@@ -68,7 +68,7 @@ _BASE_LAYOUT = html.Div([
         ]),
         dcc.Tab(label="Scan Results", value="results", style=TAB_STYLE, selected_style=TAB_SEL,
                 children=[results_tab]),
-        dcc.Tab(label="Further output", value="further", style=TAB_STYLE, selected_style=TAB_SEL,
+        dcc.Tab(label="Further Output", value="further", style=TAB_STYLE, selected_style=TAB_SEL,
                 children=[further_tab]),
     # Tab bar stops short of the right edge to leave room for the Quit and
     # Settings buttons

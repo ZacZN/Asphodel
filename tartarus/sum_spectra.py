@@ -160,14 +160,14 @@ def main() -> None:
     )
 
     ax_raw.plot(freq_raw, sum_raw, lw=0.8, color="steelblue")
-    ax_raw.set_title(f"Raw sum  ({info_raw['n']} spectra)", fontsize=12)
+    ax_raw.set_title(f"Raw Sum  ({info_raw['n']} spectra)", fontsize=12)
     ax_raw.set_xlabel("Frequency")
-    ax_raw.set_ylabel("Summed intensity")
+    ax_raw.set_ylabel("Summed Intensity")
 
     ax_al.plot(freq_al, sum_aligned, lw=0.8, color="darkorange")
-    ax_al.set_title(f"Drift-corrected sum  ({info['n']} spectra)", fontsize=12)
+    ax_al.set_title(f"Drift-Corrected Sum  ({info['n']} spectra)", fontsize=12)
     ax_al.set_xlabel("Frequency")
-    ax_al.set_ylabel("Summed intensity")
+    ax_al.set_ylabel("Summed Intensity")
 
     fig.tight_layout()
     plt.show()

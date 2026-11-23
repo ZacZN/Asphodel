@@ -8,7 +8,7 @@ ion's entries on the right, newest first.  Started from the home page
 (Reference section), which opens it in a new tab; it stops a few seconds after
 its tab is closed, or with Stop on the home page.
 
-Entries are sent from the other tools with "Save to log book" (decay-fit
+Entries are sent from the other tools with "Save to Log Book" (decay-fit
 window, spectrogram page, Theia Viewer and Scan Results): a popout where you
 choose the ion and tick the values and the plot to send.  Each entry has a
 title, the values (value ± error unit), plots, notes and where it came from;
@@ -119,10 +119,10 @@ header .exp{{color:#777;font-family:monospace;font-size:12px}}
 .modal .foot{{display:flex;gap:8px;align-items:center;margin-top:14px}}
 """
 
-app = dash.Dash(__name__, title="Results log book", suppress_callback_exceptions=True)
+app = dash.Dash(__name__, title="Results Log Book", suppress_callback_exceptions=True)
 app.index_string = app.index_string.replace("</head>", f"<style>{CSS}</style></head>")
 app.index_string = app.index_string.replace(
-    "{%scripts%}", "{%scripts%}\n<script>" + tabwatch.watch_js("Results log book") + "</script>")
+    "{%scripts%}", "{%scripts%}\n<script>" + tabwatch.watch_js("Results Log Book") + "</script>")
 icon.use_in_dash(app, "results_logbook")      # core/icons/results_logbook.png, else asphodel.png
 
 PLOT_URL = "/logbook-plot/"
@@ -171,7 +171,7 @@ def serve_layout():
 def edit_modal():
     lbl = lambda t: html.Label(t, className="f")
     return html.Div(html.Div([
-        html.H3("Edit entry"),
+        html.H3("Edit Entry"),
         html.Div([
             html.Div([lbl("Ion (tab)"),
                       dcc.Input(id="ed-ion", type="text", list="ed-ions", autoComplete="off"),
@@ -188,7 +188,7 @@ def edit_modal():
                         "textAlign": "left", "border": f"1px solid {LINE}"},
             style_header={"backgroundColor": PALE, "fontWeight": "600", "fontFamily": "inherit"},
             style_table={"maxHeight": "260px", "overflowY": "auto"}),
-        html.Button("+ Add value", id="ed-addrow", className="btn", n_clicks=0,
+        html.Button("+ Add Value", id="ed-addrow", className="btn", n_clicks=0,
                     style={"marginTop": "6px"}),
         html.Div([lbl("Plots (untick to delete)"),
                   dcc.Checklist(id="ed-plots", options=[], value=[], className="chk")],
@@ -201,7 +201,7 @@ def edit_modal():
     ], className="modal"), id="ed-bg", className="modal-bg", style={"display": "none"})
 
 
-app.layout = logpanel.dash_layout(serve_layout, "Results log book")
+app.layout = logpanel.dash_layout(serve_layout, "Results Log Book")
 logpanel.register_dash(app)
 
 
@@ -265,7 +265,7 @@ def _entry_card(e):
         _value_rows(e.get("values")),
         html.Div(plots, className="plots") if plots else None,
         html.Div(e["notes"], className="notes") if e.get("notes") else None,
-        html.Details([html.Summary("Where it came from"),
+        html.Details([html.Summary("Where It Came From"),
                       *[html.Div(f"{k}: {v}") for k, v in ctxt.items()]]) if ctxt else None,
     ], className="entry")
 
@@ -298,7 +298,7 @@ def _select(clicks, search, sel):
 def _draw_tabs(_ver, sel, q):
     lst = rlb.ions()
     if not lst:
-        return html.Div("No ions yet. Use “Save to log book” in the decay-fit window, the "
+        return html.Div("No ions yet. Use “Save to Log Book” in the decay-fit window, the "
                         "spectrogram page or Theia.", className="empty")
     shown = [_tab(k, ion, n, k == sel) for k, ion, n in lst if _matches(k, ion, q)]
     return shown or html.Div("No ion matches.", className="empty")
@@ -308,9 +308,9 @@ def _draw_tabs(_ver, sel, q):
 def _draw_content(_ver, sel):
     d = rlb.load()
     if not sel or sel not in d["ions"]:
-        return html.Div([html.H2("Results log book"),
+        return html.Div([html.H2("Results Log Book"),
                          html.P("One tab per ion (nuclide + energy state). Entries are added with "
-                                "“Save to log book” in the decay-fit window, on the "
+                                "“Save to Log Book” in the decay-fit window, on the "
                                 "spectrogram page and in Theia (Viewer and Scan Results).",
                                 className="hint")])
     ion = d["ions"][sel]
@@ -319,7 +319,7 @@ def _draw_content(_ver, sel):
     state = "ground state" if ion.get("state", "g") == "g" else f"isomer ({ion['state']})"
     right = [html.Span(f"{len(entries)} entr{'y' if len(entries) == 1 else 'ies'}", className="hint")]
     if not entries:
-        right.append(html.Button("Remove empty tab", id={"type": "rmtab", "k": sel}, n_clicks=0,
+        right.append(html.Button("Remove Empty Tab", id={"type": "rmtab", "k": sel}, n_clicks=0,
                                  className="btn danger"))
     return html.Div([
         html.Div([html.H2(sel), html.Span(f"Z = {ion.get('Z')}, N = {ion.get('N')}, {state}",
@@ -448,7 +448,7 @@ def _save_edit(_n, eid, ion, title, rows, keep, notes, ver):
 
 # ===========================================================================
 
-_TABS = tabwatch.TabTracker(on_last_closed=lambda: os._exit(0), name="Results log book")
+_TABS = tabwatch.TabTracker(on_last_closed=lambda: os._exit(0), name="Results Log Book")
 tabwatch.install_flask(app.server, _TABS)
 
 

@@ -396,7 +396,7 @@ async function ldList(dir) {
     // the experiment's connected data folders (home page → Folders), one click away
     if (d.connected && d.connected.length) {
       var cn = document.createElement('div'); cn.className = 'conn';
-      var lb = document.createElement('span'); lb.textContent = 'Connected folders:'; cn.appendChild(lb);
+      var lb = document.createElement('span'); lb.textContent = 'Connected Folders:'; cn.appendChild(lb);
       d.connected.forEach(function(f) {
         var b = document.createElement('button');
         b.textContent = f.name === f.kind ? f.name : (f.name + ' · ' + f.kind);
@@ -586,7 +586,7 @@ def sim_panel_html():
   <div id="simModal" class="sim-modal" onclick="if(event.target===this) simClose()">
    <div class="sim-dialog sim-row" role="dialog" aria-modal="true" aria-labelledby="simTitle">
     <div class="sim-head">
-      <span id="simTitle">PID settings</span>
+      <span id="simTitle">PID Settings</span>
       <button class="sim-x" onclick="simClose()" title="Close (Esc)">×</button>
     </div>
     <div class="sim-body">
@@ -601,7 +601,7 @@ def sim_panel_html():
       {txt("ref_name", 90, "Reference ion, e.g. 208Pb80+")}
       <label>h</label>
       {txt("ref_harmonic", 44, "Harmonic of the reference peak")}
-      <span style="text-transform:none;">other h ±</span>
+      <span style="text-transform:none;">Other h ±</span>
       {txt("ref_search_hz", 44, "Each harmonic's lines are placed from the reference ion's own peak in that harmonic: nearest peak to f_ref/h_ref·h within ± this (Hz). 0 = off")}
     </div>
     <div class="opt-grp">
@@ -676,7 +676,7 @@ def baseline_panel_html(info):
   <div id="blModal" class="sim-modal" onclick="if(event.target===this) modalClose('blModal')">
    <div class="sim-dialog" role="dialog" aria-modal="true" aria-labelledby="blTitle">
     <div class="sim-head">
-      <span id="blTitle">Baseline removal</span>
+      <span id="blTitle">Baseline Removal</span>
       <button class="sim-x" onclick="modalClose('blModal')" title="Close (Esc)">×</button>
     </div>
     <div class="sim-body">
@@ -865,8 +865,8 @@ function _renderRefTable(d) {
                                  : 'search off (ref ± = 0): predicted positions used';
   var h = '<div style="font-weight:600;margin-top:4px;">' + esc(d.ref_name) +
           ' peak in each harmonic <span style="font-weight:400;opacity:.7;">(' + note +
-          ')</span></div><table class="ref-tbl"><tr><th>h</th><th>status</th>' +
-          '<th>expected (Hz)</th><th>found at (Hz)</th><th>offset (Hz)</th></tr>';
+          ')</span></div><table class="ref-tbl"><tr><th>h</th><th>Status</th>' +
+          '<th>Expected (Hz)</th><th>Found at (Hz)</th><th>Offset (Hz)</th></tr>';
   rows.forEach(function(r) {
     var shown = r.status === 'reference' || r.status === 'found';
     h += '<tr><td>' + r.h + '</td><td class="st ' + r.status + '">' + esc(r.label) + '</td><td>' +
@@ -1286,7 +1286,7 @@ async function suggestDecayTitle() {
     if (!d.hits.length) { _sugStatus('No simulated ions in this region', 'err'); return; }
     _sugStatus(d.n + ' in region, nearest centre first, click one', 'ok');
     var hdr = document.createElement('div'); hdr.className = 'hdr';
-    ['Ion', 'Harmonic', 'f_sim (Hz)', 'from centre'].forEach(function(t) {
+    ['Ion', 'Harmonic', 'f_sim (Hz)', 'From Centre'].forEach(function(t) {
       var c = document.createElement('span'); c.textContent = t; hdr.appendChild(c);
     });
     list.appendChild(hdr);
@@ -1440,7 +1440,7 @@ function _renderFull() {
     FULL.range = {key: key, lo: lo - pad, hi: hi + pad};
   }
   var y0 = FULL.range.lo, y1 = FULL.range.hi;
-  var pLabel = useDb ? 'Summed power (dB)' : 'Summed power (linear)';
+  var pLabel = useDb ? 'Summed Power (dB)' : 'Summed Power (linear)';
 
   // vertical simulated lines over the whole file (sliders ignored)
   // a point every few pixels up each line so its tooltip works anywhere on it
@@ -1474,7 +1474,7 @@ function _renderFull() {
   });
   Plotly.react('fullPlot', traces, {
     template: {},
-    title: {text: 'Whole file: all ' + FULL.n + ' frames, ' +
+    title: {text: 'Whole File: All ' + FULL.n + ' Frames, ' +
                   Math.round(FULL.f[0]).toLocaleString('en-GB') + ' – ' +
                   Math.round(FULL.f[FULL.f.length - 1]).toLocaleString('en-GB') + ' Hz',
             x: 0.5, xanchor: 'center', font: {size: 18, color: '#e5e7eb'},
@@ -1493,7 +1493,7 @@ function _renderFull() {
 
 
 # ---------------------------------------------------------------------------
-# "Save to log book" popout (results log book: core/results_logbook.py)
+# "Save to Log Book" popout (results log book: core/results_logbook.py)
 # ---------------------------------------------------------------------------
 LOGBOOK_CSS = """
   .sim-head #lbTitle { font-size: 13px; font-weight: 600; text-transform: uppercase;
@@ -1527,7 +1527,7 @@ LOGBOOK_HTML = """
   <div id="lbModal" class="sim-modal" onclick="if(event.target===this) modalClose('lbModal')">
    <div class="sim-dialog lb-dialog" role="dialog" aria-modal="true" aria-labelledby="lbTitle">
     <div class="sim-head">
-      <span id="lbTitle">Save to log book</span>
+      <span id="lbTitle">Save to Log Book</span>
       <button class="sim-x" onclick="modalClose('lbModal')" title="Close (Esc)">×</button>
     </div>
     <div class="sim-body">
@@ -1538,10 +1538,10 @@ LOGBOOK_HTML = """
         <div><label class="f" for="lbEntryTitle">Title</label>
           <input type="text" id="lbEntryTitle" autocomplete="off"></div>
       </div>
-      <div><label class="f">Values to send (edit if needed)</label>
+      <div><label class="f">Values to Send (edit if needed)</label>
         <table class="lb-vals"><thead><tr><th></th><th>Quantity</th><th>Value</th><th>± Error</th>
           <th>Unit</th></tr></thead><tbody id="lbVals"></tbody></table>
-        <button onclick="lbAddRow()" style="margin-top:6px;">+ Add value</button></div>
+        <button onclick="lbAddRow()" style="margin-top:6px;">+ Add Value</button></div>
       <div><label class="f">Plots (as shown now)</label><div id="lbPlots" class="lb-plots"></div></div>
       <div><label class="f" for="lbNotes">Notes</label><textarea id="lbNotes"></textarea></div>
       <div class="lb-foot">
@@ -1604,7 +1604,7 @@ async function lbOpen() {
   modalOpen('lbModal', 'lbIon');
   _lbStatus('');
   document.getElementById('lbSaveBtn').disabled = false;
-  // ion + harmonic from the "Search ions" label ("m186Hf72+, h213"), else the decay-fit title
+  // ion + harmonic from the "Search Ions" label ("m186Hf72+, h213"), else the decay-fit title
   var lab = (typeof CUR_ION_LABEL === 'string' && CUR_ION_LABEL) ? CUR_ION_LABEL
             : document.getElementById('decayTitleBox').value;
   var parts = String(lab || '').split(',');
@@ -1620,9 +1620,9 @@ async function lbOpen() {
   var fMin = +document.getElementById('fMin').value, fMax = +document.getElementById('fMax').value;
   var tMin = +document.getElementById('tMin').value, tMax = +document.getElementById('tMax').value;
   if (hm) lbAddRow({label: 'Harmonic h', value: hm});
-  lbAddRow({label: 'Frequency window', value: fMin.toFixed(1) + ' – ' + fMax.toFixed(1), unit: 'Hz'});
-  lbAddRow({label: 'Time window', value: tMin.toFixed(3) + ' – ' + tMax.toFixed(3), unit: 's'});
-  lbAddRow({label: 'Time average', value: APPLIED_N, unit: 'frames', checked: false});
+  lbAddRow({label: 'Frequency Window', value: fMin.toFixed(1) + ' – ' + fMax.toFixed(1), unit: 'Hz'});
+  lbAddRow({label: 'Time Window', value: tMin.toFixed(3) + ' – ' + tMax.toFixed(3), unit: 's'});
+  lbAddRow({label: 'Time Average', value: APPLIED_N, unit: 'frames', checked: false});
   // existing tabs for the ion box
   try {
     var r = await fetch('/logbook-ions'); var d = await r.json();
@@ -1709,7 +1709,7 @@ def build_landing_page():
 <head>
 <meta charset="utf-8">
 {icon.LINK_TAG}
-<title>Asphodel — open spectrogram</title>
+<title>Asphodel — Open Spectrogram</title>
 <style>
   * {{ box-sizing: border-box; }}
   body {{ margin: 0; padding: 8px; background: #111827; color: #e5e7eb;
@@ -1987,7 +1987,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
   <div id="fileModal" class="sim-modal" onclick="if(event.target===this) modalClose('fileModal')">
    <div class="sim-dialog file-dialog" role="dialog" aria-modal="true" aria-labelledby="fileTitle">
     <div class="sim-head">
-      <span id="fileTitle">File settings</span>
+      <span id="fileTitle">File Settings</span>
       <button class="sim-x" onclick="modalClose('fileModal')" title="Close (Esc)">×</button>
     </div>
     <div class="sim-body">
@@ -2031,7 +2031,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
   </div>
   <div class="opts-row">
     <div class="opt-grp">
-      <span>Time avg</span>
+      <span>Time Avg</span>
       <input type="number" id="nAvg" min="1" step="1" value="{n_avg_init}">
       <button onclick="updateSurface()">Apply</button>
       <span id="discardMsg"></span>
@@ -2041,9 +2041,9 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
       <button onclick="modalOpen('fileModal', 'ldPath')" title="Load a file / change the frequency crop">File Settings…</button>
       <button onclick="simOpen()" title="Particle-identification settings: simulated ion lines">PID Settings…</button>
       <button id="blBtn" onclick="modalOpen('blModal', 'bl_lam')" title="Remove a BrPLS baseline from every time frame">{_bl_btn}</button>
-      <button onclick="modalOpen('searchModal', 'srchIon')" title="Find an ion's simulated lines and load a window around one">Search ions…</button>
-      <button onclick="modalOpen('decayModal', 'batemanChk')" title="Decay-fit settings and Run">Decay fit…</button>
-      <button onclick="lbOpen()" title="Send this view (plots, window, ion) to the results log book">Save to log book…</button>
+      <button onclick="modalOpen('searchModal', 'srchIon')" title="Find an ion's simulated lines and load a window around one">Search Ions…</button>
+      <button onclick="modalOpen('decayModal', 'batemanChk')" title="Decay-fit settings and Run">Decay Fit…</button>
+      <button onclick="lbOpen()" title="Send this view (plots, window, ion) to the results log book">Save to Log Book…</button>
       <span id="stepBox" style="display:none;">
       <span id="harmGrp" style="display:none; align-items:center; gap:6px;">
         <button id="harmDn" onclick="harmStep(-1)" disabled>h−1</button>
@@ -2076,7 +2076,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
   <div id="decayModal" class="sim-modal" onclick="if(event.target===this) modalClose('decayModal')">
    <div class="sim-dialog sim-row" role="dialog" aria-modal="true" aria-labelledby="decayTitle">
     <div class="sim-head">
-      <span id="decayTitle">Decay fit</span>
+      <span id="decayTitle">Decay Fit</span>
       <button class="sim-x" onclick="modalClose('decayModal')" title="Close (Esc)">×</button>
     </div>
     <div class="sim-body">
@@ -2089,7 +2089,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
              onchange="setRegionMode()">
       <label for="regBox">drawn box</label>
       <button id="regDrawBtn" onclick="startRegionDraw()"
-              title="Close this dialog and drag a box on the 2-D plot">Draw region</button>
+              title="Close this dialog and drag a box on the 2-D plot">Draw Region</button>
     </div>
     <div class="opt-grp" id="regFields" title="Fit region from the drawn box (editable)">
       <span>t (s)</span>
@@ -2122,13 +2122,13 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
       </div>
     </div>
     <div class="opt-grp" id="grpParent" title="Bateman only. Frequency window of the PARENT peak (Hz). When set, parent and daughter are fitted together with a shared τ_A: parent = A·e^(-t/τ_A) + C_A (with offset), daughter = the frequency-slider window, Bateman growth with no offset. Leave blank for a single-window Bateman fit.">
-      <span>Parent window</span>
+      <span>Parent Window</span>
       <input type="number" id="parentMin" step="any" placeholder="f min"
              style="width:120px;" value="{_saved_pmin}" oninput="savePref('parentMin', this.value); _syncDecayControls()">
       <input type="number" id="parentMax" step="any" placeholder="f max"
              style="width:120px;" value="{_saved_pmax}" oninput="savePref('parentMax', this.value); _syncDecayControls()">
       <button id="parentFromSliders" onclick="_parentFromSliders()"
-              title="Copy the current frequency-slider range into the parent window">← sliders</button>
+              title="Copy the current frequency-slider range into the parent window">← Sliders</button>
     </div>
     <div class="opt-grp" id="grpFixedHl" title="Known c.o.m.-frame half-lives (s), converted to lab frame with γ. Fixes the corresponding τ in the Bateman fit. Requires γ.">
       <span>Fixed t½ (s)</span>
@@ -2164,12 +2164,12 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
   <div id="generalModal" class="sim-modal" onclick="if(event.target===this) modalClose('generalModal')">
    <div class="sim-dialog" role="dialog" aria-modal="true" aria-labelledby="generalTitle">
     <div class="sim-head">
-      <span id="generalTitle">General settings</span>
+      <span id="generalTitle">General Settings</span>
       <button class="sim-x" onclick="modalClose('generalModal')" title="Close (Esc)">×</button>
     </div>
     <div class="sim-body">
     <div class="opt-grp">
-      <span>Colour scheme</span>
+      <span>Colour Scheme</span>
       <select id="colorscaleSel" onchange="setColorscale(this.value)"
               title="Colour scale for the 2-D heatmap and 3-D plot">{_cs_options}</select>
     </div>
@@ -2188,7 +2188,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
       <label for="surface3d" title="Smooth surface joining neighbouring points (the original 3-D style)">surface</label>
     </div>
     <div class="opt-grp">
-      <span>1D overlay</span>
+      <span>1D Overlay</span>
       <input type="checkbox" id="show1d" {_chk_show1d} onchange="_renderSpec1d(); saveSession()">
       <label for="show1d">show</label>
     </div>
@@ -2198,7 +2198,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
   <div id="searchModal" class="sim-modal" onclick="if(event.target===this) modalClose('searchModal')">
    <div class="sim-dialog sim-row" role="dialog" aria-modal="true" aria-labelledby="searchTitle">
     <div class="sim-head">
-      <span id="searchTitle">Search ions</span>
+      <span id="searchTitle">Search Ions</span>
       <button class="sim-x" onclick="modalClose('searchModal')" title="Close (Esc)">×</button>
     </div>
     <div class="sim-body">
@@ -2463,7 +2463,7 @@ function _renderSpec1d() {{
                 : _spec1dY;
   var fMin = +document.getElementById('fMin').value;
   var fMax = +document.getElementById('fMax').value;
-  var pLabel = useDb ? 'Summed power (dB)' : 'Summed power (linear)';
+  var pLabel = useDb ? 'Summed Power (dB)' : 'Summed Power (linear)';
   var info = _spec1dN + ' frame' + (_spec1dN === 1 ? '' : 's') +
              (_spec1dN > 0 ? ', t = ' + _spec1dT[0].toFixed(2) + '–' + _spec1dT[1].toFixed(2) + ' s' : '');
   var pr = _spec1dYRange(y, fMin, fMax);

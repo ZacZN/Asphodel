@@ -360,7 +360,7 @@ def render_energy(est, name1, name2, on):
         out = [html.Div(f"{len(rows)} nearby, nearest centre first, click one",
                         style={"fontSize": "12px", "color": "#2e7d32", "padding": "2px 12px 4px"}),
                html.Div([html.Span("Ion", style=head), html.Span("Harmonic", style=head),
-                         html.Span("f_sim (Hz)", style=head), html.Span("From centre", style=head)],
+                         html.Span("f_sim (Hz)", style=head), html.Span("From Centre", style=head)],
                         style={**grid, "borderBottom": "1px solid #dddddd"})]
         for ion, h, d in rows:
             out.append(html.Div([

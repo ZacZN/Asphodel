@@ -47,7 +47,7 @@ def corr_profile_ui(prefix, name=None, a=None, b=None, c=None, **settings):
     """Profile dropdown + info line for the a, b, c boxes with id prefix."""
     value, opts, info, _, _ = corr_profile_state(name, a, b, c, **settings)
     return html.Div([
-        html.Label("Correction profile", style=LABEL_STYLE),
+        html.Label("Correction Profile", style=LABEL_STYLE),
         dcc.Dropdown(id=f"{prefix}corr_profile", options=opts, value=value, clearable=False,
                      style={"fontSize": "13px"}),
         html.Small(info, id=f"{prefix}corr_info", style=HELP_STYLE),

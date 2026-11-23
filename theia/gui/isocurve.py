@@ -31,12 +31,12 @@ from .further_fit import (CALIB_BORDER, CALIB_TD, CALIB_TH, FIX_OFF, FIX_ON, _ha
                           _peak_area, _shapes)
 
 
-# "Send to isocurve": asks for the ion names / harmonics that are missing and
+# "Send to Isocurve": asks for the ion names / harmonics that are missing and
 # confirms replacing points already on the curve
 iso_modal = html.Div([
     html.Div([
         html.Div([
-            html.Span("Send to isochronicity curve", style={"fontWeight": "700", "fontSize": "15px"}),
+            html.Span("Send to Isochronicity Curve", style={"fontWeight": "700", "fontSize": "15px"}),
             html.Button("✕", id="iso-cancel-x", className="btn btn-outline-secondary btn-sm"),
         ], style={"display": "flex", "justifyContent": "space-between", "alignItems": "center",
                   "marginBottom": "8px"}),
@@ -57,23 +57,23 @@ iso_modal = html.Div([
           "background": "rgba(0,0,0,0.35)", "alignItems": "center", "justifyContent": "center"})
 
 
-# Points sent from the peak fitting ("Send to isocurve"), one per ion and
+# Points sent from the peak fitting ("Send to Isocurve"), one per ion and
 # harmonic, kept in outputs/isocurve/isocurve_points.csv
 ISO_TABLE_COLUMNS = [
-    ("ion", "ion"), ("harmonic", "h"), ("A", "A"), ("Z", "Z"), ("q", "q"),
-    ("centre_hz", "centre (Hz)"), ("d_centre_hz", "± centre"),
+    ("ion", "Ion"), ("harmonic", "h"), ("A", "A"), ("Z", "Z"), ("q", "q"),
+    ("centre_hz", "Centre (Hz)"), ("d_centre_hz", "± Centre"),
     ("f_rev_hz", "f_rev (Hz)"), ("d_f_rev_hz", "± f_rev"),
     ("fwhm_hz", "FWHM (Hz)"), ("d_fwhm_hz", "± FWHM"),
-    ("amp", "amplitude"), ("d_amp", "± amp"), ("area", "area"), ("d_area", "± area"),
-    ("shape", "shape"), ("eta", "η"), ("d_eta", "± η"), ("fixed", "fixed"),
-    ("chi2_ndf", "χ²/ndf"), ("source", "data source"), ("sent", "sent"),
+    ("amp", "Amplitude"), ("d_amp", "± Amp"), ("area", "Area"), ("d_area", "± Area"),
+    ("shape", "Shape"), ("eta", "η"), ("d_eta", "± η"), ("fixed", "Fixed"),
+    ("chi2_ndf", "χ²/ndf"), ("source", "Data Source"), ("sent", "Sent"),
 ]
 
 # derived values for the curve (calculated from the points, not saved)
 ISO_CURVE_COLUMNS = [
-    ("include", "in fit"), ("ion", "ion"), ("harmonic", "h"), ("T_ns", "T (ns)"),
+    ("include", "In Fit"), ("ion", "Ion"), ("harmonic", "h"), ("T_ns", "T (ns)"),
     ("fwhm_T_ps", "FWHM(T) (ps)"), ("sigma_T_ps", "σ(T) (ps)"),
-    ("d_sigma_T_ps", "err σ(T) (ps)"),
+    ("d_sigma_T_ps", "Err σ(T) (ps)"),
 ]
 
 # curve-fit settings (saved per experiment in settings/isocurve.json)
@@ -102,7 +102,7 @@ isochronicity_tab = html.Div([
         html.Div(id="iso-info", style={"fontSize": "13px", "marginBottom": "6px"}),
         # table folds away (closed when the page loads)
         html.Details([
-            html.Summary("Isochronicity points", style=FOLD_SUMMARY),
+            html.Summary("Isochronicity Points", style=FOLD_SUMMARY),
             dash_table.DataTable(
                 id="iso-table", data=[], row_deletable=True, editable=False,
                 sort_action="native",
@@ -122,7 +122,7 @@ isochronicity_tab = html.Div([
     ], className="theia-box", style={**BOX_STYLE, "padding": "8px 10px"}),
     # values for the isochronicity curve, calculated from the points above
     html.Details([
-        html.Summary("Isochronicity curve parameters", style=FOLD_SUMMARY),
+        html.Summary("Isochronicity Curve Parameters", style=FOLD_SUMMARY),
         html.Small("T = 10⁹ · h / centre  ·  FWHM(T) = (FWHM / centre) · T · 1000  ·  "
                    "σ(T) = FWHM(T) / 2√(2 ln 2)  ·  err σ(T) = (± FWHM / FWHM) · FWHM(T) / "
                    "2√(2 ln 2)   (2√(2 ln 2) ≈ 2.3548)",
@@ -145,10 +145,10 @@ isochronicity_tab = html.Div([
     # fit of the curve  σ_T(T) = sqrt( ((1/γ² − 1/γ_t²) · σp/p · T)² + σ_sys² )
     html.Div([
         html.Div([
-            html.Span("Isochronicity curve fit", style={"fontWeight": "700", "fontSize": "14px",
+            html.Span("Isochronicity Curve Fit", style={"fontWeight": "700", "fontSize": "14px",
                                                         "marginRight": "8px"}),
             info_button("isofit", {"marginRight": "14px"}),
-            html.Button("Save figure", id="btn-iso-save-fig",
+            html.Button("Save Figure", id="btn-iso-save-fig",
                         className="btn btn-outline-secondary btn-sm",
                         title="Save the plot (matplotlib) as PNG and PDF in outputs/figures/",
                         style={"marginRight": "10px"}),
@@ -181,12 +181,12 @@ isochronicity_tab = html.Div([
                                     "value": "on"}],
                           inputStyle={"marginRight": "4px"}, labelStyle={"fontSize": "13px"},
                           style={"marginRight": "14px"}),
-            html.Span("Recording frequency (Hz)", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
+            html.Span("Recording Frequency (Hz)", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
             dcc.Input(id="iso-set-recfreq", type="text", debounce=True,
                       value=ISO_BIN_DEFAULTS["rec_freq"], placeholder="10e6",
                       className="form-control form-control-sm",
                       style={"width": "100px", "marginRight": "12px", "fontSize": "13px"}),
-            html.Span("Frequency bins", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
+            html.Span("Frequency Bins", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
             dcc.Input(id="iso-set-nbins", type="text", debounce=True,
                       value=ISO_BIN_DEFAULTS["n_bins"], placeholder="2^17",
                       className="form-control form-control-sm",
@@ -382,7 +382,7 @@ def _iso_modal_body(state, key, missing, typed, errors, replaces):
             ]))
         out.append(html.Table([
             html.Thead(html.Tr([html.Th(t, style=th) for t in
-                                ("Peak", "Centre (Hz)", "Ion and harmonic", "Suggestions")])),
+                                ("Peak", "Centre (Hz)", "Ion and Harmonic", "Suggestions")])),
             html.Tbody(rows)],
             style={"borderCollapse": "collapse", "border": CALIB_BORDER, "width": "100%"}))
     if replaces:
@@ -416,7 +416,7 @@ def _iso_modal_body(state, key, missing, typed, errors, replaces):
 )
 def send_to_isocurve(_send, _confirm, _cancel, _x, name_vals, name_ids, h_vals, h_ids,
                      state, key, files, align, ion_key, version):
-    """'Send to isocurve': every fitted peak needs a valid ion name and
+    """'Send to Isocurve': every fitted peak needs a valid ion name and
     harmonic.  Missing ones (and replacing existing points) go through the
     popup; otherwise the points are written straight away."""
     trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
@@ -592,7 +592,7 @@ def show_iso_points(_version, page, _ts, table):
                                    "color": "#666"})]
     if not rows:
         info.append(html.Div("No points yet: fit peaks in Aligning and fitting and press "
-                             "'Send to isocurve'.", style={"color": "#888", "marginTop": "4px"}))
+                             "'Send to Isocurve'.", style={"color": "#888", "marginTop": "4px"}))
     return rows, tips, info, time.time()
 
 
@@ -959,7 +959,7 @@ def fit_and_plot_iso(_ts, *args):
                            bgcolor=ACCENT_PALE, bordercolor=ACCENT, borderwidth=1,
                            font=dict(size=13), name="isoparam")
     fig.update_layout(template="plotly_white", margin=dict(l=70, r=20, t=30, b=50),
-                      xaxis_title="Revolution time T (ns)", yaxis_title="σ_T (ps)",
+                      xaxis_title="Revolution Time T (ns)", yaxis_title="σ_T (ps)",
                       legend=dict(x=0.99, y=0.02, xanchor="right", yanchor="bottom",
                                   bgcolor="rgba(255,255,255,0.85)", bordercolor="#dddddd",
                                   borderwidth=1),
@@ -998,7 +998,7 @@ def fit_and_plot_iso(_ts, *args):
                             borderwidth=1, borderpad=4, font=dict(size=13))
     rfig.update_layout(template="plotly_white", margin=dict(l=70, r=20, t=30, b=50),
                        title=dict(text="Residuals", font=dict(size=13)),
-                       xaxis_title="Revolution time T (ns)", yaxis_title="(σ(T) − fit)/σ",
+                       xaxis_title="Revolution Time T (ns)", yaxis_title="(σ(T) − fit)/σ",
                        showlegend=False, font=dict(size=13), uirevision="iso",
                        clickmode="event")
 

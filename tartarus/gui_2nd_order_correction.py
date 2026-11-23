@@ -17,9 +17,9 @@ One harmonic is worked on at a time.
     most MAX_SHAPES are in view): dragging a line stretches all lines of the
     harmonic about its reference line, which stays fixed.  The reference line
     of another harmonic is put on its peak by selecting it and clicking the
-    peak (or "Assign to nearest peak").
+    peak (or "Assign to Nearest Peak").
 3.  Assign peaks: click the ▼ marker above a line to select it, then click on
-    its peak in the spectrum (or "Assign to nearest peak").  f_exp is the
+    its peak in the spectrum (or "Assign to Nearest Peak").  f_exp is the
     highest bin within ± the peak window, refined with a 3-point parabola.
 4.  "Calculate": the anchored fit of the existing tool
     (tartarus/new_2nd_order_correction_plot.py, core.corrections.fit_correction)
@@ -106,11 +106,11 @@ TOOL_DEFAULTS = {
 SETTING_KEYS = ["ref_name", "ref_harmonic", "gamma_t", "z_lims", "n_lims",
                 "el1", "el2", "mq_width", "ref_search_hz", "peak_window_hz"]
 LABELS = {
-    "ref_name": "Reference ion (strongest peak)", "ref_harmonic": "Reference harmonic",
-    "gamma_t": "γ_t", "z_lims": "Z min, max", "n_lims": "N min, max",
+    "ref_name": "Reference Ion (strongest peak)", "ref_harmonic": "Reference Harmonic",
+    "gamma_t": "γ_t", "z_lims": "Z Min, Max", "n_lims": "N Min, Max",
     "el1": "el1 (A, Z)", "el2": "el2 (A, Z)", "mq_width": "m/q window (±)",
-    "ref_search_hz": "Ref. peak search in other harmonics ± (Hz)",
-    "peak_window_hz": "Peak window for assignments ± (Hz)",
+    "ref_search_hz": "Ref. Peak Search in Other Harmonics ± (Hz)",
+    "peak_window_hz": "Peak Window for Assignments ± (Hz)",
 }
 
 
@@ -481,7 +481,7 @@ def figure(s, state, m, view):
         barmode="overlay", bargap=0,
         showlegend=False, margin=dict(l=70, r=20, t=20, b=50),
         xaxis=dict(title="Frequency (Hz)", tickformat=".0f"),
-        yaxis=dict(title="Schottky power (a.u.)", domain=[0, Y_TOP]),
+        yaxis=dict(title="Schottky Power (a.u.)", domain=[0, Y_TOP]),
         # the ▼ markers: a strip of their own above the spectrum, so a click on
         # a marker is not taken by the (draggable) line under it
         yaxis2=dict(domain=[Y_TOP + 0.01, 0.99], range=[0, 1], visible=False, fixedrange=True,
@@ -673,7 +673,7 @@ def fit_figure(r):
     fig.update_layout(template="none", plot_bgcolor="white", paper_bgcolor="white",
                       height=700, font=dict(size=15, color="black"), annotations=ann,
                       margin=dict(l=90, r=30, t=60, b=60),
-                      title=dict(text=f"Second-order Correction h{r['h']} "
+                      title=dict(text=f"Second-Order Correction h{r['h']} "
                                       f"(masses incl. electron binding)", x=0.5,
                                  xanchor="center", font=dict(size=18)),
                       legend=dict(x=lx, y=ly, xanchor=lxa, yanchor=lya, yref="paper",
@@ -690,7 +690,7 @@ def fit_figure(r):
 
 def fit_table(r, others=()):
     (a, b, c), (da, db, dc) = r["abc"], r["abc_unc"]
-    head = ["Harmonic", "Ions", "a", "b", "c", "RMS (Hz, rev)", "Reference line"]
+    head = ["Harmonic", "Ions", "a", "b", "c", "RMS (Hz, rev)", "Reference Line"]
     row = [f"h{r['h']}" + (" (reference harmonic)" if r["h"] == r["ref_harmonic"] else ""), r["n"],
            f"{a:.6e} ± {da:.2e}", f"{b:.6e} ± {db:.2e}", f"{c:.6e} ± {dc:.2e}",
            f"{r['rms']:.3f}", f"{r['ref_f_h']:,.1f} Hz · {REF_PEAK_TEXT.get(r.get('ref_found'), '')}"]
@@ -921,15 +921,15 @@ def serve_layout():
                 html.Div("Drag a line to stretch all lines of this harmonic about the "
                          "reference line.", className="note"),
                 html.Div(id="g-stretch", className="note"),
-                html.Button("Lines to corrected positions", id="g-tocorr", className="btn",
+                html.Button("Lines to Corrected Positions", id="g-tocorr", className="btn",
                             n_clicks=0, title="After Calculate: put this harmonic's lines back "
                                               "at the positions given by its last calculated "
                                               "correction (clears stretch and moved lines)"),
-                html.Button("↶ Undo last drag", id="g-undo", className="btn", n_clicks=0,
+                html.Button("↶ Undo Last Drag", id="g-undo", className="btn", n_clicks=0,
                             title="Undo the last dragged line on this harmonic (stretch, "
                                   "moved line or moved reference line); click again for the "
                                   "one before"),
-                html.Button("Reset stretch & moves (this harmonic)", id="g-reset", className="btn",
+                html.Button("Reset Stretch & Moves (this harmonic)", id="g-reset", className="btn",
                             n_clicks=0),
                 html.H3("Simulation"),
                 *fields,
@@ -947,21 +947,21 @@ def serve_layout():
                                           "displaylogo": False, "doubleClick": "reset"}),
                         html.Div(id="g-sel", className="sel"),
                         html.Div([
-                            html.Button("Assign to nearest peak", id="g-assign", className="btn primary",
+                            html.Button("Assign to Nearest Peak", id="g-assign", className="btn primary",
                                         n_clicks=0),
                             html.Button("Unassign", id="g-unassign", className="btn", n_clicks=0),
                             html.Button("Deselect", id="g-deselect", className="btn", n_clicks=0),
                             html.Span(id="g-msg", className="note"),
                         ], className="row"),
                         html.Div("Click a ▼ marker to select its line, then click on the peak in "
-                                 "the spectrum (or 'Assign to nearest peak').  Zoom in to drag "
+                                 "the spectrum (or 'Assign to Nearest Peak').  Zoom in to drag "
                                  "lines; scroll to zoom, drag the background to pan, double-click "
                                  "for the whole spectrum.", className="note"),
                     ], className="body"),
                 ], className="box"),
                 html.Div([
                     html.Div([html.Span(id="g-assign-head", children="Assignments"),
-                              html.Div([html.Button("Calculate correction", id="g-calc",
+                              html.Div([html.Button("Calculate Correction", id="g-calc",
                                                     className="btn primary", n_clicks=0),
                                         html.Button("Plot (2nd-order correction script)",
                                                     id="g-mplplot", className="btn", n_clicks=0,
@@ -969,7 +969,7 @@ def serve_layout():
                                                           "correction_plot.py for the assigned peaks of "
                                                           "this harmonic (its own window, with zoom "
                                                           "and save)"),
-                                        html.Button("Clear assignments (this harmonic)",
+                                        html.Button("Clear Assignments (this harmonic)",
                                                     id="g-clear", className="btn", n_clicks=0)])],
                              className="head"),
                     html.Div([
@@ -989,13 +989,13 @@ def serve_layout():
                     ], className="body"),
                 ], className="box"),
                 html.Div([
-                    html.Div([html.Span(id="g-fit-head", children="Second-order correction"),
+                    html.Div([html.Span(id="g-fit-head", children="Second-Order Correction"),
                               html.Span(id="g-fit-when", className="note")], className="head"),
                     html.Div([
                         html.Div("Not calculated yet.", id="g-fit-table"),
                         dcc.Graph(id="g-fit-graph", figure=go.Figure(), style={"display": "none"}),
                         html.Div([
-                            html.Label("Save into", style={"fontWeight": 600}),
+                            html.Label("Save Into", style={"fontWeight": 600}),
                             dcc.Dropdown(id="g-ptarget", options=profile_options(),
                                          value=NEW_PROFILE, clearable=False,
                                          style={"width": "460px", "fontSize": "13px"}),
@@ -1006,13 +1006,13 @@ def serve_layout():
                             dcc.Checklist(id="g-pdefault", value=[], options=[
                                 {"label": " also make the profile the default", "value": "on"}]),
                             html.Button(id="g-psave", className="btn primary", n_clicks=0,
-                                        children=f"Save h{h} into profile"),
+                                        children=f"Save h{h} into Profile"),
                         ], className="row"),
                         html.Div(id="g-pmsg"),
                     ], className="body"),
                 ], className="box"),
                 html.Div([
-                    html.Div([html.Span("Corrections by harmonic"),
+                    html.Div([html.Span("Corrections by Harmonic"),
                               html.Span(id="g-sum-note", className="note")], className="head"),
                     html.Div(id="g-summary", className="body"),
                 ], className="box"),
@@ -1567,14 +1567,14 @@ def calculate(n, state, *values):
 
 def summary_table(state, target, cur_h):
     """Rows per harmonic: this spectrum's calculated fit, and what the profile
-    chosen in 'Save into' holds for that harmonic."""
+    chosen in 'Save Into' holds for that harmonic."""
     fits = (state or {}).get("fit") or {}
     prof = corrections.get_profile(target) if target and target != NEW_PROFILE else None
     per_h = (prof or {}).get("per_harmonic") or {}
     hs = sorted({int(h) for h in fits} | {int(h) for h in per_h})
     pname = prof["name"] if prof else None
-    head = ["Harmonic", "Ions", "a", "b", "c", "RMS (Hz, rev)", "Reference line", "Calculated",
-            f"In profile '{pname}'" if pname else "In profile"]
+    head = ["Harmonic", "Ions", "a", "b", "c", "RMS (Hz, rev)", "Reference Line", "Calculated",
+            f"In Profile '{pname}'" if pname else "In Profile"]
     rows = []
     for h in hs:
         r = fits.get(str(h))
@@ -1619,9 +1619,9 @@ def summary_table(state, target, cur_h):
 )
 def show_summary(state, target, _pmsg):
     h = (state or {}).get("h")
-    note = ("this spectrum's fits; compare with the profile chosen under 'Save into'"
+    note = ("this spectrum's fits; compare with the profile chosen under 'Save Into'"
             if target and target != NEW_PROFILE else
-            "this spectrum's fits; pick a profile under 'Save into' to compare")
+            "this spectrum's fits; pick a profile under 'Save Into' to compare")
     return summary_table(state, target, h), note
 
 
@@ -1988,8 +1988,8 @@ def matplotlib_plot(_n, state, *values):
 def show_fit(h, _stamp, state):
     msg = dash.no_update if ctx.triggered_id == "g-fitstamp" else ""
     fits = (state or {}).get("fit") or {}
-    head = f"Second-order correction h{h}"
-    btn = f"Save h{h} into profile"
+    head = f"Second-Order Correction h{h}"
+    btn = f"Save h{h} into Profile"
     r = fits.get(str(h))
     if not r:
         return (f"h{h} not calculated yet for this spectrum.", go.Figure(), {"display": "none"},
@@ -2022,7 +2022,7 @@ def save_profile(_n, state, h, target, name, make_default, pending):
         prof, replaced = save_harmonic(r, target, name, confirm_replace=confirm)
     except ValueError as exc:
         if str(exc) == "confirm":
-            return (html.Span(f"⚠ '{target}' already has h{h}. Click 'Save h{h} into profile' "
+            return (html.Span(f"⚠ '{target}' already has h{h}. Click 'Save h{h} into Profile' "
                               f"again to replace it.", className="warn"),
                     nu, nu, {"target": target, "h": h, "time": r["time"]})
         return html.Span(f"✗ Not saved: {exc}", className="err"), nu, nu, None

@@ -28,7 +28,7 @@ Usage:
 frequency from the m/q uncertainties (NUBASE (+) NIST) of the ion and the
 reference.  The measured frequencies have no uncertainty in the sheet.
 
-Saving: the plot window has a name box and a "Save as profile" button.  Each
+Saving: the plot window has a name box and a "Save as Profile" button.  Each
 saved fit becomes a correction profile (core/corrections.py, stored in
 data/<experiment>/settings/correction_profiles.json) that the Viewer, Scan,
 PID settings, spectrogram and home page offer in a dropdown.  With "also make
@@ -286,7 +286,7 @@ def draw_figure(names, x, y, fit_mask, x0, ref_ion, ref_f, s1, s2, abc, dabc, rm
             family="monospace", bbox=dict(boxstyle="round", fc="white", ec="grey", alpha=0.9))
 
     ax.set_ylabel(r"$f_{diff} = f_{exp,true} - f_{sim,true}$ (Hz)")
-    ax.set_title(title or "Second-order Correction (masses incl. electron binding)")
+    ax.set_title(title or "Second-Order Correction (masses incl. electron binding)")
     ax.ticklabel_format(axis="x", useOffset=False, style="plain")
     ax.legend(loc="lower right")
     ax.grid(alpha=0.3)
@@ -330,7 +330,7 @@ def plot_points(path):
         os.remove(path)                    # a temporary file written by the GUI
     except OSError:
         pass
-    logpanel.add_mpl_buttons([0.925, 0.955, 0.07, 0.04], "Correction plot")
+    logpanel.add_mpl_buttons([0.925, 0.955, 0.07, 0.04], "Correction Plot")
     plt.show()
 
 
@@ -421,14 +421,14 @@ def main():
     ctrl = gs[2].subgridspec(1, 4, width_ratios=[6, 3.2, 1.6, 5], wspace=0.04)
     ax_name, ax_chk, ax_btn = (fig.add_subplot(ctrl[0, i]) for i in range(3))
     ax_msg = fig.add_subplot(gs[3])
-    name_box = TextBox(ax_name, "Profile name ",
+    name_box = TextBox(ax_name, "Profile Name ",
                        initial=default_profile_name(args.weighted, int(fit_mask.sum())))
     name_box.label.set_fontsize(16)
     name_box.text_disp.set_fontsize(15)
     chk = CheckButtons(ax_chk, ["also make it the default"], [False])
     for t in chk.labels:
         t.set_fontsize(15)
-    btn = Button(ax_btn, "Save as profile")
+    btn = Button(ax_btn, "Save as Profile")
     btn.label.set_fontsize(16)
     ax_msg.set_axis_off()
     msg = ax_msg.text(0.0, 0.5, "", va="center", ha="left", fontsize=14,
@@ -447,7 +447,7 @@ def main():
         fig.canvas.draw_idle()
 
     btn.on_clicked(on_save)
-    logpanel.add_mpl_buttons([0.925, 0.955, 0.07, 0.04], "Correction plot")
+    logpanel.add_mpl_buttons([0.925, 0.955, 0.07, 0.04], "Correction Plot")
     plt.show()
 
 

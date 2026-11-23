@@ -41,10 +41,10 @@ results_tab = html.Div([
             dcc.Dropdown(id="db-select", options=[], placeholder="Select a scan database…",
                          style={"fontSize": "13px", "width": "720px"}),
         ], style={"marginRight": "10px"}),
-        html.Button("Refresh list", id="btn-refresh", className="btn btn-outline-secondary btn-sm",
+        html.Button("Refresh List", id="btn-refresh", className="btn btn-outline-secondary btn-sm",
                     style={"marginRight": "10px"}),
         # toggles the run info / settings tables, which open below this row
-        html.Button("▸ Run info and settings used", id="btn-runinfo",
+        html.Button("▸ Run Info and Settings Used", id="btn-runinfo",
                     className="btn btn-outline-secondary btn-sm"),
     ], style={"display": "flex", "alignItems": "flex-end", "marginBottom": "10px"}),
 
@@ -62,8 +62,8 @@ results_tab = html.Div([
     # Sub-tabs.  The bar only switches which page is visible: both pages stay
     # mounted, so plots keep their zoom (see RESULTS_PAGES).
     dcc.Tabs(id="results-subtabs", value="ions", children=[
-        dcc.Tab(label="Ion search", value="ions", style=SUBTAB_STYLE, selected_style=SUBTAB_SEL),
-        dcc.Tab(label="Reference tracking", value="ref", style=SUBTAB_STYLE,
+        dcc.Tab(label="Ion Search", value="ions", style=SUBTAB_STYLE, selected_style=SUBTAB_SEL),
+        dcc.Tab(label="Reference Tracking", value="ref", style=SUBTAB_STYLE,
                 selected_style=SUBTAB_SEL),
     ], style={"height": "40px", "marginBottom": "10px"}),
 
@@ -76,13 +76,13 @@ results_tab = html.Div([
                 html.Div([
                     html.Div([
                         html.Div([
-                            html.Label("Ion filter", style=LABEL_STYLE),
+                            html.Label("Ion Filter", style=LABEL_STYLE),
                             dcc.Dropdown(id="ion-filter", options=[], multi=True,
                                          placeholder="Type an ion, e.g. 197Os (all charge states) or 197Os76+",
                                          style={"fontSize": "13px"}),
                         ], style={"flex": "1", "marginRight": "10px"}),
                         html.Div([
-                            html.Label("Spectrum filter", style=LABEL_STYLE),
+                            html.Label("Spectrum Filter", style=LABEL_STYLE),
                             dcc.Dropdown(id="spec-filter", options=[], multi=True, placeholder="All spectra",
                                          style={"fontSize": "13px"}),
                         ], style={"flex": "1"}),
@@ -116,15 +116,15 @@ results_tab = html.Div([
                     html.Span(id="snippet-count", style={"fontSize": "13px", "marginRight": "6px"}),
                     html.Button("Next ▶", id="btn-snip-next", className="btn btn-outline-secondary btn-sm",
                                 style={"marginRight": "16px"}),
-                    html.Label("Snippet half-width (Hz)", style={**LABEL_STYLE, "margin": "0 8px 0 0"}),
+                    html.Label("Snippet Half-Width (Hz)", style={**LABEL_STYLE, "margin": "0 8px 0 0"}),
                     dcc.Input(id="snippet-width", type="number", value=CFG["snippet_half_width"],
                               debounce=True,
                               className="form-control form-control-sm",
                               style={"width": "140px", "marginRight": "16px"}),
-                    html.Button("Confirmation mode", id="btn-confirm-mode",
+                    html.Button("Confirmation Mode", id="btn-confirm-mode",
                                 className="btn btn-outline-secondary btn-sm",
                                 style={"marginRight": "16px"}),
-                    html.Button("Send to PID plot", id="btn-send-pid",
+                    html.Button("Send to PID Plot", id="btn-send-pid",
                                 title="Add the ion shown (charge state and harmonic) to the Segrè "
                                       "chart's identified ions, as confident",
                                 className="btn btn-outline-secondary btn-sm",
@@ -150,7 +150,7 @@ results_tab = html.Div([
                                 className="btn btn-sm", style=UNSURE_BTN),
                     html.Button("✓", id="btn-accept", title="Accept this identification",
                                 className="btn btn-sm", style={**ACCEPT_BTN, "marginRight": "8px"}),
-                    html.Button("✓ Accept all", id="btn-accept-all",
+                    html.Button("✓ Accept All", id="btn-accept-all",
                                 title="Accept every identification in the current filtered list "
                                       "(overwrites rejects / unsures)",
                                 className="btn btn-sm",
@@ -160,7 +160,7 @@ results_tab = html.Div([
                         html.Div(id="confirm-status", style={"fontSize": "14px", "fontWeight": "600"}),
                         html.Div(id="confirm-counts", style={"fontSize": "12px"}),
                     ], style={"marginRight": "16px"}),
-                    html.Button("Save accepted + unsure", id="btn-save-confirmed",
+                    html.Button("Save Accepted + Unsure", id="btn-save-confirmed",
                                 className="btn btn-sm",
                                 style={"backgroundColor": ACCENT, "color": "white", "marginRight": "10px"}),
                     html.Span(id="confirm-save-msg", style={"fontSize": "12px"}),
@@ -179,19 +179,19 @@ results_tab = html.Div([
         # Both boxes fill the page height; their plots take whatever the rest leaves.
         html.Div([
             html.Div([
-                html.H6("Reference tracking", style={"fontWeight": "600", "marginBottom": "6px"}),
+                html.H6("Reference Tracking", style={"fontWeight": "600", "marginBottom": "6px"}),
                 dcc.Graph(id="ref-graph", figure=empty_fig(), responsive=True,
                           style={"flex": "1 1 0", "minHeight": "220px"}),
                 html.Small("Click a point to open that spectrum on the right", style=HELP_STYLE),
                 # per-harmonic table over the whole run
-                html.Div("Reference peak in each harmonic (whole run)", id="refh-summary-title",
+                html.Div("Reference Peak in Each Harmonic (whole run)", id="refh-summary-title",
                          style={**REF_FOLD_SUMMARY, "marginTop": "8px", "cursor": "default"}),
                 html.Div(id="refh-summary", style={"marginTop": "4px", "flex": "0 0 auto"}),
             ], className="theia-box", style=FILL_BOX),
 
             # Reference viewer: flip through spectra and see where the ref was found
             html.Div([
-                html.H6("Reference in each spectrum", style={"fontWeight": "600", "marginBottom": "6px"}),
+                html.H6("Reference in Each Spectrum", style={"fontWeight": "600", "marginBottom": "6px"}),
                 html.Div([
                     html.Button("◀ Prev", id="btn-ref-prev", className="btn btn-outline-secondary btn-sm",
                                 style={"marginRight": "6px"}),
@@ -200,7 +200,7 @@ results_tab = html.Div([
                               style={"width": "90px", "marginRight": "6px"}),
                     html.Button("Next ▶", id="btn-ref-next", className="btn btn-outline-secondary btn-sm",
                                 style={"marginRight": "12px"}),
-                    html.Label("Initial view ± (Hz)", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
+                    html.Label("Initial View ± (Hz)", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
                     dcc.Input(id="refview-width", type="number", value=2000, min=100, debounce=True,
                               className="form-control form-control-sm", style={"width": "100px"}),
                 ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap"}),
@@ -223,7 +223,7 @@ results_tab = html.Div([
                            style={"display": "flex", "alignItems": "center", "margin": "4px 0 0 18px"}),
                     ], style={"marginRight": "18px", "flex": "0 1 auto"}),
                     html.Div([
-                        html.Div("Reference peak in each harmonic",
+                        html.Div("Reference Peak in Each Harmonic",
                                  style={**REF_FOLD_SUMMARY, "cursor": "default"}),
                         html.Div(id="refview-harm", style={"marginTop": "2px"}),
                     ], style={"flex": "0 1 auto", "minWidth": "0"}),
@@ -373,7 +373,7 @@ def refresh_db_list(_, finished, _tab, current):
 def toggle_runinfo(n):
     shown = bool(n) and n % 2 == 1
     return ({"display": "block" if shown else "none", "marginBottom": "12px"},
-            ("▾ " if shown else "▸ ") + "Run info and settings used")
+            ("▾ " if shown else "▸ ") + "Run Info and Settings Used")
 
 
 def _kv_value(k, v):
@@ -404,7 +404,7 @@ def _kv_rows(d):
 )
 def load_database(path):
     if not path or not os.path.exists(path):
-        return [], [], [], [], empty_fig(), None, "Reference peak in each harmonic (whole run)"
+        return [], [], [], [], empty_fig(), None, "Reference Peak in Each Harmonic (whole run)"
     con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     info, st = read_run_info(con, path), read_kv(con, "settings")
     con.close()
@@ -432,7 +432,7 @@ def load_database(path):
                                        marker=dict(color=col, size=5, symbol=sym),
                                        hovertext=d["name"], hoverinfo="text+y"))
     fig.update_layout(template="plotly_white", margin=dict(l=60, r=10, t=10, b=40),
-                      xaxis_title="spectrum #", yaxis_title="ref freq (Hz)",
+                      xaxis_title="Spectrum #", yaxis_title="Ref. Frequency (Hz)",
                       legend=dict(orientation="h", y=1.1), font=dict(size=11))
     return (_kv_rows(info), _kv_rows(st), ion_opts, spec_opts, fig,
             refh_summary(path, st),
@@ -487,9 +487,9 @@ def refh_summary(path, st):
                      "std_off": f(r.std_off, ".1f"),
                      "range": "—" if r.min_off is None or pd.isna(r.min_off)
                      else f"{r.min_off:+.1f} … {r.max_off:+.1f}"})
-    cols = [("h", "h"), ("status", "found"), ("not_found", "not found"),
-            ("mean_f", "mean found at (Hz)"), ("mean_off", "mean offset (Hz)"),
-            ("std_off", "spread (Hz)"), ("range", "offset range (Hz)")]
+    cols = [("h", "h"), ("status", "Found"), ("not_found", "Not Found"),
+            ("mean_f", "Mean Found at (Hz)"), ("mean_off", "Mean Offset (Hz)"),
+            ("std_off", "Spread (Hz)"), ("range", "Offset Range (Hz)")]
     tbl = dash_table.DataTable(
         id="refh-summary-dt", columns=[{"name": n, "id": c} for c, n in cols], data=recs, fill_width=False,
         style_table={"overflowX": "auto"}, style_header=TABLE_HEADER, style_cell=TABLE_CELL,
@@ -674,7 +674,7 @@ def show_snippet(idx, half_width, show_excluded, rows, path):
     prevent_initial_call=True,
 )
 def send_to_pid_plot(_n, idx, rows, path):
-    """'Send to PID plot': add the ion in the snippet (its charge state and
+    """'Send to PID Plot': add the ion in the snippet (its charge state and
     harmonic) to the Segrè chart as a confident identification of your own
     (core/segre_ids.py).  Already there -> left as it is.  The message is
     cleared when the snippet moves to another peak."""

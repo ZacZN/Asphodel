@@ -42,30 +42,30 @@ FIX_PARAMS = ("centre", "amp", "fwhm", "eta")
 LIMIT_KEYS = ("centre_min", "centre_max", "fwhm_min", "fwhm_max")
 
 FIT_COLUMNS = [
-    {"name": "peak", "id": "peak", "editable": False},
+    {"name": "Peak", "id": "peak", "editable": False},
     # ion name (e.g. 207Tl81+) and harmonic: needed to send the peak to the
     # isochronicity curve
-    {"name": "ion", "id": "ion", "editable": True},
+    {"name": "Ion", "id": "ion", "editable": True},
     {"name": "h", "id": "harmonic", "type": "numeric", "editable": True},
-    {"name": "shape", "id": "shape", "presentation": "dropdown", "editable": True},
-    {"name": "centre (Hz)", "id": "centre", "type": "numeric", "editable": True},
-    {"name": "± centre", "id": "d_centre", "editable": False},
-    {"name": "fix", "id": "fix_centre", "editable": False},
-    {"name": "centre min", "id": "centre_min", "type": "numeric", "editable": True},
-    {"name": "centre max", "id": "centre_max", "type": "numeric", "editable": True},
-    {"name": "amplitude", "id": "amp", "type": "numeric", "editable": True},
-    {"name": "± amp", "id": "d_amp", "editable": False},
-    {"name": "fix", "id": "fix_amp", "editable": False},
+    {"name": "Shape", "id": "shape", "presentation": "dropdown", "editable": True},
+    {"name": "Centre (Hz)", "id": "centre", "type": "numeric", "editable": True},
+    {"name": "± Centre", "id": "d_centre", "editable": False},
+    {"name": "Fix", "id": "fix_centre", "editable": False},
+    {"name": "Centre Min", "id": "centre_min", "type": "numeric", "editable": True},
+    {"name": "Centre Max", "id": "centre_max", "type": "numeric", "editable": True},
+    {"name": "Amplitude", "id": "amp", "type": "numeric", "editable": True},
+    {"name": "± Amp", "id": "d_amp", "editable": False},
+    {"name": "Fix", "id": "fix_amp", "editable": False},
     {"name": "FWHM (Hz)", "id": "fwhm", "type": "numeric", "editable": True},
     {"name": "± FWHM", "id": "d_fwhm", "editable": False},
-    {"name": "fix", "id": "fix_fwhm", "editable": False},
-    {"name": "FWHM min", "id": "fwhm_min", "type": "numeric", "editable": True},
-    {"name": "FWHM max", "id": "fwhm_max", "type": "numeric", "editable": True},
+    {"name": "Fix", "id": "fix_fwhm", "editable": False},
+    {"name": "FWHM Min", "id": "fwhm_min", "type": "numeric", "editable": True},
+    {"name": "FWHM Max", "id": "fwhm_max", "type": "numeric", "editable": True},
     {"name": "η (Lorentz fraction)", "id": "eta", "type": "numeric", "editable": True},
     {"name": "± η", "id": "d_eta", "editable": False},
-    {"name": "fix", "id": "fix_eta", "editable": False},
-    {"name": "area", "id": "area", "editable": False},
-    {"name": "± area", "id": "d_area", "editable": False},
+    {"name": "Fix", "id": "fix_eta", "editable": False},
+    {"name": "Area", "id": "area", "editable": False},
+    {"name": "± Area", "id": "d_area", "editable": False},
 ]
 
 
@@ -80,7 +80,7 @@ def fit_columns(pv, limits):
 
 
 # Further output: reads files saved by confirmation mode (confirmed/*.csv) for
-# further processing.  Sub-tabs: "Aligning and fitting" (file list, summing,
+# further processing.  Sub-tabs: "Aligning and Fitting" (file list, summing,
 # peak fitting) and "Isochronicity Curve" (to come).
 CALIB_BORDER = "1px solid #999999"
 CALIB_TH = {"fontSize": "11px", "fontWeight": "700", "color": "#666", "textTransform": "uppercase",
@@ -103,7 +103,7 @@ SRCH_DEFAULT_KHZ = 10.0
 srch_modal = html.Div([
     html.Div([
         html.Div([
-            html.Span("Search ions", style={"fontWeight": "700", "fontSize": "15px"}),
+            html.Span("Search Ions", style={"fontWeight": "700", "fontSize": "15px"}),
             html.Button("✕", id="srch-close", className="btn btn-outline-secondary btn-sm"),
         ], style={"display": "flex", "justifyContent": "space-between", "alignItems": "center",
                   "marginBottom": "8px"}),
@@ -538,9 +538,9 @@ def toggle_modes(_f, _e, fit_on, energy_on):
         energy_on, fit_on = not energy_on, False
     base = {"marginRight": "12px", "fontWeight": "600"}
     on_style = {**base, "backgroundColor": ACCENT, "color": "white", "borderColor": ACCENT}
-    return (fit_on, "Peak fitting: ON (click peaks)" if fit_on else "Peak fitting",
+    return (fit_on, "Peak Fitting: ON (click peaks)" if fit_on else "Peak Fitting",
             on_style if fit_on else base,
-            energy_on, "Energy calculation: ON (click peaks)" if energy_on else "Energy calculation",
+            energy_on, "Energy Calculation: ON (click peaks)" if energy_on else "Energy Calculation",
             on_style if energy_on else base)
 
 
@@ -901,7 +901,7 @@ app.clientside_callback(
 )
 
 
-# "Region = view": the current zoom range becomes the fit region
+# "Region = View": the current zoom range becomes the fit region
 app.clientside_callback(
     """
     function(n) {
@@ -1011,7 +1011,7 @@ def update_fit(click, dragged, run, _ts, active, shape, bg, b0, b1, bg_fix, regi
                     _set_region(state, run["xrange"])
                 state = run_fit(ff, pp, sigma, state)
             elif trig.startswith("fit-region-set") and region_set:
-                _set_region(state, region_set["xrange"])     # dragged lines / "Region = view"
+                _set_region(state, region_set["xrange"])     # dragged lines / "Region = View"
                 state["fitted"], state["unc"] = False, None
             elif trig.startswith("fit-region-lo") or trig.startswith("fit-region-hi"):
                 if region_lo is not None and region_hi is not None:
@@ -1028,7 +1028,7 @@ def update_fit(click, dragged, run, _ts, active, shape, bg, b0, b1, bg_fix, regi
             elif trig.startswith("fit-bg-fix"):
                 state["bg_fix"] = list(bg_fix or [])
             elif trig.startswith("iso-names-apply"):
-                # names / harmonics given in the "Send to isocurve" popup
+                # names / harmonics given in the "Send to Isocurve" popup
                 ok = bool(names_apply) and names_apply.get("sum_key") == key
                 state["peaks"] = [dict(pk) for pk in state["peaks"]]
                 for k, nm in ((names_apply.get("names") or {}) if ok else {}).items():
@@ -1139,9 +1139,9 @@ def show_residuals(state, key):
                              line=dict(shape="hvh", color="black", width=1),
                              hovertemplate="f = %{x:.1f} Hz<br>data − fit = %{y:.4g}<extra></extra>"))
     fig.update_layout(template="plotly_white", margin=dict(l=60, r=20, t=30, b=40),
-                      title=dict(text="Residuals (data − fit); shaded band: ±1σ noise",
+                      title=dict(text="Residuals (data − fit); Shaded Band: ±1σ Noise",
                                  font=dict(size=13)),
-                      xaxis_title="Frequency (Hz)", yaxis_title="data − fit", dragmode="pan",
+                      xaxis_title="Frequency (Hz)", yaxis_title="Data − Fit", dragmode="pan",
                       showlegend=False, font=dict(size=12), uirevision=str(state.get("region")))
     return fig, RESID_BOX_SHOWN
 
