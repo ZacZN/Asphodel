@@ -70,6 +70,10 @@ header .exp{{color:#777;font-family:monospace;font-size:12px}}
 .tab .ct{{margin-left:auto;font-size:11px;color:#777;font-weight:400;background:#fff;
   border:1px solid {LINE};border-radius:9px;padding:0 6px}}
 .tab .z{{font-size:11px;color:#999;font-weight:400}}
+.tab.iso{{padding-left:22px}} .tab .arr{{color:#aaa;font-weight:400}}
+.side .grp{{border-bottom:1px solid {LINE}}}
+.side .nuc{{display:flex;align-items:center;gap:6px;padding:7px 12px 2px 16px;color:#999;cursor:default}}
+.side .nuc .nm{{font-family:monospace;font-size:14px}} .side .nuc .z{{font-size:11px}}
 /* entries */
 .content{{flex:1 1 auto;min-width:0;overflow-y:auto;padding:16px 22px 40px}}
 .ionhead{{display:flex;align-items:baseline;gap:12px;border-bottom:2px solid {ACCENT};
@@ -217,11 +221,12 @@ def _when(iso):
 
 
 def _tab(key, ion, n, on):
-    return html.Button([html.Span(key, className="nm"),
+    iso = ion.get("state", "g") != "g"
+    return html.Button(([html.Span("↳", className="arr")] if iso else []) + [html.Span(key, className="nm"),
                         html.Span(f"Z={ion.get('Z')}", className="z"),
                         html.Span(str(n), className="ct")],
                        id={"type": "tab", "k": key}, n_clicks=0,
-                       className="tab on" if on else "tab",
+                       className="tab" + (" iso" if iso else "") + (" on" if on else ""),
                        title=f"{key}: Z = {ion.get('Z')}, N = {ion.get('N')}, "
                              f"{'ground state' if ion.get('state', 'g') == 'g' else 'isomer ' + ion['state']}"
                              f" · {n} entr{'y' if n == 1 else 'ies'}")
@@ -315,7 +320,23 @@ def _draw_tabs(_ver, sel, q):
     if not lst:
         return html.Div("No ions yet. Use “Save to Log Book” in the decay-fit window, the "
                         "spectrogram page or Theia.", className="empty")
-    shown = [_tab(k, ion, n, k == sel) for k, ion, n in lst if _matches(k, ion, q)]
+    # grouped by nuclide: the ground state, then its isomers indented under it;
+    # a nuclide with only isomer tabs gets a heading in place of the ground state
+    groups = {}
+    for k, ion, n in lst:
+        groups.setdefault((ion.get("Z"), ion.get("A")), []).append((k, ion, n))
+    shown = []
+    for (z, a), members in groups.items():
+        if not any(_matches(k, ion, q) for k, ion, n in members):
+            continue
+        out = []
+        if not any(ion.get("state", "g") == "g" for _, ion, _ in members):
+            ion0 = members[0][1]
+            out.append(html.Div([html.Span(rlb.ion_key(a, ion0.get("sym", "")), className="nm"),
+                                 html.Span(f"Z={z}", className="z")], className="nuc",
+                                title="No ground-state entries yet"))
+        out += [_tab(k, ion, n, k == sel) for k, ion, n in members]
+        shown.append(html.Div(out, className="grp"))
     return shown or html.Div("No ion matches.", className="empty")
 
 
