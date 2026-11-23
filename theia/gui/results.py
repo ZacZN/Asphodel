@@ -31,6 +31,7 @@ from .common import (ACCENT, ACCENT_PALE, ACCEPT_BTN, CFG, CONFIRM_BAR, CONFIRME
 from .app import app
 from .figures import add_sim_lines, empty_fig, spectrum_figure
 from .scan_tab import _fmt_records
+from .logbook import logbook_button
 
 
 results_tab = html.Div([
@@ -128,6 +129,7 @@ results_tab = html.Div([
                                       "chart's identified ions, as confident",
                                 className="btn btn-outline-secondary btn-sm",
                                 style={"marginRight": "8px"}),
+                    logbook_button("results", marginRight="8px"),
                     html.Span(id="send-pid-msg", style={"fontSize": "12px", "marginRight": "16px"}),
                     dcc.Checklist(id="snippet-show-excluded", value=["on"],
                                   options=[{"label": " Show ions excluded by half-life cut",

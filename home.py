@@ -16,12 +16,18 @@ The suite's launcher and overview, as a Dash app (http://127.0.0.1:8050/):
   * the shared physics settings (physics.json) and the overrides of each tool
   * lab book per experiment: time-stamped notes under a heading per day
     (<experiment>/notes.md, append-only; core/labbook.py)
+  * Results log book card (Reference): one tab per ion with the results sent
+    from the other tools (reference/results_logbook.py, core/results_logbook.py)
   * "Sync with APPC256": sends new confirmed lists to APPC256 and pulls the
     summed spectrograms you pick from it (core/sync.py)
 
 Usage
 -----
     python home.py            (opens the browser)
+    asphodel                  (the same, after ./install.sh)
+
+On the first start it asks for the workspace folder and a first experiment
+(core/firstrun.py).
 
 The Quit button (top right) closes all running tools and the home page, after
 asking. Ctrl-C in the terminal stops only the home page; the tools keep running.
@@ -41,6 +47,11 @@ import time
 import webbrowser
 
 sys.path.insert(1, os.path.dirname(os.path.abspath(__file__)))
+if __name__ == "__main__":
+    # first start: choose the workspace folder and the first experiment
+    # (core/firstrun.py); must happen before core.paths is imported
+    from core import firstrun
+    firstrun.ensure_workspace()
 from core import (browser, corrections, folderpick, icon, jsonfile, labbook, logcapture, logpanel,
                   paths, physics, sync, tabwatch, trackpad, version)
 
@@ -57,6 +68,7 @@ HOME_PORT = 8050
 THEIA_PORT = 8052
 SEGRE_PORT = 8054             # reference/segre_chart.py
 GUICORR_PORT = 8056           # tartarus/gui_2nd_order_correction.py
+LOGBOOK_PORT = 8058           # reference/results_logbook.py
 
 # ===========================================================================
 # Tools
@@ -84,6 +96,10 @@ TOOLS = {
     "segre":           ("Reference", "Segrè chart", "reference/segre_chart.py",
                         "Chart of nuclides from NUBASE2020: colour by half-life, decay mode or "
                         "identified ions; ground states or isomers; hover for the data.", True),
+    "results_logbook": ("Reference", "Results log book", "reference/results_logbook.py",
+                        "What you found out about each ion, one tab per ion: half-lives, peaks, "
+                        "plots and notes sent with \u201cSave to log book\u201d from the decay fit, "
+                        "spectrogram and Theia.", True),
 }
 SECTIONS = ["Theia", "Spectrogram", "Tartarus", "Elysium"]
 # sections shown side by side on one row (each takes as many columns as it has cards)
@@ -124,6 +140,9 @@ def start_tool(key, args=()):
     if key == "segre" and _port_open(SEGRE_PORT):
         browser.open_url(f"http://127.0.0.1:{SEGRE_PORT}/")
         return "The Segrè chart is already running – opened it in the browser."
+    if key == "results_logbook" and _port_open(LOGBOOK_PORT):
+        browser.open_url(f"http://127.0.0.1:{LOGBOOK_PORT}/")
+        return "The results log book is already running – opened it in the browser."
     if key == "gui_correction" and _port_open(GUICORR_PORT):
         browser.open_url(f"http://127.0.0.1:{GUICORR_PORT}/")
         return "GUI Second Order Correction is already running – opened it in the browser."
@@ -340,6 +359,9 @@ def tool_card(key):
         "segre": [act("start", "segre", "Open", "btn primary small",
                       title="Opens the chart in a new tab"),
                   act("stop", "segre", "Stop")],
+        "results_logbook": [act("start", "results_logbook", "Open", "btn primary small",
+                                title="Opens the log book in a new tab"),
+                            act("stop", "results_logbook", "Stop")],
     }.get(key, [])
     return html.Div([
         html.Div(name, className="name"),
@@ -1549,6 +1571,8 @@ def open_in_new_window(url):
     otherwise the default browser's --new-window option, falling back to
     Python's webbrowser if no known browser is found."""
     import shutil
+    if browser.no_browser():
+        return
     if browser.firefox() and browser.open_url(url, new_window=True):
         return
     for cmds in _default_browser_commands():

@@ -1492,6 +1492,196 @@ function _renderFull() {
 """
 
 
+# ---------------------------------------------------------------------------
+# "Save to log book" popout (results log book: core/results_logbook.py)
+# ---------------------------------------------------------------------------
+LOGBOOK_CSS = """
+  .sim-head #lbTitle { font-size: 13px; font-weight: 600; text-transform: uppercase;
+                       letter-spacing: .06em; color: #f97316; }
+  .lb-dialog { width: min(860px, calc(100vw - 32px)); }
+  .lb-dialog label.f { display: block; font-size: 11px; color: #9ca3af; text-transform: uppercase;
+                       letter-spacing: .06em; margin-bottom: 3px; }
+  .lb-dialog input[type=text], .lb-dialog textarea { background: #374151; border: 1px solid #4b5563;
+                       border-radius: 4px; color: #e5e7eb; padding: 4px 7px; font-size: 13px;
+                       width: 100%; box-sizing: border-box; font-family: inherit; }
+  .lb-dialog input[type=text]:focus, .lb-dialog textarea:focus { outline: none; border-color: #f97316; }
+  .lb-dialog textarea { min-height: 70px; }
+  .lb-top { display: grid; grid-template-columns: 1fr 2fr; gap: 12px; }
+  table.lb-vals { border-collapse: collapse; width: 100%; font-size: 12px; }
+  table.lb-vals th { background: #374151; color: #d1d5db; font-weight: 600; text-align: left;
+                     padding: 3px 6px; }
+  table.lb-vals td { padding: 2px 4px; border-bottom: 1px solid #374151; }
+  table.lb-vals td.lbl { color: #e5e7eb; white-space: nowrap; }
+  table.lb-vals input[type=text] { font-family: monospace; font-size: 12px; padding: 2px 5px; }
+  .lb-plots { display: flex; flex-wrap: wrap; gap: 12px; }
+  .lb-plots label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #d1d5db;
+                    cursor: pointer; }
+  .lb-plots img { height: 110px; border: 1px solid #4b5563; border-radius: 4px; background: #111827; }
+  .lb-dialog input[type=checkbox] { accent-color: #f97316; }
+  .lb-foot { display: flex; gap: 10px; align-items: center; }
+  .lb-foot button.primary { background: #f97316; color: #111827; font-weight: 700; }
+  #lbStatus { font-size: 12px; }
+"""
+
+LOGBOOK_HTML = """
+  <div id="lbModal" class="sim-modal" onclick="if(event.target===this) modalClose('lbModal')">
+   <div class="sim-dialog lb-dialog" role="dialog" aria-modal="true" aria-labelledby="lbTitle">
+    <div class="sim-head">
+      <span id="lbTitle">Save to log book</span>
+      <button class="sim-x" onclick="modalClose('lbModal')" title="Close (Esc)">×</button>
+    </div>
+    <div class="sim-body">
+      <div class="lb-top">
+        <div><label class="f" for="lbIon">Ion (tab)</label>
+          <input type="text" id="lbIon" list="lbIons" autocomplete="off" placeholder="e.g. 198Ir, m186Hf72+">
+          <datalist id="lbIons"></datalist></div>
+        <div><label class="f" for="lbEntryTitle">Title</label>
+          <input type="text" id="lbEntryTitle" autocomplete="off"></div>
+      </div>
+      <div><label class="f">Values to send (edit if needed)</label>
+        <table class="lb-vals"><thead><tr><th></th><th>Quantity</th><th>Value</th><th>± Error</th>
+          <th>Unit</th></tr></thead><tbody id="lbVals"></tbody></table>
+        <button onclick="lbAddRow()" style="margin-top:6px;">+ Add value</button></div>
+      <div><label class="f">Plots (as shown now)</label><div id="lbPlots" class="lb-plots"></div></div>
+      <div><label class="f" for="lbNotes">Notes</label><textarea id="lbNotes"></textarea></div>
+      <div class="lb-foot">
+        <button class="primary" id="lbSaveBtn" onclick="lbSave()">Save</button>
+        <button onclick="modalClose('lbModal')">Cancel</button>
+        <span id="lbStatus"></span>
+      </div>
+    </div>
+   </div>
+  </div>
+"""
+
+LOGBOOK_JS = """
+// ── Save to log book (results log book, one tab per ion) ────────────────────
+var LB_PLOTS = [];       // [{png: dataURL, caption}] snapshots taken when the popout opened
+function _lbStatus(msg, kind) {
+  var s = document.getElementById('lbStatus');
+  s.textContent = msg;
+  s.style.color = kind === 'err' ? '#f87171' : kind === 'ok' ? '#4ade80' : '#fbbf24';
+}
+function _lbCell(tr, value, cls) {
+  var td = document.createElement('td');
+  var inp = document.createElement('input'); inp.type = 'text'; inp.value = value == null ? '' : value;
+  if (cls) inp.className = cls;
+  td.appendChild(inp); tr.appendChild(td); return inp;
+}
+function lbAddRow(item) {
+  item = item || {label: '', value: '', checked: true, editable: true};
+  var tr = document.createElement('tr');
+  var td0 = document.createElement('td');
+  var c = document.createElement('input'); c.type = 'checkbox'; c.checked = item.checked !== false;
+  td0.appendChild(c); tr.appendChild(td0);
+  if (item.editable) { _lbCell(tr, item.label, 'lbl'); }
+  else { var tl = document.createElement('td'); tl.className = 'lbl'; tl.textContent = item.label;
+         tl.dataset.label = item.label; tr.appendChild(tl); }
+  _lbCell(tr, item.value); _lbCell(tr, item.error); _lbCell(tr, item.unit);
+  document.getElementById('lbVals').appendChild(tr);
+}
+function _lbRows() {
+  var out = [];
+  document.querySelectorAll('#lbVals tr').forEach(function(tr) {
+    var tds = tr.children;
+    if (!tds[0].firstChild.checked) return;
+    var lab = tds[1].dataset.label !== undefined ? tds[1].dataset.label : tds[1].firstChild.value;
+    out.push({label: lab, value: tds[2].firstChild.value, error: tds[3].firstChild.value,
+              unit: tds[4].firstChild.value});
+  });
+  return out;
+}
+async function _lbSnap(id, caption) {
+  var gd = document.getElementById(id);
+  if (!gd || !gd.data || gd.offsetParent === null || !gd.offsetWidth) return null;
+  try {
+    var png = await Plotly.toImage(gd, {format: 'png', width: gd.offsetWidth, height: gd.offsetHeight,
+                                        scale: 2});
+    return {png: png, caption: caption};
+  } catch (e) { return null; }
+}
+async function lbOpen() {
+  modalOpen('lbModal', 'lbIon');
+  _lbStatus('');
+  document.getElementById('lbSaveBtn').disabled = false;
+  // ion + harmonic from the "Search ions" label ("m186Hf72+, h213"), else the decay-fit title
+  var lab = (typeof CUR_ION_LABEL === 'string' && CUR_ION_LABEL) ? CUR_ION_LABEL
+            : document.getElementById('decayTitleBox').value;
+  var parts = String(lab || '').split(',');
+  var ion = parts[0].trim().split(' ')[0];
+  var hm = null;
+  parts.concat(String(lab || '').split(' ')).forEach(function(p) {
+    p = p.trim(); if (!hm && p.length > 1 && p[0] === 'h' && !isNaN(+p.slice(1))) hm = +p.slice(1);
+  });
+  document.getElementById('lbIon').value = _parseIon(ion) ? ion : '';
+  document.getElementById('lbEntryTitle').value = document.getElementById('plotTitle').value;
+  document.getElementById('lbNotes').value = '';
+  var tb = document.getElementById('lbVals'); tb.innerHTML = '';
+  var fMin = +document.getElementById('fMin').value, fMax = +document.getElementById('fMax').value;
+  var tMin = +document.getElementById('tMin').value, tMax = +document.getElementById('tMax').value;
+  if (hm) lbAddRow({label: 'Harmonic h', value: hm});
+  lbAddRow({label: 'Frequency window', value: fMin.toFixed(1) + ' – ' + fMax.toFixed(1), unit: 'Hz'});
+  lbAddRow({label: 'Time window', value: tMin.toFixed(3) + ' – ' + tMax.toFixed(3), unit: 's'});
+  lbAddRow({label: 'Time average', value: APPLIED_N, unit: 'frames', checked: false});
+  // existing tabs for the ion box
+  try {
+    var r = await fetch('/logbook-ions'); var d = await r.json();
+    var dl = document.getElementById('lbIons'); dl.innerHTML = '';
+    (d.ions || []).forEach(function(n) { var o = document.createElement('option'); o.value = n; dl.appendChild(o); });
+  } catch (e) {}
+  // plots as they are on screen now
+  var box = document.getElementById('lbPlots'); box.innerHTML = 'Taking snapshots…';
+  LB_PLOTS = (await Promise.all([_lbSnap('heatPlot', '2-D spectrogram'), _lbSnap('specPlot', '3-D view'),
+                                 _lbSnap('fullPlot', 'Whole-file spectrum')])).filter(Boolean);
+  box.innerHTML = '';
+  if (!LB_PLOTS.length) box.textContent = 'No plot to send.';
+  LB_PLOTS.forEach(function(p, i) {
+    var l = document.createElement('label');
+    var c = document.createElement('input'); c.type = 'checkbox'; c.checked = i === 0; c.dataset.i = i;
+    var img = document.createElement('img'); img.src = p.png;
+    var cap = document.createElement('span'); cap.textContent = p.caption;
+    var row = document.createElement('span'); row.appendChild(c); row.appendChild(cap);
+    l.appendChild(img); l.appendChild(row); box.appendChild(l);
+  });
+}
+async function lbSave() {
+  var ion = document.getElementById('lbIon').value.trim();
+  if (!ion) { _lbStatus('✗ Choose or type an ion', 'err'); return; }
+  var plots = [];
+  document.querySelectorAll('#lbPlots input[type=checkbox]').forEach(function(c) {
+    if (c.checked) plots.push(LB_PLOTS[+c.dataset.i]);
+  });
+  var body = {ion: ion, title: document.getElementById('lbEntryTitle').value,
+              notes: document.getElementById('lbNotes').value, values: _lbRows(), plots: plots,
+              ionLabel: (typeof CUR_ION_LABEL === 'string') ? CUR_ION_LABEL : ''};
+  _lbStatus('Saving…');
+  try {
+    var r = await fetch('/logbook-save', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                          body: JSON.stringify(body)});
+    var d = await r.json();
+    if (!r.ok) { _lbStatus('✗ ' + (d.error || 'error'), 'err'); return; }
+    _lbStatus('✓ Saved to the log book: ' + d.ion, 'ok');
+    document.getElementById('lbSaveBtn').disabled = true;
+    setTimeout(function() { modalClose('lbModal'); }, 1200);
+  } catch (e) { _lbStatus('✗ ' + e.message, 'err'); }
+}
+"""
+
+
+def logbook_save(body, npz_path):
+    """POST /logbook-save: add the entry from the popout; returns the ion key."""
+    from core import results_logbook
+    plots = [p for p in (body.get("plots") or []) if isinstance(p, dict) and p.get("png")]
+    context = {"tool": "Spectrogram", "file": npz_path or ""}
+    if body.get("ionLabel"):
+        context["ion loaded (Search ions)"] = body["ionLabel"]
+    _, key = results_logbook.add_entry(body.get("ion", ""), "Spectrogram", title=body.get("title", ""),
+                                       notes=body.get("notes", ""), values=body.get("values") or [],
+                                       plots=plots, context=context)
+    print(f"Results log book: saved to {key} ({results_logbook.logbook_path()})")
+    return key
+
+
 def loader_parts(file_path=None, fmin=None, fmax=None):
     """Return (html, js) for the loader row, pre-filled."""
     import json
@@ -1789,6 +1979,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
   #heatDiv.drawing {{ outline: 2px dashed #f97316; outline-offset: 2px; }}
 {LOADER_CSS}
 {SIM_CSS}
+{LOGBOOK_CSS}
 </style>
 </head>
 <body>
@@ -1852,6 +2043,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
       <button id="blBtn" onclick="modalOpen('blModal', 'bl_lam')" title="Remove a BrPLS baseline from every time frame">{_bl_btn}</button>
       <button onclick="modalOpen('searchModal', 'srchIon')" title="Find an ion's simulated lines and load a window around one">Search ions…</button>
       <button onclick="modalOpen('decayModal', 'batemanChk')" title="Decay-fit settings and Run">Decay fit…</button>
+      <button onclick="lbOpen()" title="Send this view (plots, window, ion) to the results log book">Save to log book…</button>
       <span id="stepBox" style="display:none;">
       <span id="harmGrp" style="display:none; align-items:center; gap:6px;">
         <button id="harmDn" onclick="harmStep(-1)" disabled>h−1</button>
@@ -1880,6 +2072,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
               title="Stop plot_spectrogram.py and close this tab">Quit</button>
     </div>
   </div>
+{LOGBOOK_HTML}
   <div id="decayModal" class="sim-modal" onclick="if(event.target===this) modalClose('decayModal')">
    <div class="sim-dialog sim-row" role="dialog" aria-modal="true" aria-labelledby="decayTitle">
     <div class="sim-head">
@@ -2044,6 +2237,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
 <script>
 {loader_js}
 {SIM_JS}
+{LOGBOOK_JS}
 const Z_RAW = {z_raw_json};
 const SURF_LAYOUT = {surf_layout_json};
 const SURF_STYLE  = {surf_style_json};
@@ -2911,6 +3105,14 @@ def serve(html, state):
                 TABS.seen(q.get("id", [""])[0])
                 self._send(200, {"ok": True})
 
+            elif url.path == "/logbook-ions":
+                # existing tabs of the results log book, for the popout's ion box
+                try:
+                    from core import results_logbook
+                    self._send(200, {"ions": results_logbook.ion_names()})
+                except Exception as exc:
+                    self._send(200, {"ions": [], "error": str(exc)})
+
             elif url.path == "/get-region":
                 # saved decay-fit region mode + drawn box for the loaded file/crop
                 sess = read_prefs().get("session") or {}
@@ -3038,6 +3240,12 @@ def serve(html, state):
                 self._send(200, {"ok": True})
             elif self.path == "/_aslog/open":
                 self._send(200, logpanel.http_open(self._body()))
+            elif self.path == "/logbook-save":
+                try:
+                    key = logbook_save(self._body(), STATE.get("npz_path"))
+                    self._send(200, {"ion": key})
+                except Exception as exc:
+                    self._send(400, {"error": str(exc)})
             elif self.path == "/load":
                 try:
                     b = self._body()

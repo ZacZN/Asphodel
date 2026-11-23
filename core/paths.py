@@ -1,9 +1,10 @@
 """
 Where the Asphodel suite keeps its data, outputs and settings.
 
-Layout (all under <repo>/data/, which git ignores):
+Layout (all under the workspace folder, see core/workspace.py: chosen at
+first start, e.g. ~/Asphodel-data; <repo>/data/ on setups from before that):
 
-    data/
+    <workspace>/
       asphodel_settings.json      active experiment + experiment profiles (see below)
       <experiment>/               (default location; a profile can point anywhere)
         spectra_1d/               1-D spectra (.npz)
@@ -12,7 +13,7 @@ Layout (all under <repo>/data/, which git ignores):
         levelschemes/             LevelSchemer files (.json)
         rionid/                   RionID tables (.xlsx)
         settings/                 per-tool GUI settings (.json)
-        outputs/scans|confirmed|fits|figures/
+        outputs/scans|confirmed|fits|figures|isocurve|identified|logbook/
         notes.md                  notes from the home page
 
 Every function takes an optional `exp`; without it the active experiment is used.
@@ -28,11 +29,16 @@ Use from a script in a sub-folder (e.g. theia/theia.py):
 import os
 import shutil
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_ROOT = os.path.join(REPO_ROOT, "data")
+from . import workspace as _workspace
+
+REPO_ROOT = _workspace.REPO_ROOT
+# the workspace (DEFAULT_WORKSPACE if none is set up yet: home.py runs the
+# first-run setup before importing this module, so that only happens when a
+# tool is started on its own before Asphodel was ever set up)
+DATA_ROOT = _workspace.workspace() or _workspace.DEFAULT_WORKSPACE
 SUITE_SETTINGS = os.path.join(DATA_ROOT, "asphodel_settings.json")
 
-OUTPUT_KINDS = ("scans", "confirmed", "fits", "figures", "isocurve", "identified")
+OUTPUT_KINDS = ("scans", "confirmed", "fits", "figures", "isocurve", "identified", "logbook")
 
 
 # --------------------------------------------------------------------------- experiments (profiles)
@@ -184,7 +190,8 @@ DATA_KINDS = {"spectra_1d": "1-D spectra", "spectrograms": "Spectrograms", "summ
               "levelschemes": "Level schemes", "rionid": "RionID tables", "other": "Other data"}
 OUTPUT_KIND_NAMES = {"scans": "Scan runs", "confirmed": "Confirmed IDs", "fits": "Decay fits",
                      "figures": "Figures", "isocurve": "Isochronicity curve",
-                     "identified": "Identified ions", "other": "Other output"}
+                     "identified": "Identified ions", "logbook": "Results log book",
+                     "other": "Other output"}
 FOLDER_GROUPS = {"data": DATA_KINDS, "output": OUTPUT_KIND_NAMES}
 FOLDERS_FILE = "folders.json"
 
@@ -349,7 +356,7 @@ def rionid(exp=None):
 
 def outputs(kind, exp=None):
     """Output folder of a kind (scans, confirmed, fits, figures, isocurve,
-    identified): the connected one, else outputs/<kind>; created if missing."""
+    identified, logbook): the connected one, else outputs/<kind>; created if missing."""
     if kind not in OUTPUT_KINDS:
         raise ValueError(f"Unknown output kind {kind!r}; expected one of {OUTPUT_KINDS}")
     d = folder_for("output", kind, exp)

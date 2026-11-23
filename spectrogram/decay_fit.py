@@ -82,6 +82,11 @@ Saving a fit
   windows and options used, every parameter (value, error, fitted/fixed),
   the half-lives (lab and c.o.m.), chi^2/ndf and the error model.
 
+  "Save to log book" (next to it) opens a popout to send the half-lives and
+  the figure to the experiment's results log book (one tab per ion; with a
+  Bateman / joint fit the parent and daughter half-lives each go to their own
+  ion): core/logbook_dialog.py, core/results_logbook.py.
+
 Example
 -------
   # Simple decay
@@ -124,7 +129,9 @@ def show_window():
     """plt.show(), reporting to the spectrogram page once the window is drawn.
     Every window gets an "Output" button (what this fit printed: core/logpanel.py),
     next to "Save fit parameters" where there is one."""
-    logpanel.add_mpl_buttons(lambda f: [0.16, 0.945, 0.07, 0.045]
+    logpanel.add_mpl_buttons(lambda f: [0.30, 0.945, 0.07, 0.045]
+                             if hasattr(f, "_logbook_button") else
+                             [0.16, 0.945, 0.07, 0.045]
                              if hasattr(f, "_save_fit_button") else [0.005, 0.945, 0.07, 0.045],
                              "Decay fit")
     if READY_FILE:
@@ -907,6 +914,127 @@ def add_save_button(fig, record):
     return btn
 
 
+# ---------------------------------------------------------------------------
+# "Save to log book" (results log book, core/results_logbook.py)
+# ---------------------------------------------------------------------------
+
+def _hl_items(hl, slot, who=""):
+    """Value rows (lab and c.o.m. half-life) of one half-life entry of a record."""
+    from core.results_logbook import fmt_time_value
+    out = []
+    fixed = hl.get("status") == "fixed"
+    tag = (f" {who}" if who else "") + (" (fixed)" if fixed else "")
+    for frame, k in (("c.o.m.", "com"), ("lab", "lab")):
+        v = hl.get(f"{k}_s")
+        if v is None:
+            continue
+        item = fmt_time_value(v, hl.get(f"{k}_err_s"))
+        # fixed half-lives were inputs, not results: shown but not ticked
+        out.append(dict(item, label=f"T½{tag} ({frame})", slot=slot, checked=not fixed))
+    return out
+
+
+def logbook_spec(record):
+    """What the "Save to log book" popout (core/logbook_dialog.py) offers for a fit."""
+    label = record.get("label") or ""
+    ions = ["".join(m.groups()[:3]) + m.group(4) + "+" for m in _ION_RE.finditer(label)]
+    harm = _HARM_RE.search(label)
+    res = record.get("result", {})
+    hls = res.get("half_lives", {})
+    st = record.get("settings", {})
+    two = record.get("mode") in ("bateman", "joint")
+    if two:
+        slots = [{"label": "Parent (A)", "value": ions[0] if ions else ""},
+                 {"label": "Daughter (B)", "value": ions[1] if len(ions) > 1 else ""}]
+        items = _hl_items(hls.get("A", {}), 0) + _hl_items(hls.get("B", {}), 1)
+    else:
+        slots = [{"label": "Ion", "value": ions[0] if ions else ""}]
+        items = _hl_items(hls.get("decay", {}), None)
+    if harm:
+        items.append({"label": "Harmonic h", "value": int(harm.group(1)), "slot": None})
+    if res.get("chi2_ndf") is not None:
+        items.append({"label": "χ²/ndf", "value": round(res["chi2_ndf"], 3), "slot": None})
+    fw = st.get("freq_window_hz") or []
+    if len(fw) == 2 and None not in fw:
+        items.append({"label": "Daughter window" if record.get("mode") == "joint" else "Frequency window",
+                      "value": f"{fw[0]:.1f} – {fw[1]:.1f}", "unit": "Hz", "slot": None,
+                      "checked": False})
+    pw = st.get("parent_window_hz")
+    if pw and None not in pw:
+        items.append({"label": "Parent window", "value": f"{pw[0]:.1f} – {pw[1]:.1f}", "unit": "Hz",
+                      "slot": None, "checked": False})
+    tr = res.get("t_range_s") or []
+    if len(tr) == 2 and None not in tr:
+        items.append({"label": "Fit time range", "value": f"{tr[0]:.4g} – {tr[1]:.4g}", "unit": "s",
+                      "slot": None, "checked": False})
+    mode = {"decay": "exponential decay", "bateman": "Bateman (A → B)",
+            "joint": "joint parent + daughter (Bateman)"}.get(record.get("mode"), record.get("mode"))
+    context = {"file": record.get("file"), "fit": mode, "model": record.get("model"),
+               "error model": res.get("error_model") or "", "γ": st.get("gamma"),
+               "fit title": label}
+    return {"source": "Decay fit",
+            "title": f"Half-li{'ves' if two else 'fe'}: {mode}",
+            "slots": slots, "items": items,
+            "context": {k: v for k, v in context.items() if v not in (None, "")}}
+
+
+def _figure_png(fig):
+    """The figure as a PNG file (temporary), without the buttons."""
+    import tempfile
+    hidden = []
+    for attr in ("_save_fit_button", "_logbook_button", "_asphodel_output_button"):
+        b = getattr(fig, attr, None)
+        if b is not None and b.ax.get_visible():
+            b.ax.set_visible(False)
+            hidden.append(b.ax)
+    fd, path = tempfile.mkstemp(prefix="asphodel_logbook_", suffix=".png")
+    os.close(fd)
+    try:
+        fig.savefig(path, format="png", dpi=110)
+    finally:
+        for ax in hidden:
+            ax.set_visible(True)
+        fig.canvas.draw_idle()
+    return path
+
+
+def open_logbook_dialog(fig, record):
+    """Open the "Save to log book" popout (own process: Tk) for this fit."""
+    import subprocess
+    import tempfile
+    spec = logbook_spec(record)
+    spec["plots"] = [{"path": _figure_png(fig), "caption": "Decay fit", "checked": True}]
+    fd, path = tempfile.mkstemp(prefix="asphodel_logbook_", suffix=".json")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(spec, fh, ensure_ascii=False)
+    script = os.path.join(paths.REPO_ROOT, "core", "logbook_dialog.py")
+    env = dict(os.environ, **{paths.ENV_EXPERIMENT: paths.experiment()})
+    env.pop("ASPHODEL_READY_FILE", None)
+    subprocess.Popen([sys.executable, script, path], env=env)
+
+
+def add_logbook_button(fig, record):
+    """'Save to log book' button next to 'Save fit parameters': opens a popout
+    to send the half-lives and the figure to the results log book."""
+    ax_btn = fig.add_axes([0.16, 0.945, 0.13, 0.045])
+    try:
+        ax_btn.set_in_layout(False)
+    except AttributeError:
+        pass
+    btn = Button(ax_btn, "Save to log book", color="#fff4ec", hovercolor="#f57d15")
+    btn.label.set_fontsize(13)
+
+    def on_click(_event):
+        try:
+            open_logbook_dialog(fig, record)
+        except Exception as exc:
+            print(f"Could not open the log book popout: {exc}")
+
+    btn.on_clicked(on_click)
+    fig._logbook_button = btn                     # keep a reference (else it stops responding)
+    return btn
+
+
 def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, resolved,
                with_offset, bateman, freq_min, freq_max, filename,
                gamma=None, title_suffix=None, sigma_fit=None, err_note=None,
@@ -1139,6 +1267,7 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
     fig.canvas.mpl_connect("resize_event", relayout_boxes)
     if record is not None:
         add_save_button(fig, record)
+        add_logbook_button(fig, record)
     show_window()
 
     # Console summary
@@ -1437,6 +1566,7 @@ def plot_joint(args, tP, IP, tD, ID, sigmaP, sigmaD, vals, errs,
     fig.tight_layout()
     if record is not None:
         add_save_button(fig, record)
+        add_logbook_button(fig, record)
     show_window()
 
     # Console summary

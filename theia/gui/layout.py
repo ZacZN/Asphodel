@@ -23,6 +23,7 @@ from .further_files import pid_modal
 from .further_fit import SRCH_DEFAULT_KHZ, srch_modal
 from .isocurve import iso_modal
 from .further_layout import further_tab
+from .logbook import lb_modal
 
 
 # Spectrum graphs that get the bottom-right coordinate readout
@@ -88,6 +89,7 @@ _BASE_LAYOUT = html.Div([
     pid_modal,
     iso_modal,
     srch_modal,
+    lb_modal,
     dcc.Store(id="further-restore", data=None),
     dcc.Store(id="sum-view", data=None),
     html.Div(id="_sum-view-hook", style={"display": "none"}),

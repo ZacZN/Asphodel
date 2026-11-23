@@ -21,6 +21,7 @@ from core.scan import _load_json
 from .common import (ACCENT, BOX_BORDER, BOX_STYLE, HELP_STYLE, INPUT_STYLE, LABEL_STYLE,
                      ref_peak_table, _ref_table_records, section, VIEWER_CONFIG_PATH)
 from .app import app
+from .logbook import logbook_button
 from .figures import empty_fig
 from .corr_profiles import corr_profile_ui, register_corr_profile
 from .folder_browser import list_npz, with_browse
@@ -418,8 +419,11 @@ viewer_tab = html.Div([
     html.Div([
         # plot in a box with its title as the heading, as in the Scan Results tab
         html.Div([
-            html.H6("Calculated Frequencies overlayed with data",
-                    style={"fontWeight": "600", "marginBottom": "6px"}),
+            html.Div([
+                html.H6("Calculated Frequencies overlayed with data",
+                        style={"fontWeight": "600", "margin": "0"}),
+                logbook_button("viewer", marginLeft="auto"),
+            ], style={"display": "flex", "alignItems": "center", "marginBottom": "6px"}),
             html.Div([
                 dcc.Graph(id="viewer-graph", style={"height": "100%"}, responsive=True,
                           config={"scrollZoom": True, "displayModeBar": True,

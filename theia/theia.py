@@ -45,6 +45,7 @@ Code layout
       folder_browser.py     Browse… pop-up
       viewer.py             Viewer tab
       scan_tab.py           Scan tab
+      logbook.py            "Save to log book" popout (Viewer, Scan Results)
       results.py            Scan Results tab (incl. confirmation mode, reference tracking)
       further_files.py      Further output: confirmation files, summing, PID settings
       further_fit.py        Further output: peak fitting, Search ions
@@ -72,7 +73,7 @@ if __name__ == "__main__":
 
 # importing the modules builds the page and registers every callback
 import gui.common, gui.app, gui.figures, gui.info, gui.corr_profiles  # noqa: E401, F401
-import gui.folder_browser, gui.viewer, gui.scan_tab, gui.results  # noqa: E401, F401
+import gui.folder_browser, gui.logbook, gui.viewer, gui.scan_tab, gui.results  # noqa: E401, F401
 import gui.further_files, gui.further_fit, gui.isocurve, gui.energy  # noqa: E401, F401
 import gui.further_layout, gui.settings_menu, gui.layout  # noqa: E401, F401
 from gui.app import app
