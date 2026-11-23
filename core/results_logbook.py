@@ -6,8 +6,10 @@ here from the tools ("Save to Log Book" in the decay-fit window, the
 spectrogram page and Theia's Viewer / Scan Results) and shown by
 reference/results_logbook.py, one vertical tab per ion.
 
-A tab ("ion") is a nuclide in one energy state: 198Ir and 198mIr are separate
-tabs; the charge state and harmonic are stored on each entry (as values).
+Each entry belongs to an ion = a nuclide in one energy state (198Ir, 198mIr);
+the charge state and harmonic are stored on each entry (as values).  The log
+book page shows one tab ("page") per nuclide: 198Ir holds the ground state and
+all its isomers, each box tagged with its state.
 
 Storage (per experiment, output kind "logbook", see core/paths.py):
 
@@ -29,11 +31,13 @@ results_logbook.json (format asphodel-results-logbook v1):
                   "context": {"file": "...", ...}}],   # where it came from (read-only)
      "notes": [{"id": "n1a2b3c4d5", "ion": "198mIr", "text": "...",      # free notes on an
                 "created": "...", "updated": "..."}],                  # ion's page
-     "layouts": {"198mIr": {"<item id>": {"x": 0, "y": 0, "w": 4, "h": 6}}}}
+     "layouts": {"198Ir": {"<item id>": {"x": 0, "y": 0, "w": 4, "h": 6}}}}   # per nuclide page
 
 Page layout: each ion's page is a grid of boxes (results of an entry, each
 plot, an entry's notes, each free note) that can be moved and resized; the
-positions are kept per ion in "layouts" (item ids: see item_ids()).
+positions are kept per nuclide page in "layouts" (item ids: see item_ids());
+layouts under an isomer's own key (from before the pages were merged) are not
+used.  Notes belong to an ion as well; the page shows those of all its states.
 
 Every change is a read-modify-write under jsonfile.lock (shared between the
 processes), so the tools and the log book page can write at the same time.
@@ -307,8 +311,8 @@ def update_entry(eid, title=None, notes=None, values=None, ion=None, keep_plots=
             e["values"] = clean_values(values)
         if ion is not None and str(ion).strip():
             new_key = _ensure_ion(d, parse_ion(ion))
-            if new_key != e["ion"]:                 # moved: its boxes go to the bottom of the new page
-                _drop_layout(d, e["ion"], eid)
+            if page_key(new_key, d) != page_key(e["ion"], d):   # other nuclide: boxes go to the
+                _drop_layout(d, e["ion"], eid)                   # bottom of the new page
             e["ion"] = new_key
         if keep_plots is not None:
             keep = set(keep_plots)
@@ -470,19 +474,60 @@ def item_ids(e):
     return ids
 
 
+def page_key(key, d=None):
+    """Nuclide page of an ion key: '198mIr' -> '198Ir'."""
+    ion = d.get("ions", {}).get(key) if d else None
+    if ion:
+        return ion_key_g(ion)
+    try:
+        p = parse_ion(key)
+        return ion_key(p["A"], p["sym"])
+    except (ValueError, TypeError):
+        return key
+
+
+def ion_key_g(ion):
+    return ion_key(ion.get("A"), ion.get("sym", ""))
+
+
+def pages(exp=None, d=None):
+    """[(page key, {"A", "sym", "Z", "N", "states": [ion keys, g first]}, number of entries)]
+    sorted by Z, A: one per nuclide that has any ion in the log book."""
+    d = d or load(exp)
+    out = {}
+    for k, ion in d["ions"].items():
+        pk = ion_key_g(ion)
+        pg = out.setdefault(pk, {"A": ion.get("A"), "sym": ion.get("sym"), "Z": ion.get("Z"),
+                                 "N": ion.get("N"), "states": []})
+        pg["states"].append(k)
+    count = {}
+    for e in d["entries"]:
+        pk = page_key(e.get("ion"), d)
+        count[pk] = count.get(pk, 0) + 1
+    for pg in out.values():
+        pg["states"].sort(key=lambda k: ion_sort_key(d["ions"][k]))
+    return sorted([(k, v, count.get(k, 0)) for k, v in out.items()],
+                  key=lambda x: (x[1].get("Z") or 0, x[1].get("A") or 0))
+
+
+def page_names(exp=None):
+    return [k for k, _, _ in pages(exp)]
+
+
 def _drop_layout(d, ion, eid):
-    lay = d["layouts"].get(ion)
+    lay = d["layouts"].get(page_key(ion, d))
     if isinstance(lay, dict):
         for k in [k for k in lay if k.startswith(f"{eid}:")]:
             lay.pop(k, None)
 
 
 def save_layout(ion, items, exp=None):
-    """Store the positions of an ion page's boxes: items = [{"id", "x", "y", "w", "h"}]."""
+    """Store the positions of a nuclide page's boxes (ion = page key, e.g. '198Ir'):
+    items = [{"id", "x", "y", "w", "h"}]."""
     path = logbook_path(exp)
     with jsonfile.lock(path):
         d = load(exp)
-        if ion not in d["ions"]:
+        if not any(page_key(k, d) == ion for k in d["ions"]):
             raise KeyError(f"{ion} is not in the log book")
         lay = {}
         for it in items or []:
@@ -495,18 +540,21 @@ def save_layout(ion, items, exp=None):
     return mtime(exp)
 
 
-def notes_for(ion, exp=None, d=None):
+def notes_for(page, exp=None, d=None):
+    """Free notes shown on a nuclide page (those of all its states)."""
     d = d or load(exp)
-    return sorted([n for n in d["notes"] if n.get("ion") == ion], key=lambda n: n.get("created", ""))
+    return sorted([n for n in d["notes"] if page_key(n.get("ion"), d) == page],
+                  key=lambda n: n.get("created", ""))
 
 
 def add_note(ion, text="", exp=None):
-    """A new free note on an ion's page (placed below everything). Returns its id."""
+    """A new free note on a nuclide page (ion = page key, e.g. '198Ir'; placed
+    below everything). Returns its id."""
     path = logbook_path(exp)
     nid = "n" + uuid.uuid4().hex[:9]
     with jsonfile.lock(path):
         d = load(exp)
-        if ion not in d["ions"]:
+        if not any(page_key(k, d) == ion for k in d["ions"]):
             raise KeyError(f"{ion} is not in the log book")
         now = _now()
         d["notes"].append({"id": nid, "ion": ion, "text": str(text or ""), "created": now, "updated": now})
@@ -536,9 +584,30 @@ def delete_note(nid, exp=None):
         if n is None:
             return False
         d["notes"] = [x for x in d["notes"] if x["id"] != nid]
-        lay = d["layouts"].get(n.get("ion"))
+        lay = d["layouts"].get(page_key(n.get("ion"), d))
         if isinstance(lay, dict):
             lay.pop(f"note:{nid}", None)
+        jsonfile.write(path, d, indent=1, ensure_ascii=False)
+    return True
+
+
+def delete_page(page, exp=None):
+    """Remove a nuclide's tab (all its states); only when none of them has
+    entries or notes."""
+    path = logbook_path(exp)
+    with jsonfile.lock(path):
+        d = load(exp)
+        keys = [k for k in d["ions"] if page_key(k, d) == page]
+        if not keys:
+            return False
+        if any(page_key(e.get("ion"), d) == page for e in d["entries"]):
+            raise ValueError(f"{page} still has entries – delete them first")
+        if any(page_key(n.get("ion"), d) == page for n in d["notes"]):
+            raise ValueError(f"{page} still has notes – delete them first")
+        for k in keys:
+            d["ions"].pop(k, None)
+            d["layouts"].pop(k, None)
+        d["layouts"].pop(page, None)
         jsonfile.write(path, d, indent=1, ensure_ascii=False)
     return True
 

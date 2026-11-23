@@ -2,9 +2,10 @@
 """
 results_logbook.py  –  results log book: what you found out about each ion
 
-A Dash page (http://127.0.0.1:8058/) with one vertical tab per ion (nuclide
-+ energy state: 198Ir and 198mIr are separate tabs) down the left, and that
-ion's entries on the right, newest first.  Started from the home page
+A Dash page (http://127.0.0.1:8058/) with one vertical tab per nuclide down
+the left (198Ir holds the ground state and all its isomers) and that nuclide's
+entries on the right as a grid of boxes you move and resize (each tagged with
+its state: 198Ir / 198mIr), plus free notes.  Started from the home page
 (Reference section), which opens it in a new tab; it stops a few seconds after
 its tab is closed, or with Stop on the home page.
 
@@ -82,6 +83,9 @@ header .exp{{color:#777;font-family:monospace;font-size:12px}}
   border-bottom:1px solid {LINE};cursor:move;font-size:12px;font-weight:600;color:#444;user-select:none}}
 .bx.res .bx-head{{font-size:14px;color:#222}}
 .bx .bx-head .ht{{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}}
+.bx .bx-head .st{{flex:none;font-family:monospace;font-size:11px;font-weight:700;padding:0 6px;border-radius:9px;
+  border:1px solid {LINE};background:#fff;color:#555}}
+.bx .bx-head .st.iso{{background:{ACCENT};border-color:{ACCENT};color:#fff}}
 .bx .bx-head .x{{margin-left:auto;border:none;background:none;font-size:16px;line-height:1;cursor:pointer;color:#999}}
 .bx .bx-head .x:hover{{color:#c62828}}
 .bx .bx-body{{flex:1 1 auto;min-height:0;overflow:auto;padding:6px 10px}}
@@ -259,29 +263,32 @@ def _when(iso):
     return (iso or "").replace("T", " ")[:16]
 
 
-def _tab(key, ion, n, on):
-    iso = ion.get("state", "g") != "g"
-    return html.Button(([html.Span("↳", className="arr")] if iso else []) + [html.Span(key, className="nm"),
-                        html.Span(f"Z={ion.get('Z')}", className="z"),
+def _state_name(st):
+    return "g.s." if st in ("g", "", None) else f"isomer {st}"
+
+
+def _tab(key, pg, n, on, ions):
+    states = ", ".join(_state_name(ions[k].get("state", "g")) for k in pg["states"])
+    return html.Button([html.Span(key, className="nm"),
+                        html.Span(f"Z={pg.get('Z')}", className="z"),
                         html.Span(str(n), className="ct")],
                        id={"type": "tab", "k": key}, n_clicks=0,
-                       className="tab" + (" iso" if iso else "") + (" on" if on else ""),
-                       title=f"{key}: Z = {ion.get('Z')}, N = {ion.get('N')}, "
-                             f"{'ground state' if ion.get('state', 'g') == 'g' else 'isomer ' + ion['state']}"
+                       className="tab on" if on else "tab",
+                       title=f"{key}: Z = {pg.get('Z')}, N = {pg.get('N')} · {states}"
                              f" · {n} entr{'y' if n == 1 else 'ies'}")
 
 
-def _matches(key, ion, q):
+def _matches(key, pg, q, ions):
+    """Find box: a nuclide or state name (198Ir, 198mIr, Ir-198), or part of a key / the symbol."""
     q = (q or "").strip()
     if not q:
         return True
     try:
         p = rlb.parse_ion(q)
-        return p["key"] == key or (p["state"] == "g" and p["A"] == ion.get("A")
-                                   and p["sym"] == ion.get("sym"))
+        return rlb.ion_key(p["A"], p["sym"]) == key
     except ValueError:
         ql = q.lower()
-        return ql in key.lower() or ql == str(ion.get("sym", "")).lower()
+        return any(ql in k.lower() for k in [key] + pg["states"]) or ql == str(pg.get("sym", "")).lower()
 
 
 def _value_rows(values, head=True):
@@ -317,9 +324,14 @@ def _rows_for(px):
     return max(2, -(-int(px) // CELL_H))
 
 
-def _entry_items(e):
-    """[(item id, default w, default h, box)] of an entry."""
+def _entry_items(e, ions):
+    """[(item id, default w, default h, box)] of an entry; each box tagged with
+    the entry's state (ground state or isomer m, n, ...)."""
     eid = e["id"]
+    ion = ions.get(e.get("ion"), {})
+    st = ion.get("state", "g")
+    tag = html.Span(e.get("ion", ""), className="st " + ("g" if st == "g" else "iso"),
+                    title=_state_name(st))
     ttl = e.get("title") or "(no title)"
     meta = f"{e.get('source') or 'manual'} · {_when(e.get('created'))}"
     if e.get("updated") and e.get("updated") != e.get("created"):
@@ -336,7 +348,7 @@ def _entry_items(e):
             html.Details([html.Summary("Where It Came From"),
                           *[html.Div(f"{k}: {v}") for k, v in ctxt.items()]]) if ctxt else None]
     out = [(f"{eid}:res", 4, _rows_for(96 + 25 * (len(res) + 1)),
-            _box(ttl, body, "res"))]
+            _box(ttl, body, "res", tag=tag))]
     for p in e.get("plots", []):
         if not p.get("file"):
             continue
@@ -344,11 +356,11 @@ def _entry_items(e):
         out.append((f"{eid}:p:{os.path.basename(p['file'])}", 6, 10,
                     _box(f"↳ {ttl}" + (f" · {cap}" if cap else ""),
                          [html.A(html.Img(src=PLOT_URL + p["file"]), href=PLOT_URL + p["file"],
-                                 target="_blank", title="Open full size")], "plot")))
+                                 target="_blank", title="Open full size")], "plot", tag=tag)))
     if (e.get("notes") or "").strip():
         n_lines = e["notes"].count("\n") + 1 + len(e["notes"]) // 60
         out.append((f"{eid}:notes", 4, _rows_for(40 + 20 * n_lines),
-                    _box(f"Notes · {ttl}", [html.Div(e["notes"], className="notes")], "enotes")))
+                    _box(f"Notes · {ttl}", [html.Div(e["notes"], className="notes")], "enotes", tag=tag)))
     return out
 
 
@@ -360,8 +372,8 @@ def _note_item(n):
                                            className="x", title="Delete this note")))
 
 
-def _box(head, body, kind, close=None):
-    return html.Div([html.Div([html.Span(head, className="ht"), close], className="bx-head",
+def _box(head, body, kind, close=None, tag=None):
+    return html.Div([html.Div([tag, html.Span(head, className="ht"), close], className="bx-head",
                               title="Drag to move; resize from the bottom-right corner"),
                      html.Div(body, className="bx-body")],
                     className=f"grid-stack-item-content bx {kind}")
@@ -397,11 +409,11 @@ def _select(clicks, search, sel):
         if any(clicks or []):
             return t["k"]
         return dash.no_update
-    keys = rlb.ion_names()
+    keys = rlb.page_names()
     want = parse_qs((search or "").lstrip("?")).get("ion", [None])[0]
     if want:
         try:
-            k = rlb.parse_ion(want)["key"]
+            k = rlb.page_key(rlb.parse_ion(want)["key"])
             if k in keys:
                 return k
         except ValueError:
@@ -414,43 +426,30 @@ def _select(clicks, search, sel):
 @app.callback(Output("tabs", "children"),
               Input("ver", "data"), Input("sel", "data"), Input("find", "value"))
 def _draw_tabs(_ver, sel, q):
-    lst = rlb.ions()
+    d = rlb.load()
+    lst = rlb.pages(d=d)
     if not lst:
         return html.Div("No ions yet. Use “Save to Log Book” in the decay-fit window, the "
                         "spectrogram page or Theia.", className="empty")
-    # grouped by nuclide: the ground state, then its isomers indented under it;
-    # a nuclide with only isomer tabs gets a heading in place of the ground state
-    groups = {}
-    for k, ion, n in lst:
-        groups.setdefault((ion.get("Z"), ion.get("A")), []).append((k, ion, n))
-    shown = []
-    for (z, a), members in groups.items():
-        if not any(_matches(k, ion, q) for k, ion, n in members):
-            continue
-        out = []
-        if not any(ion.get("state", "g") == "g" for _, ion, _ in members):
-            ion0 = members[0][1]
-            out.append(html.Div([html.Span(rlb.ion_key(a, ion0.get("sym", "")), className="nm"),
-                                 html.Span(f"Z={z}", className="z")], className="nuc",
-                                title="No ground-state entries yet"))
-        out += [_tab(k, ion, n, k == sel) for k, ion, n in members]
-        shown.append(html.Div(out, className="grp"))
+    shown = [_tab(k, pg, n, k == sel, d["ions"]) for k, pg, n in lst if _matches(k, pg, q, d["ions"])]
     return shown or html.Div("No ion matches.", className="empty")
 
 
 @app.callback(Output("content", "children"), Input("ver", "data"), Input("sel", "data"))
 def _draw_content(ver, sel):
     d = rlb.load()
-    if not sel or sel not in d["ions"]:
+    page = next(((pg, n) for k, pg, n in rlb.pages(d=d) if k == sel), None)
+    if not sel or page is None:
         return html.Div([html.H2("Results Log Book"),
                          html.P("One tab per ion (nuclide + energy state). Entries are added with "
                                 "“Save to Log Book” in the decay-fit window, on the "
                                 "spectrogram page and in Theia (Viewer and Scan Results).",
                                 className="hint")])
-    ion = d["ions"][sel]
-    entries = sorted([e for e in d["entries"] if e.get("ion") == sel], key=lambda e: e.get("created", ""))
+    pg, _n = page
+    entries = sorted([e for e in d["entries"] if rlb.page_key(e.get("ion"), d) == sel],
+                     key=lambda e: e.get("created", ""))
     notes = rlb.notes_for(sel, d=d)
-    state = "ground state" if ion.get("state", "g") == "g" else f"isomer ({ion['state']})"
+    state = "states: " + ", ".join(_state_name(d["ions"][k].get("state", "g")) for k in pg["states"])
     right = [html.Span(f"{len(entries)} entr{'y' if len(entries) == 1 else 'ies'}", className="hint"),
              html.Button("+ Add Note", id="add-note", n_clicks=0, className="btn",
                          title="A free note on this page (below everything)")]
@@ -458,7 +457,7 @@ def _draw_content(ver, sel):
         right.append(html.Button("Remove Empty Tab", id={"type": "rmtab", "k": sel}, n_clicks=0,
                                  className="btn danger"))
     # every box, oldest first (an entry's boxes together), free notes by time
-    timed = [(e.get("created", ""), it) for e in entries for it in _entry_items(e)]
+    timed = [(e.get("created", ""), it) for e in entries for it in _entry_items(e, d["ions"])]
     timed += [(n.get("created", ""), _note_item(n)) for n in notes]
     items = [it for _, it in sorted(timed, key=lambda t: t[0])]
     pos = _place(items, d["layouts"].get(sel) or {})
@@ -470,7 +469,7 @@ def _draw_content(ver, sel):
                     # a new element on every draw, so the grid is set up afresh
                     id={"type": "grid", "v": f"{sel}-{ver}"})
     return html.Div([
-        html.Div([html.H2(sel), html.Span(f"Z = {ion.get('Z')}, N = {ion.get('N')}, {state}",
+        html.Div([html.H2(sel), html.Span(f"Z = {pg.get('Z')}, N = {pg.get('N')} · {state}",
                                           className="sub"),
                   html.Div(right, className="r")], className="ionhead"),
         html.Div(id="rm-msg", className="msg"),
@@ -580,11 +579,11 @@ def _remove_tab(clicks, ver):
     if not isinstance(t, dict) or not any(clicks or []):
         return dash.no_update, dash.no_update
     try:
-        rlb.delete_ion(t["k"])
+        rlb.delete_page(t["k"])
     except Exception as exc:
         print(f"Results log book: {exc}")
         return dash.no_update, dash.no_update
-    keys = rlb.ion_names()
+    keys = rlb.page_names()
     return (ver or 0) + 1, (keys[0] if keys else None)
 
 
@@ -681,7 +680,7 @@ def _save_edit(_n, eid, ion, title, rows, keep, notes, ver):
                          ion=key, keep_plots=keep or [])
     except Exception as exc:
         return dash.no_update, f"✗ {exc}", dash.no_update, dash.no_update
-    return {"display": "none"}, "", (ver or 0) + 1, key
+    return {"display": "none"}, "", (ver or 0) + 1, rlb.page_key(key)
 
 
 # ===========================================================================
