@@ -1677,7 +1677,8 @@ async function lbOpen() {
   if (!LB_PLOTS.length) box.textContent = 'No plot to send.';
   LB_PLOTS.forEach(function(p, i) {
     var l = document.createElement('label');
-    var c = document.createElement('input'); c.type = 'checkbox'; c.checked = i === 0; c.dataset.i = i;
+    var c = document.createElement('input'); c.type = 'checkbox'; c.dataset.i = i;
+    c.checked = p.caption !== 'Whole-file spectrum';   // 2-D and 3-D ticked
     var img = document.createElement('img'); img.src = p.png;
     var cap = document.createElement('span'); cap.textContent = p.caption;
     var row = document.createElement('span'); row.appendChild(c); row.appendChild(cap);
