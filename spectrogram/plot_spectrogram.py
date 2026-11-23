@@ -1507,7 +1507,9 @@ LOGBOOK_CSS = """
   .lb-dialog input[type=text]:focus, .lb-dialog textarea:focus { outline: none; border-color: #f97316; }
   .lb-dialog textarea { min-height: 70px; }
   .lb-top { display: grid; grid-template-columns: 1fr 2fr; gap: 12px; }
+  .lb-vals-box { max-height: 340px; overflow-y: auto; border: 1px solid #374151; border-radius: 4px; }
   table.lb-vals { border-collapse: collapse; width: 100%; font-size: 12px; }
+  table.lb-vals thead th { position: sticky; top: 0; z-index: 1; }
   table.lb-vals th { background: #374151; color: #d1d5db; font-weight: 600; text-align: left;
                      padding: 3px 6px; }
   table.lb-vals td { padding: 2px 4px; border-bottom: 1px solid #374151; }
@@ -1539,8 +1541,8 @@ LOGBOOK_HTML = """
           <input type="text" id="lbEntryTitle" autocomplete="off"></div>
       </div>
       <div><label class="f">Values to Send (edit if needed)</label>
-        <table class="lb-vals"><thead><tr><th></th><th>Quantity</th><th>Value</th><th>± Error</th>
-          <th>Unit</th></tr></thead><tbody id="lbVals"></tbody></table>
+        <div class="lb-vals-box"><table class="lb-vals"><thead><tr><th></th><th>Quantity</th><th>Value</th><th>± Error</th>
+          <th>Unit</th></tr></thead><tbody id="lbVals"></tbody></table></div>
         <button onclick="lbAddRow()" style="margin-top:6px;">+ Add Value</button></div>
       <div><label class="f">Plots (as shown now)</label><div id="lbPlots" class="lb-plots"></div></div>
       <div><label class="f" for="lbNotes">Notes</label><textarea id="lbNotes"></textarea></div>
@@ -1622,7 +1624,40 @@ async function lbOpen() {
   if (hm) lbAddRow({label: 'Harmonic h', value: hm});
   lbAddRow({label: 'Frequency Window', value: fMin.toFixed(1) + ' – ' + fMax.toFixed(1), unit: 'Hz'});
   lbAddRow({label: 'Time Window', value: tMin.toFixed(3) + ' – ' + tMax.toFixed(3), unit: 's'});
-  lbAddRow({label: 'Time Average', value: APPLIED_N, unit: 'frames', checked: false});
+  // every setting of the page, all ticked; options not used say "off"
+  lbAddRow({label: 'Time Average', value: APPLIED_N > 1 ? APPLIED_N : 'off', unit: APPLIED_N > 1 ? 'frames' : ''});
+  var ionLab = (typeof CUR_ION_LABEL === 'string' && CUR_ION_LABEL) ? CUR_ION_LABEL : 'none';
+  lbAddRow({label: 'Ion Loaded (Search Ions)', value: ionLab});
+  try {   // file, frequency crop, baseline, PID settings: from the server
+    var rs = await fetch('/logbook-settings'); var ds = await rs.json();
+    (ds.rows || []).forEach(function(r) { lbAddRow(r); });
+  } catch (e) {}
+  var chk = function(id) { var el = document.getElementById(id); return el && el.checked ? 'on' : 'off'; };
+  var val = function(id) { var el = document.getElementById(id); return el ? String(el.value).trim() : ''; };
+  var boxMode = document.getElementById('regBox') && document.getElementById('regBox').checked;
+  lbAddRow({label: 'Decay-Fit Region', value: boxMode ? 'drawn box' : 'sliders'});
+  var rb = (typeof _regBoxValues === 'function') ? _regBoxValues() : null;
+  lbAddRow({label: 'Drawn Box', value: rb ? ('t ' + (+rb[0]).toFixed(3) + ' – ' + (+rb[1]).toFixed(3) + ' s, f ' +
+            (+rb[2]).toFixed(1) + ' – ' + (+rb[3]).toFixed(1) + ' Hz') : 'none'});
+  lbAddRow({label: 'Decay-Fit Model', value: chk('batemanChk') === 'on' ? 'Bateman' : 'exponential decay'});
+  lbAddRow({label: 'Offset', value: chk('batemanChk') === 'on' ? 'with offset (+ C)'
+            : (chk('noOffset') === 'on' ? 'no offset' : 'with offset (+ C)')});
+  var pmin = val('parentMin'), pmax = val('parentMax');
+  lbAddRow({label: 'Parent Window', value: (chk('batemanChk') === 'on' && pmin && pmax) ? pmin + ' – ' + pmax : 'none',
+            unit: (chk('batemanChk') === 'on' && pmin && pmax) ? 'Hz' : ''});
+  lbAddRow({label: 'Fixed T½ Isomer (c.o.m.)', value: (chk('batemanChk') === 'on' && val('hlIso')) || 'off',
+            unit: (chk('batemanChk') === 'on' && val('hlIso')) ? 's' : ''});
+  lbAddRow({label: 'Fixed T½ Ground State (c.o.m.)', value: (chk('batemanChk') === 'on' && val('hlGs')) || 'off',
+            unit: (chk('batemanChk') === 'on' && val('hlGs')) ? 's' : ''});
+  lbAddRow({label: 'Lorentz Factor γ', value: val('gammaVal') || 'off'});
+  lbAddRow({label: 'Decay-Fit Title', value: val('decayTitleBox') || 'automatic'});
+  lbAddRow({label: 'Log Panel (data − C)', value: chk('logPlotChk')});
+  lbAddRow({label: 'Residual Panels', value: chk('residChk')});
+  lbAddRow({label: 'Power Scale', value: chk('dbCheck') === 'on' ? 'dB' : 'linear'});
+  lbAddRow({label: 'Colour Scheme', value: (typeof CUR_CS === 'string') ? CUR_CS : val('colorscaleSel')});
+  lbAddRow({label: '3-D Style', value: chk('surface3d') === 'on' ? 'surface' : 'bars'});
+  lbAddRow({label: '1-D Overlay', value: chk('show1d')});
+  lbAddRow({label: 'Plot Title', value: val('plotTitle') || 'none'});
   // existing tabs for the ion box
   try {
     var r = await fetch('/logbook-ions'); var d = await r.json();
@@ -1666,6 +1701,33 @@ async function lbSave() {
   } catch (e) { _lbStatus('✗ ' + e.message, 'err'); }
 }
 """
+
+
+def logbook_settings_rows(state):
+    """Settings the server knows for the popout: file, frequency crop, baseline,
+    PID settings (all ticked; options not used say "off")."""
+    from core import results_logbook
+    rows = [{"label": "File", "value": state.get("npz_path") or "none"}]
+    la = state.get("load_args") or {}
+    lo, hi = la.get("fmin"), la.get("fmax")
+    rows.append({"label": "Frequency Crop (loaded)",
+                 "value": "full file" if lo is None and hi is None
+                 else f"{'start' if lo is None else f'{float(lo):.1f}'} – {'end' if hi is None else f'{float(hi):.1f}'}",
+                 "unit": "" if lo is None and hi is None else "Hz"})
+    bl = state.get("baseline")
+    if bl and bl.get("on"):
+        par = ", ".join(f"{k}={v:g}" if isinstance(v, (int, float)) else f"{k}={v}"
+                        for k, v in (bl.get("params") or {}).items())
+        win = bl.get("window") or []
+        rows.append({"label": "Baseline Removal", "value": baseline.METHOD.upper()
+                     + (f", window {float(win[0]):.1f} – {float(win[1]):.1f} Hz"
+                        if len(win) == 2 and None not in win else "")
+                     + (f" ({par})" if par else "")})
+    else:
+        rows.append({"label": "Baseline Removal", "value": "off"})
+    sim = sim_prefs()
+    rows += results_logbook.settings_rows(sim, list(SIM_DEFAULTS))
+    return rows
 
 
 def logbook_save(body, npz_path):
@@ -3104,6 +3166,13 @@ def serve(html, state):
                 # answering; the program stops once no tab checks in)
                 TABS.seen(q.get("id", [""])[0])
                 self._send(200, {"ok": True})
+
+            elif url.path == "/logbook-settings":
+                # file, crop, baseline and PID settings for the "Save to Log Book" popout
+                try:
+                    self._send(200, {"rows": logbook_settings_rows(STATE)})
+                except Exception as exc:
+                    self._send(200, {"rows": [], "error": str(exc)})
 
             elif url.path == "/logbook-ions":
                 # existing tabs of the results log book, for the popout's ion box

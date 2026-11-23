@@ -345,6 +345,99 @@ def _remove_files(rels, exp=None):
                 print(f"Results log book: could not remove {p}: {exc}")
 
 
+# ---------------------------------------------------------------------------
+# Settings offered with an entry (all ticked; options not used say "off")
+# ---------------------------------------------------------------------------
+
+# key: (label, unit, kind)  kind: num0 = 0 means off, check = Checklist ["on"],
+# text = "" means none, num = plain number, str = text as it is
+SETTING_LABELS = {
+    "run_label": ("Run Label", "", "text"), "spectra_dir": ("Spectra Folder", "", "text"),
+    "file_pattern": ("File Pattern", "", "text"), "file_path": ("Spectrum Folder", "", "text"),
+    "spectrum_name": ("Spectrum File", "", "text"), "ref_name": ("Reference Ion", "", "text"),
+    "ref_frequency": ("Reference Frequency", "Hz", "num"), "ref_harmonic": ("Reference Harmonic", "", "num"),
+    "ref_window_hz": ("Reference Search Window ±", "Hz", "num"),
+    "ref_min_height": ("Min Reference Height", "a.u.", "num"), "ref_mode": ("Reference Pick", "", "str"),
+    "ref_tracking": ("Reference Tracking", "", "check"),
+    "use_predicted": ("Use Predicted Position if Not Found", "", "check"),
+    "ref_search_hz": ("Ref. Peak Search, Other Harmonics ±", "Hz", "num0"),
+    "z_lims": ("Z Limits", "", "text"), "n_lims": ("N Limits", "", "text"),
+    "el1": ("el1 (A, Z)", "", "text"), "el2": ("el2 (A, Z)", "", "text"),
+    "mq_width": ("m/q Window ±", "", "num"), "gamma_t": ("γ_t", "", "num"),
+    "harmonics": ("Harmonics", "", "text"),
+    "correction_enabled": ("Second-Order Correction", "", "check"),
+    "corr_profile": ("Correction Profile", "", "corr"), "corr_a": ("Correction a", "", "corr"),
+    "corr_b": ("Correction b", "", "corr"), "corr_c": ("Correction c", "", "corr"),
+    "noise_block_hz": ("Noise Block", "Hz", "num0"), "noise_cut_factor": ("Noise Cutoff Factor X", "", "num0"),
+    "k_prom": ("Prominence Threshold", "σ", "num"), "k_height": ("Height Threshold", "σ", "num"),
+    "rel_noise": ("Relative Noise r", "", "num"), "min_width_bins": ("Min Width FWHM", "bins", "num0"),
+    "min_distance_hz": ("Min Separation", "Hz", "num0"), "shoulders": ("Detect Shoulders", "", "check"),
+    "shoulder_scale_hz": ("Shoulder Scale s", "Hz", "shoulder"),
+    "k_shoulder": ("Shoulder Threshold", "σ", "shoulder"), "match_tol_hz": ("Match Window ±", "Hz", "num"),
+    "min_half_life": ("Half-Life Cut", "", "hl"), "exclude_unknown_hl": ("Exclude Unknown T½", "", "check"),
+    "highlight_ions": ("Highlighted Ions", "", "text"),
+    # spectrogram page (PID settings panel)
+    "show": ("Show Simulated Lines", "", "check"),
+    "show_excluded": ("Show Ions Excluded by T½ Cut", "", "check"),
+}
+_SKIP_KEYS = {"min_half_life_unit", "snippet_half_width", "dark_mode", "further_state", "search_width_khz"}
+
+
+def _setting_num(v):
+    try:
+        f = float(v)
+        return (int(f) if f.is_integer() and "." not in str(v) else f) if f == f else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _on(v):
+    return bool(v) and v not in ("off", "0", 0, False)
+
+
+def settings_rows(d, order=None):
+    """Value rows (all ticked) for a settings dict of the Theia / spectrogram
+    GUIs (Checklists are lists or booleans, numbers may be text); options not
+    used say "off" / "none"."""
+    rows = []
+    corr_on = _on(d.get("correction_enabled"))
+    shoulders_on = _on(d.get("shoulders"))
+    for k in (order or list(d)):
+        if k in _SKIP_KEYS or k not in d:
+            continue
+        label, unit, kind = SETTING_LABELS.get(k, (k.replace("_", " ").title(), "", "str"))
+        v = d.get(k)
+        if isinstance(v, (list, tuple)) and kind != "check":
+            v = ", ".join(str(x) for x in v)
+        u = unit
+        if kind == "check":
+            v = "on" if _on(v) else "off"
+        elif kind == "text":
+            v = str(v).strip() if v not in (None, "") and str(v).strip() else "none"
+        elif kind == "num0":
+            n = _setting_num(v)
+            v, u = ("off", "") if not n else (n, unit)
+        elif kind == "num":
+            n = _setting_num(v)
+            v = n if n is not None else (str(v) if v not in (None, "") else "none")
+        elif kind == "corr":
+            if not corr_on:
+                v, u = "off", ""
+            elif k == "corr_profile":
+                v = v or "none"
+            else:
+                n = _setting_num(v)
+                v = n if n is not None else v
+        elif kind == "shoulder":
+            n = _setting_num(v)
+            v, u = ("off", "") if not shoulders_on else (n if n is not None else v, unit)
+        elif kind == "hl":
+            n = _setting_num(v)
+            v, u = ("off", "") if not n else (n, d.get("min_half_life_unit") or "")
+        rows.append({"label": label, "value": v, "unit": u})
+    return rows
+
+
 # --------------------------------------------------------------------------- display helpers
 
 def fmt_number(v, err=None):

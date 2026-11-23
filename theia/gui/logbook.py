@@ -12,13 +12,15 @@ reference/results_logbook.py, shows it within a few seconds).
 Part of Theia (theia/theia.py).
 """
 import os
+import sqlite3
 import traceback
 
 import dash
 from dash import dash_table, dcc, html, Input, Output, State, ALL, ctx
 
 from core import results_logbook as rlb
-from core.scan import db_query
+from core.results_logbook import settings_rows
+from core.scan import DEFAULTS, db_query, read_kv
 
 from .app import app
 from .common import ACCENT, BOX_BORDER, HELP_STYLE, LABEL_STYLE
@@ -109,7 +111,7 @@ def _num(v):
         return None
 
 
-def _results_prefill(idx, rows, db, half_width):
+def _results_prefill(idx, rows, db, half_width, extra):
     if not rows or not db or idx is None or int(idx) >= len(rows):
         raise ValueError("No identification shown in the snippet.")
     row = rows[int(idx)]
@@ -130,6 +132,25 @@ def _results_prefill(idx, rows, db, half_width):
     for v in values:
         if isinstance(v.get("value"), float):
             v["value"] = round(v["value"], 3)
+    # the scan's own settings (stored in the database), then this page's options
+    values.append({"label": "Scan Database", "value": os.path.basename(db)})
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            st = read_kv(con, "settings")
+        finally:
+            con.close()
+        values += settings_rows(st, [k for k in DEFAULTS if k in st] + [k for k in st if k not in DEFAULTS])
+    except Exception as exc:
+        print(f"Results log book: could not read the scan settings: {exc}", flush=True)
+    ion_f, spec_f, closest, show_ex, dark = extra
+    values += [{"label": "Snippet Half-Width", "value": _num(half_width), "unit": "Hz"},
+               {"label": "Ion Filter", "value": (ion_f or "").strip() or "none"},
+               {"label": "Spectrum Filter", "value": ", ".join(spec_f) if spec_f else "none"},
+               {"label": "Only Closest Peak for Each Ion", "value": "on" if "ion" in (closest or []) else "off"},
+               {"label": "Only Closest Ion for Each Peak", "value": "on" if "peak" in (closest or []) else "off"},
+               {"label": "Show Ions Excluded by T½ Cut", "value": "on" if show_ex else "off"},
+               {"label": "Dark Mode", "value": "on" if dark else "off"}]
     return {"ion": row.get("ion") or "",
             "title": f"Peak in {row.get('spectrum')}",
             "values": values,
@@ -139,7 +160,8 @@ def _results_prefill(idx, rows, db, half_width):
                         "snippet half-width (Hz)": half_width}}
 
 
-def _viewer_prefill(file_path, spectrum, highlight, zoom, ref_name):
+def _viewer_prefill(vals, zoom, zoom_khz, harm_shown, dark):
+    file_path, spectrum, highlight = vals.get("file_path"), vals.get("spectrum_name"), vals.get("highlight_ions")
     ion, values = "", []
     if isinstance(zoom, dict) and zoom.get("ion"):
         ion = zoom["ion"]
@@ -147,7 +169,12 @@ def _viewer_prefill(file_path, spectrum, highlight, zoom, ref_name):
                    {"label": "Simulated Frequency", "value": round(float(zoom["f"]), 3), "unit": "Hz"}]
     elif highlight:
         ion = str(highlight).split(",")[0].strip()
-    values.append({"label": "Reference Ion", "value": ref_name or "", "checked": False})
+    values += settings_rows(vals, VIEWER_KEYS)
+    values += [{"label": "Zoom Window ±", "value": _num(zoom_khz), "unit": "kHz"},
+               {"label": "Zoomed To", "value": (f"{zoom['ion']} h{zoom.get('h')}" if isinstance(zoom, dict)
+                                                and zoom.get("ion") else "off")},
+               {"label": "Harmonics Shown", "value": ", ".join(str(h) for h in (harm_shown or [])) or "none"},
+               {"label": "Dark Mode", "value": "on" if dark else "off"}]
     return {"ion": ion,
             "title": f"Viewer: {spectrum}" if spectrum else "Viewer",
             "values": values,
@@ -157,25 +184,40 @@ def _viewer_prefill(file_path, spectrum, highlight, zoom, ref_name):
                         "highlighted ions": highlight or ""}}
 
 
+
+# the Viewer's inputs (ids v-<key>); same keys as viewer.VIEWER_DEFAULTS (not
+# imported: viewer.py imports this module)
+VIEWER_KEYS = ["file_path", "spectrum_name", "ref_name", "ref_frequency", "ref_harmonic", "z_lims",
+               "n_lims", "el1", "el2", "mq_width", "gamma_t", "harmonics", "correction_enabled",
+               "corr_a", "corr_b", "corr_c", "corr_profile", "ref_search_hz", "highlight_ions"]
+
+
 @app.callback(
     Output("lb-prefill", "data"),
     Output("send-pid-msg", "children", allow_duplicate=True),
     Input({"type": "lb-open", "src": ALL}, "n_clicks"),
     State("snippet-idx", "data"), State("hits-table", "derived_virtual_data"),
     State("db-select", "value"), State("snippet-width", "value"),
-    State("v-file_path", "value"), State("v-spectrum_name", "value"),
-    State("v-highlight_ions", "value"), State("v-zoom-idx", "data"), State("v-ref_name", "value"),
+    State("ion-filter", "value"), State("spec-filter", "value"), State("closest-filter", "value"),
+    State("snippet-show-excluded", "value"),
+    *[State(f"v-{k}", "value") for k in VIEWER_KEYS],
+    State("v-zoom-idx", "data"), State("v-zoom-width", "value"), State("v-harm-toggle", "value"),
+    State("dark-mode", "value"),
     State("lb-prefill", "data"),
     prevent_initial_call=True,
 )
-def lb_open(clicks, idx, rows, db, half_width, v_file, v_spec, v_hl, v_zoom, v_ref, old):
+def lb_open(clicks, idx, rows, db, half_width, ion_f, spec_f, closest, show_ex, *rest):
+    n = len(VIEWER_KEYS)
+    v_vals, (v_zoom, zoom_khz, harm_shown, dark, old) = rest[:n], rest[n:]
     t = ctx.triggered_id
     if not isinstance(t, dict) or not any(clicks or []):
         return dash.no_update, dash.no_update
     src = t["src"]
     try:
-        pre = (_results_prefill(idx, rows, db, half_width) if src == "results"
-               else _viewer_prefill(v_file, v_spec, v_hl, v_zoom, v_ref))
+        if src == "results":
+            pre = _results_prefill(idx, rows, db, half_width, (ion_f, spec_f, closest, show_ex, dark))
+        else:
+            pre = _viewer_prefill(dict(zip(VIEWER_KEYS, v_vals)), v_zoom, zoom_khz, harm_shown, dark)
     except Exception as exc:
         # only the Scan Results tab can fail (nothing in the snippet): say so beside its buttons
         return dash.no_update, f"✗ {exc}"
