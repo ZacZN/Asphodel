@@ -31,6 +31,7 @@ sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core import results_logbook as rlb
 
 ACCENT, PALE, SIDE, LINE = "#f57d15", "#fff4ec", "#f9f9f9", "#dddddd"
+VALS_MAX_H = 320               # px: taller value lists scroll
 
 
 def _str(v):
@@ -93,13 +94,37 @@ def run(spec, spec_path=None):
 
     # --- values
     label(body, "Values to Send (edit if needed)").pack(fill="x", pady=(10, 2))
-    vals = tk.Frame(body, bg="white")
-    vals.pack(fill="x")
+    # the rows scroll inside a box of at most VALS_MAX_H px (a fit has ~20 rows)
+    box = tk.Frame(body, bg="white")
+    box.pack(fill="x")
+    canvas = tk.Canvas(box, bg="white", highlightthickness=0, height=40)
+    sbar = tk.Scrollbar(box, orient="vertical", command=canvas.yview)
+    canvas.configure(yscrollcommand=sbar.set)
+    canvas.pack(side="left", fill="x", expand=True)
+    vals = tk.Frame(canvas, bg="white")
+    win = canvas.create_window((0, 0), window=vals, anchor="nw")
+
+    def _fit_box(_e=None):
+        h = vals.winfo_reqheight()
+        canvas.configure(height=min(h, VALS_MAX_H), scrollregion=(0, 0, vals.winfo_reqwidth(), h))
+        if h > VALS_MAX_H:
+            sbar.pack(side="right", fill="y")
+        else:
+            sbar.pack_forget()
+
+    vals.bind("<Configure>", _fit_box)
+    canvas.bind("<Configure>", lambda e: canvas.itemconfigure(win, width=e.width))
+
+    def _wheel(e):
+        if vals.winfo_reqheight() > VALS_MAX_H:
+            canvas.yview_scroll(-1 if (getattr(e, "num", 0) == 4 or getattr(e, "delta", 0) > 0) else 1, "units")
+    for seq in ("<Button-4>", "<Button-5>", "<MouseWheel>"):
+        canvas.bind_all(seq, lambda e: _wheel(e) if str(e.widget).startswith(str(canvas)) else None)
     for c, t in enumerate(["", "Quantity", "Value", "± Error", "Unit", ""]):
         tk.Label(vals, text=t, bg=PALE, fg="#555", anchor="w",
                  font=("TkDefaultFont", 9, "bold")).grid(row=0, column=c, sticky="ew", padx=1)
-    vals.columnconfigure(1, weight=2)
-    vals.columnconfigure(2, weight=2)
+    vals.columnconfigure(1, weight=1)
+    vals.columnconfigure(2, weight=3)
     vals.columnconfigure(3, weight=1)
     rows = []
 
@@ -115,7 +140,7 @@ def run(spec, spec_path=None):
         else:
             tk.Label(vals, textvariable=lab, bg="white", anchor="w").grid(row=r, column=1, sticky="ew")
         vs = []
-        for c, k, w in ((2, "value", 16), (3, "error", 10), (4, "unit", 6)):
+        for c, k, w in ((2, "value", 30), (3, "error", 10), (4, "unit", 6)):
             sv = tk.StringVar(value=_str(item.get(k)))
             tk.Entry(vals, textvariable=sv, relief="solid", bd=1, width=w,
                      font=("monospace", 9)).grid(row=r, column=c, sticky="ew", padx=1, pady=1)

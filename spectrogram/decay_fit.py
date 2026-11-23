@@ -934,6 +934,74 @@ def _hl_items(hl, slot, who=""):
     return out
 
 
+def _settings_items(record):
+    """Every option of the fit as value rows for the log book popout, ticked;
+    options not used are listed as "off" / "none"."""
+    st = record.get("settings", {})
+    res = record.get("result", {})
+    mode = record.get("mode")
+    rows = []
+
+    def add(label, value, unit=""):
+        rows.append({"label": label, "value": value, "unit": unit, "slot": None, "checked": True})
+
+    add("Fit Model", {"decay": "Exponential decay", "bateman": "Bateman (A → B)",
+                      "joint": "Joint parent + daughter (Bateman)"}.get(mode, mode or ""))
+    if mode == "decay":
+        add("Offset", "with offset (+ C)" if st.get("with_offset", True) else "no offset")
+    elif mode == "bateman":
+        add("Offset", "with offset (+ C)")
+    else:
+        add("Offset", "parent with offset (+ C_A), daughter without")
+    add("Model Equation", record.get("model") or "")
+    fw = st.get("freq_window_hz") or []
+    if len(fw) == 2 and None not in fw:
+        add("Daughter Window" if mode == "joint" else "Frequency Window",
+            f"{fw[0]:.1f} – {fw[1]:.1f}", "Hz")
+    pw = st.get("parent_window_hz")
+    add("Parent Window", f"{pw[0]:.1f} – {pw[1]:.1f}" if pw and None not in pw else "none",
+        "Hz" if pw and None not in pw else "")
+    tr = res.get("t_range_s") or []
+    if len(tr) == 2 and None not in tr:
+        add("Fit Time Range", f"{tr[0]:.4g} – {tr[1]:.4g}", "s")
+    t0, t1 = st.get("tmin_s"), st.get("tmax_s")
+    add("Time Cut (t min – t max)",
+        "off" if t0 is None and t1 is None
+        else f"{'start' if t0 is None else f'{t0:g}'} – {'end' if t1 is None else f'{t1:g}'}",
+        "" if t0 is None and t1 is None else "s")
+    sk = st.get("skip_bins") or [0, 0]
+    add("Skipped Bins", "off" if not any(sk) else f"first {sk[0]}, last {sk[1]}")
+    n = st.get("time_avg")
+    add("Time Average", "off" if not n or n <= 1 else n, "" if not n or n <= 1 else "frames")
+    bl = st.get("baseline")
+    if bl:
+        par = ", ".join(f"{k}={v:g}" if isinstance(v, (int, float)) else f"{k}={v}"
+                        for k, v in (bl.get("params") or {}).items())
+        win = bl.get("window_hz") or []
+        add("Baseline Removal", f"{str(bl.get('method', '')).upper()}"
+            + (f", window {win[0]:.1f} – {win[1]:.1f} Hz" if len(win) == 2 and None not in win else "")
+            + (f" ({par})" if par else ""))
+    else:
+        add("Baseline Removal", "off")
+    g = st.get("gamma")
+    add("Lorentz Factor γ", "off" if g is None else g)
+    for key, lab in (("halflife_isomer_com_s", "Fixed T½ Isomer (c.o.m.)"),
+                     ("halflife_groundstate_com_s", "Fixed T½ Ground State (c.o.m.)")):
+        v = st.get(key)
+        add(lab, "off" if v is None or not st.get("bateman") else v, "" if v is None or not st.get("bateman") else "s")
+    if st.get("unweighted"):
+        bars = "none (unweighted fit)"
+    elif st.get("err_coeffs"):
+        a, b = st["err_coeffs"]
+        bars = f"manual σ = A·I + B (A = {a:g}, B = {b:g})"
+    else:
+        bars = "automatic (two-pass, from residuals)"
+    add("Error Bars", bars)
+    if res.get("error_model"):
+        add("Error Model", res["error_model"])
+    return rows
+
+
 def logbook_spec(record):
     """What the "Save to Log Book" popout (core/logbook_dialog.py) offers for a fit."""
     label = record.get("label") or ""
@@ -954,19 +1022,7 @@ def logbook_spec(record):
         items.append({"label": "Harmonic h", "value": int(harm.group(1)), "slot": None})
     if res.get("chi2_ndf") is not None:
         items.append({"label": "χ²/ndf", "value": round(res["chi2_ndf"], 3), "slot": None})
-    fw = st.get("freq_window_hz") or []
-    if len(fw) == 2 and None not in fw:
-        items.append({"label": "Daughter Window" if record.get("mode") == "joint" else "Frequency Window",
-                      "value": f"{fw[0]:.1f} – {fw[1]:.1f}", "unit": "Hz", "slot": None,
-                      "checked": False})
-    pw = st.get("parent_window_hz")
-    if pw and None not in pw:
-        items.append({"label": "Parent Window", "value": f"{pw[0]:.1f} – {pw[1]:.1f}", "unit": "Hz",
-                      "slot": None, "checked": False})
-    tr = res.get("t_range_s") or []
-    if len(tr) == 2 and None not in tr:
-        items.append({"label": "Fit Time Range", "value": f"{tr[0]:.4g} – {tr[1]:.4g}", "unit": "s",
-                      "slot": None, "checked": False})
+    items += _settings_items(record)
     mode = {"decay": "exponential decay", "bateman": "Bateman (A → B)",
             "joint": "joint parent + daughter (Bateman)"}.get(record.get("mode"), record.get("mode"))
     context = {"file": record.get("file"), "fit": mode, "model": record.get("model"),
