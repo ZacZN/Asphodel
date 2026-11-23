@@ -210,6 +210,8 @@ def clean_values(values):
         unit = str(v.get("unit") or "").strip()
         if unit:
             item["unit"] = unit
+        if v.get("group") == "settings":           # shown folded on the log book page
+            item["group"] = "settings"
         out.append(item)
     return out
 
@@ -434,7 +436,7 @@ def settings_rows(d, order=None):
         elif kind == "hl":
             n = _setting_num(v)
             v, u = ("off", "") if not n else (n, d.get("min_half_life_unit") or "")
-        rows.append({"label": label, "value": v, "unit": u})
+        rows.append({"label": label, "value": v, "unit": u, "group": "settings"})
     return rows
 
 

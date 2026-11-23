@@ -150,6 +150,7 @@ def run(spec, spec_path=None):
             tk.Label(vals, text=f"→ {slots[slot].get('label', '')}", fg="#8a4a10", bg="white",
                      font=("TkDefaultFont", 8)).grid(row=r, column=5, sticky="w", padx=4)
         rows.append({"chk": chk, "label": lab, "value": vs[0], "error": vs[1], "unit": vs[2],
+                     "group": item.get("group"),
                      "slot": slot})
 
     for item in spec.get("items") or []:
@@ -215,7 +216,7 @@ def run(spec, spec_path=None):
         try:
             for i, name in chosen:
                 values = [{"label": r["label"].get(), "value": r["value"].get(),
-                           "error": r["error"].get(), "unit": r["unit"].get()}
+                           "error": r["error"].get(), "unit": r["unit"].get(), "group": r["group"]}
                           for r in rows if r["chk"].get() and r["slot"] in (None, i)]
                 _, key = rlb.add_entry(name, spec.get("source", ""), title=title_var.get(),
                                        notes=notes.get("1.0", "end"), values=values,

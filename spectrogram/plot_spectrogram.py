@@ -1559,6 +1559,7 @@ LOGBOOK_HTML = """
 LOGBOOK_JS = """
 // ── Save to log book (results log book, one tab per ion) ────────────────────
 var LB_PLOTS = [];       // [{png: dataURL, caption}] snapshots taken when the popout opened
+var LB_GROUP = '';       // group of the rows added next ('settings': folded in the log book)
 function _lbStatus(msg, kind) {
   var s = document.getElementById('lbStatus');
   s.textContent = msg;
@@ -1573,6 +1574,7 @@ function _lbCell(tr, value, cls) {
 function lbAddRow(item) {
   item = item || {label: '', value: '', checked: true, editable: true};
   var tr = document.createElement('tr');
+  tr.dataset.group = item.group || LB_GROUP;
   var td0 = document.createElement('td');
   var c = document.createElement('input'); c.type = 'checkbox'; c.checked = item.checked !== false;
   td0.appendChild(c); tr.appendChild(td0);
@@ -1589,7 +1591,7 @@ function _lbRows() {
     if (!tds[0].firstChild.checked) return;
     var lab = tds[1].dataset.label !== undefined ? tds[1].dataset.label : tds[1].firstChild.value;
     out.push({label: lab, value: tds[2].firstChild.value, error: tds[3].firstChild.value,
-              unit: tds[4].firstChild.value});
+              unit: tds[4].firstChild.value, group: tr.dataset.group || ''});
   });
   return out;
 }
@@ -1621,7 +1623,9 @@ async function lbOpen() {
   var tb = document.getElementById('lbVals'); tb.innerHTML = '';
   var fMin = +document.getElementById('fMin').value, fMax = +document.getElementById('fMax').value;
   var tMin = +document.getElementById('tMin').value, tMax = +document.getElementById('tMax').value;
+  LB_GROUP = '';
   if (hm) lbAddRow({label: 'Harmonic h', value: hm});
+  LB_GROUP = 'settings';   // everything below is a setting
   lbAddRow({label: 'Frequency Window', value: fMin.toFixed(1) + ' – ' + fMax.toFixed(1), unit: 'Hz'});
   lbAddRow({label: 'Time Window', value: tMin.toFixed(3) + ' – ' + tMax.toFixed(3), unit: 's'});
   // every setting of the page, all ticked; options not used say "off"
@@ -1658,6 +1662,7 @@ async function lbOpen() {
   lbAddRow({label: '3-D Style', value: chk('surface3d') === 'on' ? 'surface' : 'bars'});
   lbAddRow({label: '1-D Overlay', value: chk('show1d')});
   lbAddRow({label: 'Plot Title', value: val('plotTitle') || 'none'});
+  LB_GROUP = '';           // rows added with "+ Add Value" are results
   // existing tabs for the ion box
   try {
     var r = await fetch('/logbook-ions'); var d = await r.json();
@@ -1707,7 +1712,7 @@ def logbook_settings_rows(state):
     """Settings the server knows for the popout: file, frequency crop, baseline,
     PID settings (all ticked; options not used say "off")."""
     from core import results_logbook
-    rows = [{"label": "File", "value": state.get("npz_path") or "none"}]
+    rows = [{"label": "File", "value": state.get("npz_path") or "none"}]   # tagged "settings" below
     la = state.get("load_args") or {}
     lo, hi = la.get("fmin"), la.get("fmax")
     rows.append({"label": "Frequency Crop (loaded)",
@@ -1727,7 +1732,7 @@ def logbook_settings_rows(state):
         rows.append({"label": "Baseline Removal", "value": "off"})
     sim = sim_prefs()
     rows += results_logbook.settings_rows(sim, list(SIM_DEFAULTS))
-    return rows
+    return [dict(r, group="settings") for r in rows]
 
 
 def logbook_save(body, npz_path):

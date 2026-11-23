@@ -96,6 +96,9 @@ header .exp{{color:#777;font-family:monospace;font-size:12px}}
 .entry figcaption{{font-size:12px;color:#555;margin-top:3px}}
 .entry .notes{{white-space:pre-wrap;margin:6px 0 2px;padding:6px 8px;background:{SIDE};border-radius:4px}}
 .entry details{{margin-top:6px;font-size:12px;color:#555}}
+.entry details.settings{{font-size:13px;color:#222}}
+.entry details.settings summary{{color:#555;font-weight:600}}
+.entry details.settings table{{margin-top:4px}}
 .entry details summary{{cursor:pointer;color:#777}}
 .entry details div{{font-family:monospace;word-break:break-all;margin:2px 0 0 12px}}
 .btn{{border:1px solid {LINE};background:#fff;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:12px}}
@@ -145,7 +148,7 @@ def _plot(rel):
 def serve_layout():
     return html.Div([
         dcc.Location(id="url", refresh=False),
-        html.Header([html.Div(["Results ", html.Span("log book")], className="logo"),
+        html.Header([html.Div(["Results ", html.Span("Log Book")], className="logo"),
                      html.Div(f"experiment {paths.experiment()} · {rlb.logbook_path()}",
                               className="exp"),
                      logpanel.dash_button(className="btn", style={"marginLeft": "auto"})]),
@@ -237,12 +240,24 @@ def _matches(key, ion, q):
         return ql in key.lower() or ql == str(ion.get("sym", "")).lower()
 
 
-def _value_rows(values):
+def _value_rows(values, head=True):
     rows = []
     for v in values or []:
         rows.append(html.Tr([html.Td(v.get("label", "")), html.Td(rlb.fmt_value(v), className="v")]))
-    return html.Table([html.Thead(html.Tr([html.Th("Quantity"), html.Th("Value")])),
-                       html.Tbody(rows)]) if rows else None
+    if not rows:
+        return None
+    return html.Table(([html.Thead(html.Tr([html.Th("Quantity"), html.Th("Value")]))] if head else [])
+                      + [html.Tbody(rows)])
+
+
+def _values_block(values):
+    """Results in a table; the settings they were made with under a closed
+    "Settings (n)" fold."""
+    res = [v for v in values or [] if v.get("group") != "settings"]
+    st = [v for v in values or [] if v.get("group") == "settings"]
+    return [_value_rows(res),
+            html.Details([html.Summary(f"Settings ({len(st)})"), _value_rows(st, head=False)],
+                         className="settings") if st else None]
 
 
 def _entry_card(e):
@@ -262,7 +277,7 @@ def _entry_card(e):
                             html.Button("Delete", id={"type": "del", "id": e["id"]}, n_clicks=0,
                                         className="btn danger")], className="btns")],
                  className="top"),
-        _value_rows(e.get("values")),
+        *_values_block(e.get("values")),
         html.Div(plots, className="plots") if plots else None,
         html.Div(e["notes"], className="notes") if e.get("notes") else None,
         html.Details([html.Summary("Where It Came From"),
@@ -410,7 +425,8 @@ def _open_edit(clicks, _cancel):
     if e is None:
         return hide
     rows = [{"label": v.get("label", ""), "value": "" if v.get("value") is None else str(v["value"]),
-             "error": "" if v.get("error") is None else str(v["error"]), "unit": v.get("unit", "")}
+             "error": "" if v.get("error") is None else str(v["error"]), "unit": v.get("unit", ""),
+             "group": v.get("group", "")}
             for v in e.get("values", [])]
     opts = [{"label": html.Span([html.Img(src=PLOT_URL + p["file"]),
                                  html.Span(p.get("caption") or os.path.basename(p["file"]))]),

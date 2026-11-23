@@ -943,7 +943,8 @@ def _settings_items(record):
     rows = []
 
     def add(label, value, unit=""):
-        rows.append({"label": label, "value": value, "unit": unit, "slot": None, "checked": True})
+        rows.append({"label": label, "value": value, "unit": unit, "slot": None, "checked": True,
+                     "group": "settings"})
 
     add("Fit Model", {"decay": "Exponential decay", "bateman": "Bateman (A → B)",
                       "joint": "Joint parent + daughter (Bateman)"}.get(mode, mode or ""))

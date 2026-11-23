@@ -1154,7 +1154,7 @@ def _save_overlays(value):
 def serve_layout():
     levels = [{"label": lbl, "value": v} for v, lbl in ISOMER_LEVELS if (TABLE["state"] == v).any()]
     return html.Div([
-        html.Header([html.Div(["Segrè ", html.Span("chart")], className="logo"),
+        html.Header([html.Div(["Segrè ", html.Span("Chart")], className="logo"),
                      html.Div(f"NUBASE2020 · core/nubase_4.mas20 · experiment {paths.experiment()}",
                               className="exp"),
                      logpanel.dash_button(style={"marginLeft": "auto"})]),

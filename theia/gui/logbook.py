@@ -133,7 +133,7 @@ def _results_prefill(idx, rows, db, half_width, extra):
         if isinstance(v.get("value"), float):
             v["value"] = round(v["value"], 3)
     # the scan's own settings (stored in the database), then this page's options
-    values.append({"label": "Scan Database", "value": os.path.basename(db)})
+    values.append({"label": "Scan Database", "value": os.path.basename(db), "group": "settings"})
     try:
         con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
         try:
@@ -144,13 +144,13 @@ def _results_prefill(idx, rows, db, half_width, extra):
     except Exception as exc:
         print(f"Results log book: could not read the scan settings: {exc}", flush=True)
     ion_f, spec_f, closest, show_ex, dark = extra
-    values += [{"label": "Snippet Half-Width", "value": _num(half_width), "unit": "Hz"},
+    values += [dict(r, group="settings") for r in [{"label": "Snippet Half-Width", "value": _num(half_width), "unit": "Hz"},
                {"label": "Ion Filter", "value": (ion_f or "").strip() or "none"},
                {"label": "Spectrum Filter", "value": ", ".join(spec_f) if spec_f else "none"},
                {"label": "Only Closest Peak for Each Ion", "value": "on" if "ion" in (closest or []) else "off"},
                {"label": "Only Closest Ion for Each Peak", "value": "on" if "peak" in (closest or []) else "off"},
                {"label": "Show Ions Excluded by T½ Cut", "value": "on" if show_ex else "off"},
-               {"label": "Dark Mode", "value": "on" if dark else "off"}]
+               {"label": "Dark Mode", "value": "on" if dark else "off"}]]
     return {"ion": row.get("ion") or "",
             "title": f"Peak in {row.get('spectrum')}",
             "values": values,
@@ -170,11 +170,12 @@ def _viewer_prefill(vals, zoom, zoom_khz, harm_shown, dark):
     elif highlight:
         ion = str(highlight).split(",")[0].strip()
     values += settings_rows(vals, VIEWER_KEYS)
-    values += [{"label": "Zoom Window ±", "value": _num(zoom_khz), "unit": "kHz"},
+    values += [dict(r, group="settings") for r in [
+               {"label": "Zoom Window ±", "value": _num(zoom_khz), "unit": "kHz"},
                {"label": "Zoomed To", "value": (f"{zoom['ion']} h{zoom.get('h')}" if isinstance(zoom, dict)
                                                 and zoom.get("ion") else "off")},
                {"label": "Harmonics Shown", "value": ", ".join(str(h) for h in (harm_shown or [])) or "none"},
-               {"label": "Dark Mode", "value": "on" if dark else "off"}]
+               {"label": "Dark Mode", "value": "on" if dark else "off"}]]
     return {"ion": ion,
             "title": f"Viewer: {spectrum}" if spectrum else "Viewer",
             "values": values,
@@ -244,7 +245,8 @@ def lb_fill(pre):
     except Exception:
         names = []
     rows = [{"label": v.get("label", ""), "value": "" if v.get("value") is None else str(v["value"]),
-             "error": "" if v.get("error") is None else str(v["error"]), "unit": v.get("unit", "")}
+             "error": "" if v.get("error") is None else str(v["error"]), "unit": v.get("unit", ""),
+             "group": v.get("group", "")}
             for v in pre.get("values", [])]
     sel = [i for i, v in enumerate(pre.get("values", [])) if v.get("checked", True)]
     return (MODAL_SHOWN, f"From {pre['source']}", pre.get("ion", ""),
