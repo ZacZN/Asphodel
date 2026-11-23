@@ -26,7 +26,14 @@ results_logbook.json (format asphodel-results-logbook v1):
                   "values": [{"label": "T½ (c.o.m.)", "value": 1.4, "error": 0.1,
                               "unit": "s"}, ...],
                   "plots": [{"file": "plots/a1b2c3d4e5_0.png", "caption": "..."}],
-                  "context": {"file": "...", ...}}]}   # where it came from (read-only)
+                  "context": {"file": "...", ...}}],   # where it came from (read-only)
+     "notes": [{"id": "n1a2b3c4d5", "ion": "198mIr", "text": "...",      # free notes on an
+                "created": "...", "updated": "..."}],                  # ion's page
+     "layouts": {"198mIr": {"<item id>": {"x": 0, "y": 0, "w": 4, "h": 6}}}}
+
+Page layout: each ion's page is a grid of boxes (results of an entry, each
+plot, an entry's notes, each free note) that can be moved and resized; the
+positions are kept per ion in "layouts" (item ids: see item_ids()).
 
 Every change is a read-modify-write under jsonfile.lock (shared between the
 processes), so the tools and the log book page can write at the same time.
@@ -133,7 +140,7 @@ def ion_sort_key(ion):
 # --------------------------------------------------------------------------- file
 
 def _empty():
-    return {"format": FORMAT, "version": 1, "ions": {}, "entries": []}
+    return {"format": FORMAT, "version": 1, "ions": {}, "entries": [], "notes": [], "layouts": {}}
 
 
 def load(exp=None):
@@ -147,6 +154,11 @@ def load(exp=None):
     if not isinstance(d.get("entries"), list):
         d["entries"] = []
     d["entries"] = [e for e in d["entries"] if isinstance(e, dict) and e.get("id")]
+    if not isinstance(d.get("notes"), list):
+        d["notes"] = []
+    d["notes"] = [n for n in d["notes"] if isinstance(n, dict) and n.get("id")]
+    if not isinstance(d.get("layouts"), dict):
+        d["layouts"] = {}
     return d
 
 
@@ -294,7 +306,10 @@ def update_entry(eid, title=None, notes=None, values=None, ion=None, keep_plots=
         if values is not None:
             e["values"] = clean_values(values)
         if ion is not None and str(ion).strip():
-            e["ion"] = _ensure_ion(d, parse_ion(ion))
+            new_key = _ensure_ion(d, parse_ion(ion))
+            if new_key != e["ion"]:                 # moved: its boxes go to the bottom of the new page
+                _drop_layout(d, e["ion"], eid)
+            e["ion"] = new_key
         if keep_plots is not None:
             keep = set(keep_plots)
             removed = [p["file"] for p in e.get("plots", []) if p.get("file") not in keep]
@@ -319,6 +334,7 @@ def delete_entry(eid, exp=None):
         if e is None:
             return False
         d["entries"] = [x for x in d["entries"] if x["id"] != eid]
+        _drop_layout(d, e.get("ion"), eid)
         jsonfile.write(path, d, indent=1, ensure_ascii=False)
     _remove_files([p.get("file") for p in e.get("plots", [])], exp)
     return True
@@ -331,8 +347,11 @@ def delete_ion(key, exp=None):
         d = load(exp)
         if any(e.get("ion") == key for e in d["entries"]):
             raise ValueError(f"{key} still has entries – delete them first")
+        if any(n.get("ion") == key for n in d["notes"]):
+            raise ValueError(f"{key} still has notes – delete them first")
         if d["ions"].pop(key, None) is None:
             return False
+        d["layouts"].pop(key, None)
         jsonfile.write(path, d, indent=1, ensure_ascii=False)
     return True
 
@@ -438,6 +457,90 @@ def settings_rows(d, order=None):
             v, u = ("off", "") if not n else (n, d.get("min_half_life_unit") or "")
         rows.append({"label": label, "value": v, "unit": u, "group": "settings"})
     return rows
+
+
+# --------------------------------------------------------------------------- page layout, notes
+
+def item_ids(e):
+    """Grid item ids of an entry: its results box, one per plot, its notes."""
+    ids = [f"{e['id']}:res"]
+    ids += [f"{e['id']}:p:{os.path.basename(p['file'])}" for p in e.get("plots", []) if p.get("file")]
+    if (e.get("notes") or "").strip():
+        ids.append(f"{e['id']}:notes")
+    return ids
+
+
+def _drop_layout(d, ion, eid):
+    lay = d["layouts"].get(ion)
+    if isinstance(lay, dict):
+        for k in [k for k in lay if k.startswith(f"{eid}:")]:
+            lay.pop(k, None)
+
+
+def save_layout(ion, items, exp=None):
+    """Store the positions of an ion page's boxes: items = [{"id", "x", "y", "w", "h"}]."""
+    path = logbook_path(exp)
+    with jsonfile.lock(path):
+        d = load(exp)
+        if ion not in d["ions"]:
+            raise KeyError(f"{ion} is not in the log book")
+        lay = {}
+        for it in items or []:
+            try:
+                lay[str(it["id"])] = {k: max(0, int(it[k])) for k in ("x", "y", "w", "h")}
+            except (KeyError, TypeError, ValueError):
+                continue
+        d["layouts"][ion] = lay
+        jsonfile.write(path, d, indent=1, ensure_ascii=False)
+    return mtime(exp)
+
+
+def notes_for(ion, exp=None, d=None):
+    d = d or load(exp)
+    return sorted([n for n in d["notes"] if n.get("ion") == ion], key=lambda n: n.get("created", ""))
+
+
+def add_note(ion, text="", exp=None):
+    """A new free note on an ion's page (placed below everything). Returns its id."""
+    path = logbook_path(exp)
+    nid = "n" + uuid.uuid4().hex[:9]
+    with jsonfile.lock(path):
+        d = load(exp)
+        if ion not in d["ions"]:
+            raise KeyError(f"{ion} is not in the log book")
+        now = _now()
+        d["notes"].append({"id": nid, "ion": ion, "text": str(text or ""), "created": now, "updated": now})
+        jsonfile.write(path, d, indent=1, ensure_ascii=False)
+    return nid
+
+
+def update_note(nid, text, exp=None):
+    path = logbook_path(exp)
+    with jsonfile.lock(path):
+        d = load(exp)
+        n = next((x for x in d["notes"] if x["id"] == nid), None)
+        if n is None:
+            raise KeyError("the note is no longer in the log book")
+        if n.get("text") != text:
+            n["text"] = str(text or "")
+            n["updated"] = _now()
+            jsonfile.write(path, d, indent=1, ensure_ascii=False)
+    return mtime(exp)
+
+
+def delete_note(nid, exp=None):
+    path = logbook_path(exp)
+    with jsonfile.lock(path):
+        d = load(exp)
+        n = next((x for x in d["notes"] if x["id"] == nid), None)
+        if n is None:
+            return False
+        d["notes"] = [x for x in d["notes"] if x["id"] != nid]
+        lay = d["layouts"].get(n.get("ion"))
+        if isinstance(lay, dict):
+            lay.pop(f"note:{nid}", None)
+        jsonfile.write(path, d, indent=1, ensure_ascii=False)
+    return True
 
 
 # --------------------------------------------------------------------------- display helpers
