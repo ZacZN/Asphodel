@@ -157,24 +157,24 @@ def _any_free_port():
         return s.getsockname()[1]
 
 
-def start_tool(key, args=()):
-    """Start a tool as its own process, fixed to the active experiment."""
+def start_tool(key, args=(), launch=None):
+    """Start a tool as its own process, fixed to the active experiment.
+    A web tool's tab is opened in the suite's Firefox, unless `launch` (a dict)
+    is given: then nothing is opened and launch gets "url" (already running:
+    the tool's page) or "token" (started: its starting page /_starting/<token>);
+    used by the Open links (/_launch/<key>), whose tab the browser opens itself."""
     section, name, script, _, single = TOOLS[key]
     path = os.path.join(REPO, script)
     if not os.path.isfile(path):
         raise FileNotFoundError(f"{script} not found")
-    if key == "theia" and _port_open(THEIA_PORT):
-        browser.open_url(f"http://127.0.0.1:{THEIA_PORT}/")
-        return f"Theia is already running – opened it in the browser."
-    if key == "segre" and _port_open(SEGRE_PORT):
-        browser.open_url(f"http://127.0.0.1:{SEGRE_PORT}/")
-        return "The Segrè chart is already running – opened it in the browser."
-    if key == "results_logbook" and _port_open(LOGBOOK_PORT):
-        browser.open_url(f"http://127.0.0.1:{LOGBOOK_PORT}/")
-        return "The results log book is already running – opened it in the browser."
-    if key == "gui_correction" and _port_open(GUICORR_PORT):
-        browser.open_url(f"http://127.0.0.1:{GUICORR_PORT}/")
-        return "GUI Second Order Correction is already running – opened it in the browser."
+    fixed = WEB_TOOLS.get(key, (None,))[0]
+    if fixed and _port_open(fixed):               # already running: just show it
+        url = f"http://127.0.0.1:{fixed}{WEB_TOOLS[key][1]}"
+        if launch is not None:
+            launch["url"] = url
+        else:
+            browser.open_url(url)
+        return f"{name} is already running – opened it in the browser."
     if single and running(key):
         return f"{name} is already running."
     exp = paths.experiment()
@@ -201,7 +201,10 @@ def start_tool(key, args=()):
         with _PROCS_LOCK:
             _STARTING[token] = dict(name=name, proc=proc, port=port, page=WEB_TOOLS[key][1],
                                     t0=time.time())
-        browser.open_url(f"http://127.0.0.1:{_HOME_PORT_USED[0]}/_starting/{token}")
+        if launch is not None:
+            launch["token"] = token
+        else:
+            browser.open_url(f"http://127.0.0.1:{_HOME_PORT_USED[0]}/_starting/{token}")
     shown = " ".join(shlex.quote(str(a)) for a in args)
     return f"Started {name} ({exp})" + (f": {shown}" if shown else "") + "."
 
@@ -365,6 +368,14 @@ def act(action, payload="", label="", cls="btn small", title=None):
                        className=cls, n_clicks=0, title=title)
 
 
+def open_link(key, title=None):
+    """"Open" for a web tool: a link the browser opens in a new tab at once
+    (/_launch/<key> starts the tool and shows its starting page), instead of
+    a button whose callback has to ask Firefox for a tab (about 1.5 s)."""
+    return html.A("Open", href=f"/_launch/{key}", target="_blank", className="btn primary small",
+                  title=title)
+
+
 def table(header, rows):
     return html.Table([html.Thead(html.Tr([html.Th(h) for h in header])),
                        html.Tbody([html.Tr([html.Td(c) for c in r]) for r in rows])])
@@ -388,22 +399,21 @@ def tool_card(key):
     section_, name, script, desc, _ = TOOLS[key]
     on, text = tool_status(key)
     buttons = {
-        "theia": [act("start", "theia", "Open", "btn primary small"),
+        "theia": [open_link("theia"),
                   act("stop", "theia", "Stop")],
-        "spectrogram": [act("start", "spectrogram", "Open", "btn primary small",
-                            title="Reopens the last session, or the file chooser"),
+        "spectrogram": [open_link("spectrogram",
+                                  title="Reopens the last session, or the file chooser"),
                         act("stop", "spectrogram", "Stop All")],
         "levelschemer": [act("start", "levelschemer", "Open", "btn primary small",
                              title="Reopens the last scheme"),
                          act("stop", "levelschemer", "Stop All")],
-        "gui_correction": [act("start", "gui_correction", "Open", "btn primary small",
-                               title="Opens in a new tab, at the last spectrum"),
+        "gui_correction": [open_link("gui_correction",
+                                     title="Opens in a new tab, at the last spectrum"),
                            act("stop", "gui_correction", "Stop")],
-        "segre": [act("start", "segre", "Open", "btn primary small",
-                      title="Opens the chart in a new tab"),
+        "segre": [open_link("segre", title="Opens the chart in a new tab"),
                   act("stop", "segre", "Stop")],
-        "results_logbook": [act("start", "results_logbook", "Open", "btn primary small",
-                                title="Opens the log book in a new tab"),
+        "results_logbook": [open_link("results_logbook",
+                                      title="Opens the log book in a new tab"),
                             act("stop", "results_logbook", "Stop")],
     }.get(key, [])
     return html.Div([
@@ -1614,6 +1624,31 @@ def _ping_gif():
     gif = (b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00"
            b"\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;")
     return Response(gif, mimetype="image/gif", headers={"Cache-Control": "no-store"})
+
+
+@app.server.route("/_launch/<key>")
+def _launch_route(key):
+    """An Open link: start the web tool and answer with its starting page (or
+    go straight to the tool if it is already running)."""
+    from flask import redirect
+    if key not in WEB_TOOLS:
+        return f"Unknown tool: {key}", 404
+    launch = {}
+    try:
+        msg = start_tool(key, launch=launch)
+    except Exception as exc:
+        return f"Could not start {key}: {exc}", 500
+    print(msg)
+    if "url" in launch:
+        return redirect(launch["url"])
+    if "token" in launch:
+        return _starting_page(launch["token"])
+    # a single-instance tool that is still starting: show the same starting page
+    with _PROCS_LOCK:
+        tokens = [t for t in _STARTING if t.startswith(key + "-")]
+    if tokens:
+        return _starting_page(tokens[-1])
+    return redirect("/")
 
 
 @app.server.route("/_starting/<token>")
