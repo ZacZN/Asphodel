@@ -1136,12 +1136,21 @@ function _regClipped() {
   var f0 = Math.min(v[2], v[3]), f1 = Math.max(v[2], v[3]);
   var c = {t0: Math.max(t0, T0), t1: Math.min(t1, T1), f0: Math.max(f0, F0), f1: Math.min(f1, F1)};
   if (!(c.t1 > c.t0) || !(c.f1 > c.f0)) return null;       // box entirely outside the view
+  // An edge is "cut" only if the box runs past the plotted range by more than
+  // half a time frame / frequency bin (the sliders' steps).  A box drawn to the
+  // border of the plot can land a hair outside it (zoom pixels, the rounding of
+  // the region fields): that is not a cut and stays solid.
+  var step = function(id) {
+    var s = parseFloat(document.getElementById(id).step);
+    return isFinite(s) && s > 0 ? s : 0;
+  };
+  var dt = step('tMin') / 2, df = step('fMin') / 2;
   // edges: [[ta, fa], [tb, fb], cut?]
   c.edges = [
-    [[c.t0, c.f0], [c.t0, c.f1], t0 < T0],    // left   (start time)
-    [[c.t1, c.f0], [c.t1, c.f1], t1 > T1],    // right  (end time)
-    [[c.t0, c.f0], [c.t1, c.f0], f0 < F0],    // bottom (low freq)
-    [[c.t0, c.f1], [c.t1, c.f1], f1 > F1]     // top    (high freq)
+    [[c.t0, c.f0], [c.t0, c.f1], t0 < T0 - dt],    // left   (start time)
+    [[c.t1, c.f0], [c.t1, c.f1], t1 > T1 + dt],    // right  (end time)
+    [[c.t0, c.f0], [c.t1, c.f0], f0 < F0 - df],    // bottom (low freq)
+    [[c.t0, c.f1], [c.t1, c.f1], f1 > F1 + df]     // top    (high freq)
   ];
   return c;
 }
