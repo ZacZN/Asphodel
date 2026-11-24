@@ -6,7 +6,7 @@ Part of Theia (theia/theia.py); split out of theia.py in Nov 2026.
 
 import os
 
-from dash import dcc, html, Input, Output
+from dash import dcc, html, Input, Output, State, no_update
 
 from core import corrections, logpanel, paths, summing
 from core.scan import load_config
@@ -91,6 +91,9 @@ _BASE_LAYOUT = html.Div([
     srch_modal,
     lb_modal,
     dcc.Store(id="further-restore", data=None),
+    # the saved state waits here until the Further Output tab is first opened
+    # (restore_further_when_opened below), so page load stays fast
+    dcc.Store(id="further-restore-pending", data=None),
     dcc.Store(id="sum-view", data=None),
     html.Div(id="_sum-view-hook", style={"display": "none"}),
     html.Div(id="_further-saved", style={"display": "none"}),
@@ -121,7 +124,8 @@ def serve_layout():
     """Layout served on every page load, with the Further output tab's
     controls set to the state saved last time (scanner_config.json ->
     further_state).  The summed plot and the fit are rebuilt by show_sum /
-    update_fit from the further-restore store."""
+    update_fit from the further-restore store, which is filled the first time
+    the Further Output tab is opened (restore_further_when_opened)."""
     # Viewer tab: last saved viewer settings
     vcfg = load_viewer_config()
     for k in VIEWER_KEYS:
@@ -155,8 +159,8 @@ def serve_layout():
         ("sum-window", "value", st.get("window") or summing.DEFAULT_WINDOW_HZ),
         ("fit-shape", "value", fit.get("shape") or "gauss"),
         ("fit-bg", "value", fit.get("bg") or "const"),
-        ("further-restore", "data", (dict(st, files=files) if st.get("summed") and restorable
-                                     else None)),
+        ("further-restore-pending", "data", (dict(st, files=files)
+                                             if st.get("summed") and restorable else None)),
         ("pid-settings", "data", st.get("pid")),
         ("further-source", "value", st.get("source") or "sum"),
         ("fsrc-dir", "value", st.get("file_dir") or os.path.join(paths.summed_1d(), "")),
@@ -194,6 +198,20 @@ def serve_layout():
     if comp is not None:
         comp.options = corrections.options()
     return _BASE_LAYOUT
+
+
+@app.callback(
+    Output("further-restore", "data"),
+    Output("further-restore-pending", "data"),
+    Input("tabs", "value"),
+    State("further-restore-pending", "data"),
+)
+def restore_further_when_opened(tab, pending):
+    """Rebuild the Further Output plot saved last time only when that tab is
+    first opened (it can take several seconds), not on every page load."""
+    if tab == "further" and pending:
+        return pending, None
+    return no_update, no_update
 
 
 app.layout = logpanel.dash_layout(serve_layout, "Theia")

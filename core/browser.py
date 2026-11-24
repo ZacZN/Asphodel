@@ -146,9 +146,24 @@ def when_ready(port, action, timeout=60.0):
     threading.Thread(target=wait, daemon=True).start()
 
 
+# Set by the home page when it has already opened this tool's tab (showing
+# "Starting <tool>…", which switches to the tool once its server answers):
+# the tool then must not open a second tab.  Read once and removed, so
+# programs this tool starts in turn open their own tabs as usual.
+ENV_TAB_OPENED = "ASPHODEL_TAB_OPENED"
+_TAB_OPENED = os.environ.pop(ENV_TAB_OPENED, "").strip() == "1"
+
+
+def tab_opened_by_launcher():
+    """True if the home page already opened this tool's browser tab."""
+    return _TAB_OPENED
+
+
 def open_when_ready(url, port, new_window=False):
-    """open_url(url) as soon as the tool's server on `port` answers."""
-    when_ready(port, lambda: open_url(url, new_window=new_window))
+    """open_url(url) as soon as the tool's server on `port` answers (nothing
+    if the home page already opened the tab, see tab_opened_by_launcher)."""
+    if not _TAB_OPENED:
+        when_ready(port, lambda: open_url(url, new_window=new_window))
 
 
 def _conda_exe(prefix):

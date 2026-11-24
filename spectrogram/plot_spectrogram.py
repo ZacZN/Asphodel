@@ -3258,9 +3258,16 @@ def serve(html, state):
                    lines[-1] if lines else "")
         return {"reason": why, "message": msg, "log": "\n".join(lines[-15:])}
 
-    with socket.socket() as _s:
-        _s.bind(("127.0.0.1", 0))
-        port = _s.getsockname()[1]
+    # a free port, or the one the home page chose (it opens the tab itself
+    # and needs to know where the spectrogram will be)
+    try:
+        port = int(os.environ.pop("ASPHODEL_PORT", "") or 0)
+    except ValueError:
+        port = 0
+    if not port:
+        with socket.socket() as _s:
+            _s.bind(("127.0.0.1", 0))
+            port = _s.getsockname()[1]
 
     class _Handler(http.server.BaseHTTPRequestHandler):
         def _send(self, code, body, ctype="application/json"):
@@ -3703,7 +3710,8 @@ def serve(html, state):
 
     url = f"http://127.0.0.1:{port}/spectrogram.html"
     print(f"Serving spectrogram GUI at {url}  (Ctrl-C to quit)")
-    browser.open_url(url)        # suite's Firefox window, else default browser
+    if not browser.tab_opened_by_launcher():   # (the home page opened it already)
+        browser.open_url(url)    # suite's Firefox window, else default browser
 
     try:
         while not STOP.is_set():

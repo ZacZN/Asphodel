@@ -130,6 +130,25 @@ def running(key):
     return [(p.pid, e) for p, e in live]
 
 
+# Tools that are web pages: (fixed port or None = a free one, page path).
+# start_tool opens their tab at once on the starting page (_starting_page).
+WEB_TOOLS = {
+    "theia":           (THEIA_PORT, "/"),
+    "segre":           (SEGRE_PORT, "/"),
+    "results_logbook": (LOGBOOK_PORT, "/"),
+    "gui_correction":  (GUICORR_PORT, "/"),
+    "spectrogram":     (None, "/spectrogram.html"),
+}
+_STARTING = {}              # token -> dict(name, proc, port, page, t0), see _starting_state
+_HOME_PORT_USED = [HOME_PORT]   # the port this home page really runs on (set at start)
+
+
+def _any_free_port():
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
 def start_tool(key, args=()):
     """Start a tool as its own process, fixed to the active experiment."""
     section, name, script, _, single = TOOLS[key]
@@ -157,10 +176,24 @@ def start_tool(key, args=()):
     # page's terminal does not reach the tools
     # the tool keeps its own log (core/logcapture.py): give it the home page's
     # original stdout/stderr, not the home page's capture
+    web = key in WEB_TOOLS
+    if web:
+        # the home page opens the tool's tab itself, at once, on a "Starting
+        # <tool>…" page that switches to the tool when its server answers
+        env[browser.ENV_TAB_OPENED] = "1"
+        port = WEB_TOOLS[key][0] or _any_free_port()
+        if key == "spectrogram":
+            env["ASPHODEL_PORT"] = str(port)
     proc = subprocess.Popen([sys.executable, path, *[str(a) for a in args]], cwd=REPO, env=env,
                             start_new_session=True, **logcapture.child_stdio())
     with _PROCS_LOCK:
         _PROCS.setdefault(key, []).append((proc, exp))
+    if web:
+        token = f"{key}-{proc.pid}"
+        with _PROCS_LOCK:
+            _STARTING[token] = dict(name=name, proc=proc, port=port, page=WEB_TOOLS[key][1],
+                                    t0=time.time())
+        browser.open_url(f"http://127.0.0.1:{_HOME_PORT_USED[0]}/_starting/{token}")
     shown = " ".join(shlex.quote(str(a)) for a in args)
     return f"Started {name} ({exp})" + (f": {shown}" if shown else "") + "."
 
@@ -1511,6 +1544,104 @@ app.clientside_callback(
 )
 
 
+_STARTING_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><title>Starting %(name)s</title>
+<style>
+body{margin:0;font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#222;
+     background:#fff;display:flex;align-items:center;justify-content:center;height:100vh}
+.box{text-align:center;max-width:760px;padding:24px}
+h1{font-size:20px;font-weight:600;margin:0 0 14px}
+.spin{width:34px;height:34px;margin:0 auto 18px;border:4px solid #fff4ec;border-top-color:#f57d15;
+      border-radius:50%%;animation:s .8s linear infinite}
+@keyframes s{to{transform:rotate(360deg)}}
+#t{color:#777;font-size:13px}
+#err{display:none;text-align:left;margin-top:16px}
+#err b{color:#b00}
+pre{background:#f9f9f9;border:1px solid #ddd;padding:10px;font-size:12px;white-space:pre-wrap;
+    max-height:50vh;overflow:auto}
+</style></head><body><div class="box">
+<div class="spin" id="spin"></div>
+<h1 id="h">Starting %(name)s&hellip;</h1>
+<div id="t">0.0 s</div>
+<div id="err"><b id="why"></b><pre id="log"></pre></div>
+</div>
+<script>
+(function() {
+  var t0 = Date.now(), done = false, misses = 0;
+  var tick = setInterval(function() {
+    if (!done) document.getElementById('t').textContent = ((Date.now() - t0) / 1000).toFixed(1) + ' s';
+  }, 100);
+  function fail(why, log) {
+    done = true; clearInterval(tick);
+    document.getElementById('spin').style.display = 'none';
+    document.getElementById('h').textContent = 'Could Not Start %(name)s';
+    document.getElementById('err').style.display = 'block';
+    document.getElementById('why').textContent = why;
+    document.getElementById('log').textContent = log || '(no output)';
+  }
+  function poll() {
+    fetch('/_starting/%(token)s/state', {cache: 'no-store'}).then(function(r) { return r.json(); })
+    .then(function(s) {
+      misses = 0;
+      if (s.state === 'ready') { done = true; location.replace(s.url); return; }
+      if (s.state === 'failed') { fail(s.why, s.log); return; }
+      if (s.state === 'unknown') { fail('This start is no longer known to the home page.', ''); return; }
+      setTimeout(poll, 100);
+    }).catch(function() {
+      if (++misses > 30) { fail('The home page cannot be reached (closed?).', ''); return; }
+      setTimeout(poll, 300);
+    });
+  }
+  poll();
+})();
+</script></body></html>
+"""
+
+
+@app.server.route("/_starting/<token>")
+def _starting_page(token):
+    """The tab opened at once when a web tool is started (start_tool)."""
+    from html import escape
+    with _PROCS_LOCK:
+        st = _STARTING.get(token)
+    name = st["name"] if st else "Tool"
+    return _STARTING_HTML % {"name": escape(name), "token": escape(token)}
+
+
+def _tool_log_tail(pid, n=25):
+    """Last lines of the log of the tool with this pid (core/logcapture.py)."""
+    files = sorted(glob.glob(os.path.join(logcapture.LOG_DIR, f"*_{pid}.log")))
+    if not files:
+        return ""
+    try:
+        with open(files[-1], errors="replace") as fh:
+            return "".join(fh.readlines()[-n:])
+    except OSError:
+        return ""
+
+
+@app.server.route("/_starting/<token>/state")
+def _starting_state(token):
+    """{"state": starting | ready (+ url) | failed (+ why, log) | unknown}."""
+    from flask import jsonify
+    with _PROCS_LOCK:
+        st = _STARTING.get(token)
+    if not st:
+        return jsonify(state="unknown")
+    if _port_open(st["port"]):
+        with _PROCS_LOCK:
+            _STARTING.pop(token, None)
+        return jsonify(state="ready", url=f"http://127.0.0.1:{st['port']}{st['page']}")
+    rc = st["proc"].poll()
+    if rc is not None:
+        with _PROCS_LOCK:
+            _STARTING.pop(token, None)
+        why = (f"{st['name']} was stopped before it finished starting." if rc < 0 else
+               f"{st['name']} stopped while starting (exit code {rc}). Its last output:")
+        return jsonify(state="failed", why=why, log=_tool_log_tail(st["proc"].pid))
+    return jsonify(state="starting")
+
+
 @app.server.route("/_asphodel_quit", methods=["POST"])
 def _quit_route():
     """Close all tools, then stop the home page."""
@@ -1610,6 +1741,7 @@ if __name__ == "__main__":
     import logging
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
     port = _free_port(HOME_PORT)
+    _HOME_PORT_USED[0] = port
     url = f"http://127.0.0.1:{port}/"
     print(f"Asphodel home page at {url}  (Quit button: closes everything; Ctrl-C: home page only)")
     browser.when_ready(port, lambda: open_in_new_window(url))   # as soon as the server answers

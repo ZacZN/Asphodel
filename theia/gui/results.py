@@ -354,13 +354,17 @@ def _db_label(path, info, st):
     Input("tabs", "value"),
     State("db-select", "value"),
 )
-def refresh_db_list(_, finished, _tab, current):
+def refresh_db_list(_, finished, tab, current):
     dbs = list_databases()
     opts = [{"label": _db_label(p, i, s), "value": p} for p, i, s in dbs]
     paths = [p for p, _, _ in dbs]
     if dash.callback_context.triggered and \
             dash.callback_context.triggered[0]["prop_id"].startswith("scan-finished") and finished in paths:
         return opts, finished
+    if current is None and tab != "results":
+        # no database loaded until the Scan Results tab is first opened:
+        # loading one takes several seconds and would slow every page load
+        return opts, dash.no_update
     return opts, (current if current in paths else (paths[0] if paths else None))
 
 

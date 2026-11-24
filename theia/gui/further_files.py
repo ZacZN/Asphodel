@@ -702,6 +702,11 @@ def show_sum(_, _load, _req, restore, files, align, ion_key, unsure, show_sims, 
     # imported here: .energy imports this module
     from .energy import ENERGY_PAIR_TRACE, ENERGY_TRACE
     trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
+    if restore and any(t["prop_id"] == "further-restore.data"
+                       for t in dash.callback_context.triggered):
+        # the saved plot arrives when the tab is first opened, together with
+        # other (empty) triggers such as fsrc-load-req: the restore wins
+        trig = "further-restore.data"
     nu = dash.no_update
     # anything but the buttons (e.g. the initial call on page load) = restore
     restoring = not (trig.startswith("btn-sum") or trig.startswith("btn-fsrc-load")
