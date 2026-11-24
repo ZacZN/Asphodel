@@ -1601,7 +1601,13 @@ pre{background:#f9f9f9;border:1px solid #ddd;padding:10px;font-size:12px;white-s
     fetch('/_starting/%(token)s/state', {cache: 'no-store'}).then(function(r) { return r.json(); })
     .then(function(s) {
       misses = 0;
-      if (s.state === 'ready') { done = true; location.replace(s.url); return; }
+      if (s.state === 'ready') {
+        done = true;
+        // the spectrogram keeps this loading screen (and its timer) until its plots are drawn
+        location.replace(s.url.indexOf('spectrogram.html') >= 0
+                         ? s.url + (s.url.indexOf('?') >= 0 ? '&' : '?') + 'asph_t0=' + t0 : s.url);
+        return;
+      }
       if (s.state === 'failed') { fail(s.why, s.log); return; }
       if (s.state === 'unknown') { fail('This start is no longer known to the home page.', ''); return; }
       setTimeout(poll, 100);

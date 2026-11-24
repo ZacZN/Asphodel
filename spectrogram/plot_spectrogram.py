@@ -301,6 +301,77 @@ def make_title(path, fmin, fmax, linear=False, ion=None):
 
 
 # Plain strings (not f-strings) so CSS/JS braces need no escaping.
+# Loading screen of the spectrogram page: covers the page from its first bytes
+# until the plots are drawn and the data the page fetches itself (1-D
+# spectrum, whole-file spectrum, simulated lines) has arrived, so the page
+# appears only when ready.  Same look as the home page's starting page
+# (home.py _STARTING_HTML); ?asph_t0=<ms> (set by that page) continues its timer.
+BOOT_OVERLAY = """
+<div id="asphBoot" style="position:fixed;inset:0;z-index:2147483647;background:#fff;color:#222;
+  display:flex;align-items:center;justify-content:center;transition:opacity .15s;
+  font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+ <style>
+  #asphBoot .spin{width:34px;height:34px;margin:0 auto 18px;border:4px solid #fff4ec;
+    border-top-color:#f57d15;border-radius:50%;animation:asphSpin .8s linear infinite}
+  @keyframes asphSpin{to{transform:rotate(360deg)}}
+ </style>
+ <div style="text-align:center">
+  <div class="spin"></div>
+  <div id="asphBootH" style="font-size:20px;font-weight:600;margin:0 0 14px">Loading Spectrogram&hellip;</div>
+  <div id="asphBootT" style="color:#777;font-size:13px">0.0 s</div>
+ </div>
+</div>
+<script>
+(function() {
+  var m = /[?&]asph_t0=(\\d+)/.exec(location.search);
+  var t0 = m ? +m[1] : (performance.timeOrigin || Date.now());
+  if (m) document.getElementById('asphBootH').innerHTML = 'Starting Spectrogram&hellip;';
+  var tick = setInterval(function() {
+    var el = document.getElementById('asphBootT');
+    if (el) el.textContent = ((Date.now() - t0) / 1000).toFixed(1) + ' s';
+  }, 100);
+  // count the page's own requests (not the periodic polls) to know when its data is in
+  var busy = 0, lastDone = Date.now(), loaded = false, done = false;
+  var poll = /\\/_alive|\\/_aslog|\\/_touchpad/;
+  var orig = window.fetch;
+  window.fetch = function(u) {
+    var mine = !poll.test(String(u && u.url || u));
+    if (mine) busy++;
+    var fin = function() { if (mine) { busy--; lastDone = Date.now(); } };
+    var pr = orig.apply(this, arguments);
+    pr.then(fin, fin);
+    return pr;
+  };
+  function plotsDrawn() {
+    var ids = ['heatPlot', 'specPlot', 'fullPlot'], ok = true;
+    ids.forEach(function(id) {
+      var d = document.getElementById(id);
+      if (d && d.offsetParent !== null && d.offsetHeight > 0 && !d._fullLayout) ok = false;
+    });
+    return ok;
+  }
+  function hide() {
+    if (done) return; done = true; clearInterval(tick);
+    var o = document.getElementById('asphBoot');
+    if (!o) return;
+    requestAnimationFrame(function() { requestAnimationFrame(function() {
+      o.style.opacity = '0';
+      setTimeout(function() { o.remove(); }, 160);
+    }); });
+  }
+  window.addEventListener('load', function() { loaded = true; });
+  var started = Date.now();
+  (function check() {
+    if (done) return;
+    if (loaded && busy === 0 && Date.now() - lastDone > 250 && plotsDrawn()) return hide();
+    if (Date.now() - started > 30000) return hide();      // never hide the page for good
+    setTimeout(check, 50);
+  })();
+})();
+</script>
+"""
+
+
 LOADER_CSS = """
   .loader-row { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px;
                 flex-wrap: wrap; padding-bottom: 8px; border-bottom: 1px solid #374151; }
@@ -2292,6 +2363,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
 </style>
 </head>
 <body>
+{BOOT_OVERLAY}
 <div id="controls">
   <div id="fileModal" class="sim-modal" onclick="if(event.target===this) modalClose('fileModal')">
    <div class="sim-dialog file-dialog" role="dialog" aria-modal="true" aria-labelledby="fileTitle">
