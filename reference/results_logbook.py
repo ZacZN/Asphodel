@@ -79,14 +79,14 @@ header .exp{{color:#777;font-family:monospace;font-size:12px}}
 .lb-grid{{margin:0 -5px}}
 .bx{{background:#fff;border:1px solid {LINE};border-radius:5px;display:flex;flex-direction:column;overflow:hidden}}
 .bx.res{{border-left:5px solid {ACCENT}}}
-.bx .bx-head{{flex:none;display:flex;align-items:center;gap:6px;padding:4px 8px;background:{SIDE};
-  border-bottom:1px solid {LINE};cursor:move;font-size:12px;font-weight:600;color:#444;user-select:none}}
-.bx.res .bx-head{{font-size:14px;color:#222}}
+.bx .bx-head{{flex:none;display:flex;align-items:center;gap:8px;padding:5px 10px;background:{SIDE};
+  border-bottom:1px solid {LINE};cursor:move;font-size:24px;font-weight:600;color:#444;user-select:none}}
+.bx.res .bx-head{{font-size:28px;color:#222}}
 .bx .bx-head .ht{{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}}
-.bx .bx-head .st{{flex:none;font-family:monospace;font-size:11px;font-weight:700;padding:0 6px;border-radius:9px;
+.bx .bx-head .st{{flex:none;font-family:monospace;font-size:22px;font-weight:700;padding:0 10px;border-radius:16px;
   border:1px solid {LINE};background:#fff;color:#555}}
 .bx .bx-head .st.iso{{background:{ACCENT};border-color:{ACCENT};color:#fff}}
-.bx .bx-head .x{{margin-left:auto;border:none;background:none;font-size:16px;line-height:1;cursor:pointer;color:#999}}
+.bx .bx-head .x{{margin-left:auto;border:none;background:none;font-size:28px;line-height:1;cursor:pointer;color:#999}}
 .bx .bx-head .x:hover{{color:#c62828}}
 .bx .bx-body{{flex:1 1 auto;min-height:0;overflow:auto;padding:6px 10px}}
 .bx.plot .bx-body{{padding:4px;display:flex;align-items:center;justify-content:center}}
@@ -347,7 +347,7 @@ def _entry_items(e, ions):
             *_values_block(e.get("values")),
             html.Details([html.Summary("Where It Came From"),
                           *[html.Div(f"{k}: {v}") for k, v in ctxt.items()]]) if ctxt else None]
-    out = [(f"{eid}:res", 4, _rows_for(96 + 25 * (len(res) + 1)),
+    out = [(f"{eid}:res", 4, _rows_for(112 + 25 * (len(res) + 1)),
             _box(ttl, body, "res", tag=tag))]
     for p in e.get("plots", []):
         if not p.get("file"):
@@ -359,7 +359,7 @@ def _entry_items(e, ions):
                                  target="_blank", title="Open full size")], "plot", tag=tag)))
     if (e.get("notes") or "").strip():
         n_lines = e["notes"].count("\n") + 1 + len(e["notes"]) // 60
-        out.append((f"{eid}:notes", 4, _rows_for(40 + 20 * n_lines),
+        out.append((f"{eid}:notes", 4, _rows_for(56 + 20 * n_lines),
                     _box(f"Notes · {ttl}", [html.Div(e["notes"], className="notes")], "enotes", tag=tag)))
     return out
 
@@ -373,7 +373,7 @@ def _note_item(n):
 
 
 def _box(head, body, kind, close=None, tag=None):
-    return html.Div([html.Div([tag, html.Span(head, className="ht"), close], className="bx-head",
+    return html.Div([html.Div([tag, html.Span(head, className="ht", title=head), close], className="bx-head",
                               title="Drag to move; resize from the bottom-right corner"),
                      html.Div(body, className="bx-body")],
                     className=f"grid-stack-item-content bx {kind}")
