@@ -166,27 +166,86 @@ def open_when_ready(url, port, new_window=False):
         when_ready(port, lambda: open_url(url, new_window=new_window))
 
 
-def _conda_exe(prefix):
-    """The conda (or mamba) command that manages the env at prefix, or None."""
-    for exe in (os.environ.get("CONDA_EXE"),
-                os.path.join(os.path.dirname(os.path.dirname(prefix)), "bin", "conda"),
-                shutil.which("conda")):
-        if exe and os.path.isfile(exe) and os.access(exe, os.X_OK):
-            return exe
-    return None
+_STARTING_HOME_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><title>Starting Asphodel</title>
+<style>
+body{margin:0;font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#222;
+     background:#fff;display:flex;align-items:center;justify-content:center;height:100vh}
+.box{text-align:center;max-width:640px;padding:24px}
+h1{font-size:20px;font-weight:600;margin:0 0 14px}
+.spin{width:34px;height:34px;margin:0 auto 18px;border:4px solid #fff4ec;border-top-color:#f57d15;
+      border-radius:50%;animation:s .8s linear infinite}
+@keyframes s{to{transform:rotate(360deg)}}
+#t{color:#777;font-size:13px}
+#late{display:none;color:#777;font-size:13px;margin-top:14px}
+</style></head><body><div class="box">
+<div class="spin"></div>
+<h1>Starting Asphodel&hellip;</h1>
+<div id="t">0.0 s</div>
+<div id="late">This is taking longer than usual. If nothing happens, check the
+home page's log in your workspace's logs/ folder (home_*.log).</div>
+</div>
+<script>
+(function() {
+  // the home page's port is passed as ?port=; switch to it as soon as it answers
+  var port = (/[?&]port=(\\d+)/.exec(location.search) || [])[1] || '8050';
+  var base = 'http://127.0.0.1:' + port + '/', t0 = Date.now(), done = false;
+  setInterval(function() {
+    var s = (Date.now() - t0) / 1000;
+    if (!done) document.getElementById('t').textContent = s.toFixed(1) + ' s';
+    if (s > 30) document.getElementById('late').style.display = 'block';
+  }, 100);
+  function poll() {
+    var img = new Image();
+    img.onload = function() { done = true; location.replace(base); };
+    img.onerror = function() { setTimeout(poll, 100); };
+    img.src = base + '_asphodel_ping.gif?t=' + Date.now();
+  }
+  poll();
+})();
+</script></body></html>
+"""
+
+
+def open_home_starting_page(port):
+    """Open the suite's Firefox window at once on a local "Starting Asphodel…"
+    page that switches to the home page (http://127.0.0.1:<port>/) as soon as
+    it answers, so the window appears while home.py is still starting.  Only
+    with Firefox (the page is a local file, kept next to the suite's profile,
+    where snap Firefox may read it).  Returns True if the window was opened."""
+    if no_browser():
+        return False
+    exe = firefox()
+    if not exe:
+        return False
+    try:
+        folder = os.path.dirname(profile_dir(exe))
+        os.makedirs(folder, exist_ok=True)
+        page = os.path.join(folder, "asphodel-starting.html")
+        have = None
+        if os.path.isfile(page):
+            with open(page, encoding="utf-8") as fh:
+                have = fh.read()
+        if have != _STARTING_HOME_HTML:
+            with open(page, "w", encoding="utf-8") as fh:
+                fh.write(_STARTING_HOME_HTML)
+    except OSError:
+        return False
+    return open_url(f"file://{page}?port={int(port)}", new_window=True)
 
 
 def launch_command(python=None):
-    """Command line that starts home.py. In a conda env the env is activated
-    first (`conda run -p <env>`): a desktop launcher does not activate it, and
-    without that Qt cannot find its platform plugins, so matplotlib windows
-    such as the decay fit abort before they open."""
+    """Command line that starts home.py.  In a conda env the env is activated
+    first: a desktop launcher does not activate it, and without that Qt cannot
+    find its platform plugins, so matplotlib windows such as the decay fit
+    abort before they open.  core/launch_conda.sh does the activation itself
+    (about 2 s faster than `conda run`, which was used before)."""
     python = python or sys.executable
     home = os.path.join(REPO, "home.py")
     prefix = os.path.dirname(os.path.dirname(os.path.abspath(python)))
-    conda = _conda_exe(prefix) if os.path.isdir(os.path.join(prefix, "conda-meta")) else None
-    if conda:
-        return [conda, "run", "-p", prefix, "--no-capture-output", "python", home]
+    if os.path.isdir(os.path.join(prefix, "conda-meta")):
+        bash = shutil.which("bash") or "/bin/bash"
+        return [bash, os.path.join(REPO, "core", "launch_conda.sh"), prefix, home]
     return [python, home]
 
 

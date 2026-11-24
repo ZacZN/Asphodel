@@ -52,6 +52,14 @@ if __name__ == "__main__":
     # (core/firstrun.py); must happen before core.paths is imported
     from core import firstrun
     firstrun.ensure_workspace()
+    # open the window at once on a "Starting Asphodel…" page that switches to
+    # the home page when it answers (the imports below take a while)
+    from core import browser as _browser, ports as _ports
+    _EARLY_PORT = _ports.port("home")
+    with socket.socket() as _s:
+        _s.settimeout(0.2)
+        _busy = _s.connect_ex(("127.0.0.1", _EARLY_PORT)) == 0
+    _EARLY_TAB = (not _busy) and _browser.open_home_starting_page(_EARLY_PORT)
 from core import (browser, corrections, folderpick, icon, jsonfile, labbook, logcapture, logpanel,
                   paths, physics, ports, sync, tabwatch, trackpad, version)
 
@@ -1598,6 +1606,16 @@ pre{background:#f9f9f9;border:1px solid #ddd;padding:10px;font-size:12px;white-s
 """
 
 
+@app.server.route("/_asphodel_ping.gif")
+def _ping_gif():
+    """1×1 image: the early "Starting Asphodel…" window (a local file, which
+    cannot read the server's replies) loads it to see that the home page is up."""
+    from flask import Response
+    gif = (b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00"
+           b"\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;")
+    return Response(gif, mimetype="image/gif", headers={"Cache-Control": "no-store"})
+
+
 @app.server.route("/_starting/<token>")
 def _starting_page(token):
     """The tab opened at once when a web tool is started (start_tool)."""
@@ -1744,5 +1762,6 @@ if __name__ == "__main__":
     _HOME_PORT_USED[0] = port
     url = f"http://127.0.0.1:{port}/"
     print(f"Asphodel home page at {url}  (Quit button: closes everything; Ctrl-C: home page only)")
-    browser.when_ready(port, lambda: open_in_new_window(url))   # as soon as the server answers
+    if not (_EARLY_TAB and port == _EARLY_PORT):    # (the early window switches by itself)
+        browser.when_ready(port, lambda: open_in_new_window(url))   # as soon as the server answers
     app.run(debug=False, host="127.0.0.1", port=port)
