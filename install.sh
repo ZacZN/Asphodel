@@ -1,28 +1,37 @@
 #!/usr/bin/env bash
 # Install Asphodel for the current user (Linux).
 #
-#   ./install.sh                 install / update (run again after `git pull`)
-#   ./install.sh --no-launcher   skip the app-menu launcher and the `asphodel` command
-#   ./install.sh --uninstall     remove .venv/, the launcher and the command
-#                                (your workspace and its data are kept)
+#   ./install.sh                     install / update (run again after `git pull`)
+#   ./install.sh --no-launcher       skip the app-menu launcher and the `asphodel` command
+#   ./install.sh --separate-launcher if another copy of Asphodel already has the
+#   ./install.sh --replace-launcher    launcher: add this one next to it / take it over
+#                                      (without either option you are asked)
+#   ./install.sh --uninstall         remove .venv/ and this copy's launcher and command
+#                                    (the workspace and its data are kept)
 #   PYTHON=python3.12 ./install.sh   use a particular Python
 #
 # What it does:
 #   1. checks Python (3.9 or newer) with venv and Tk
 #   2. creates .venv/ in this folder and installs requirements.txt into it
 #   3. adds the command ~/.local/bin/asphodel and the "Asphodel" app-menu launcher
-# Nothing outside this folder, ~/.local/bin/asphodel and
-# ~/.local/share/applications/asphodel.desktop is changed. The workspace
-# (settings, outputs) is chosen the first time Asphodel starts.
+#
+# Every clone is its own installation: its environment (.venv/) and its
+# workspace choice (.asphodel_workspace.json, made at the first start) live in
+# the clone. Only the launcher and the command are shared by name, so when
+# another copy already has them (e.g. you install a second clone to test a
+# fresh install), this copy gets its own "Asphodel (<folder>)" launcher and
+# asphodel-<folder> command instead, unless you choose to replace them.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV="$REPO/.venv"
 BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
-WRAPPER="$BIN_DIR/asphodel"
-DESKTOP_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/applications/asphodel.desktop"
+APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 PYTHON="${PYTHON:-python3}"
 LAUNCHER=1
+LAUNCHER_CHOICE=""          # "", separate, replace
+NAME="$(basename "$REPO")"
+SLUG="$(printf '%s' "$NAME" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9._-' '_')"
 MIN_PY="3.9"
 
 say()  { printf '\033[1;33m==>\033[0m %s\n' "$*"; }
@@ -31,14 +40,19 @@ fail() { printf '\033[1;31mError:\033[0m %s\n' "$*" >&2; exit 1; }
 for arg in "$@"; do
     case "$arg" in
         --no-launcher) LAUNCHER=0 ;;
+        --separate-launcher) LAUNCHER_CHOICE=separate ;;
+        --replace-launcher) LAUNCHER_CHOICE=replace ;;
         --uninstall)
-            say "Removing Asphodel's environment and launchers"
-            if [ -f "$WRAPPER" ] && grep -qF "$REPO" "$WRAPPER"; then rm -f "$WRAPPER"; echo "  removed $WRAPPER"; fi
-            if [ -f "$DESKTOP_FILE" ] && grep -qF "$REPO" "$DESKTOP_FILE"; then rm -f "$DESKTOP_FILE"; echo "  removed $DESKTOP_FILE"; fi
+            say "Removing this copy's environment, launcher and command"
+            for f in "$APPS_DIR"/asphodel*.desktop "$BIN_DIR"/asphodel*; do
+                if [ -f "$f" ] && grep -qF "$REPO/home.py" "$f"; then rm -f "$f"; echo "  removed $f"; fi
+            done
             if [ -d "$VENV" ]; then rm -rf "$VENV"; echo "  removed $VENV"; fi
-            echo "Your workspace (see ~/.config/asphodel/config.json) and this folder were left alone."
+            ws="$(sed -n 's/.*"workspace": *"\(.*\)".*/\1/p' "$REPO/.asphodel_workspace.json" 2>/dev/null || true)"
+            echo "Left alone: this folder${ws:+ and the workspace $ws}."
+            echo "Delete them by hand if you no longer need them."
             exit 0 ;;
-        -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
         *) fail "unknown option $arg (see ./install.sh --help)" ;;
     esac
 done
@@ -101,8 +115,42 @@ print("  all packages import")
 PY
 
 # ---------------------------------------------------------------- 3. launchers
+# does a launcher / command file start another copy of Asphodel?
+other_copy() { [ -f "$1" ] && ! grep -qF "$REPO/home.py" "$1"; }
+
 if [ "$LAUNCHER" = 1 ]; then
-    say "Adding the asphodel command and the app-menu launcher"
+    DESKTOP_FILE="$APPS_DIR/asphodel.desktop"
+    WRAPPER="$BIN_DIR/asphodel"
+    MENU_NAME="Asphodel"
+    if other_copy "$DESKTOP_FILE" || other_copy "$WRAPPER"; then
+        other="$(sed -n 's/^Path=//p' "$DESKTOP_FILE" 2>/dev/null || true)"
+        echo
+        echo "Another copy of Asphodel already has the \"Asphodel\" launcher and the asphodel command${other:+ ($other)}."
+        if [ -z "$LAUNCHER_CHOICE" ]; then
+            if [ -t 0 ]; then
+                echo "  [s] add this copy separately, as \"Asphodel ($NAME)\" and asphodel-$SLUG  (default)"
+                echo "  [r] replace them: they will start this copy instead"
+                echo "  [n] no launcher for this copy"
+                read -r -p "Choice [s/r/n]: " ans
+                case "${ans:-s}" in
+                    r|R) LAUNCHER_CHOICE=replace ;;
+                    n|N) LAUNCHER=0 ;;
+                    *)   LAUNCHER_CHOICE=separate ;;
+                esac
+            else
+                LAUNCHER_CHOICE=separate
+            fi
+        fi
+        if [ "$LAUNCHER_CHOICE" = separate ]; then
+            DESKTOP_FILE="$APPS_DIR/asphodel-$SLUG.desktop"
+            WRAPPER="$BIN_DIR/asphodel-$SLUG"
+            MENU_NAME="Asphodel ($NAME)"
+        fi
+    fi
+fi
+
+if [ "$LAUNCHER" = 1 ]; then
+    say "Adding the command and the app-menu launcher \"$MENU_NAME\""
     mkdir -p "$BIN_DIR"
     cat > "$WRAPPER" <<EOF
 #!/bin/sh
@@ -111,17 +159,21 @@ exec "$VENV/bin/python" "$REPO/home.py" "\$@"
 EOF
     chmod +x "$WRAPPER"
     echo "  $WRAPPER"
-    "$VENV/bin/python" -m core.browser install | sed 's/^/  /'
+    "$VENV/bin/python" -m core.browser install "$DESKTOP_FILE" "$MENU_NAME" | sed 's/^/  /'
     case ":$PATH:" in
         *":$BIN_DIR:"*) ;;
-        *) echo "  note: $BIN_DIR is not on your PATH; add it (e.g. in ~/.bashrc) to type 'asphodel' in a terminal" ;;
+        *) echo "  note: $BIN_DIR is not on your PATH; add it (e.g. in ~/.bashrc) to start Asphodel from a terminal" ;;
     esac
 fi
 
 say "Done."
 if [ "$LAUNCHER" = 1 ]; then
-    echo "Start Asphodel from the app menu, or run:  asphodel"
+    echo "Start Asphodel from the app menu (\"$MENU_NAME\"), or run:  $(basename "$WRAPPER")"
 else
     echo "Start Asphodel with:  $VENV/bin/python $REPO/home.py"
 fi
-echo "The first start asks where to keep the workspace (default ~/Asphodel-data)."
+if [ -f "$REPO/.asphodel_workspace.json" ] || [ -d "$REPO/data" ]; then
+    echo "This copy's workspace is already set up."
+else
+    echo "The first start asks where to keep the workspace (default ~/Asphodel-data)."
+fi

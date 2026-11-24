@@ -10,3 +10,6 @@ Claude outputs/
 
 # Python environment made by install.sh
 .venv/
+
+# this clone's workspace choice (core/workspace.py)
+.asphodel_workspace.json

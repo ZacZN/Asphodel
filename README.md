@@ -37,7 +37,7 @@ The first start asks for two things:
 
 Your input data does not have to be in the workspace. Connect data folders from anywhere on the home page ("Connect data folder…").
 
-The workspace choice is saved in `~/.config/asphodel/config.json`. To use a different folder for one run, set `ASPHODEL_WORKSPACE=/path/to/folder`.
+The workspace choice is saved inside the Asphodel folder, in `.asphodel_workspace.json` (git ignores it). To use a different folder for one run, set `ASPHODEL_WORKSPACE=/path/to/folder`.
 
 ## Update
 
@@ -53,18 +53,28 @@ git pull
 ./install.sh --uninstall
 ```
 
-This removes `.venv/`, the `asphodel` command and the app-menu entry. Your workspace (settings, outputs) and the `Asphodel` folder are left alone. Delete them by hand if you no longer need them.
+This removes `.venv/` and this copy's command and app-menu entry. Your workspace (settings, outputs) and the `Asphodel` folder are left alone. Delete them by hand if you no longer need them.
 
 ## Testing a fresh install (for developers)
 
+Every clone is its own installation: its Python environment (`.venv/`) and its workspace choice live inside the clone. So you can test a fresh install in your own account, next to your working copy, without changing it:
+
 ```bash
-tests/fresh_install_test.sh                                   # last commit of this repo
-tests/fresh_install_test.sh git@github.com:ZacZN/Asphodel.git # what is on GitHub
-tests/fresh_install_test.sh --try                             # then start it as the new user
+cd /tmp                       # anywhere outside your working copy
+git clone https://github.com/ZacZN/Asphodel.git Asphodel-test
+cd Asphodel-test
+./install.sh
 ```
 
-The script clones the repo (committed files only) into a folder under `/tmp`. It then runs `install.sh` and `tests/smoke_test.py` as a new user would: in an empty fake home folder, with a clean environment and the system Python. Your own home folder, launcher, conda environment and workspace are not used or changed.
+`install.sh` notices that your working copy already has the "Asphodel" launcher and the `asphodel` command. It asks what to do, and by default adds the test copy separately, as "Asphodel (Asphodel-test)" and `asphodel-asphodel-test`. Start that one and you get the first-run setup exactly as a new user does. Close your working copy first: the tools use fixed ports, so only one copy can run at a time.
 
-`tests/smoke_test.py` can also be run on its own with an installed Python (`.venv/bin/python tests/smoke_test.py`). It checks that everything compiles and imports, and that the home page, Theia, the Segrè chart, the GUI correction tool and the results log book start and serve their pages. It runs in a temporary workspace and opens no browser.
+To remove the test copy afterwards:
 
-GitHub Actions runs the same fresh-install test on Ubuntu 22.04 and 24.04 for every push (`.github/workflows/install-test.yml`).
+```bash
+cd /tmp/Asphodel-test
+./install.sh --uninstall      # removes its .venv/, launcher and command
+cd .. && rm -rf Asphodel-test
+rm -rf ~/Asphodel-data        # its workspace, if you used the default
+```
+
+`tests/smoke_test.py` is a quick automatic check of an installed copy (`.venv/bin/python tests/smoke_test.py`). It checks that everything compiles and imports, and that the home page, Theia, the Segrè chart, the GUI correction tool and the results log book start and serve their pages. It runs in a temporary workspace and opens no browser.

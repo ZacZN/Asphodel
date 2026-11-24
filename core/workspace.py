@@ -10,10 +10,15 @@ experiment on the home page.
 Which folder is the workspace, first match wins:
 
   1. the environment variable ASPHODEL_WORKSPACE (one run, e.g. tests)
-  2. ~/.config/asphodel/config.json  {"workspace": "/path/to/folder"}
-     (written by the first-run setup, core/firstrun.py)
+  2. <repo>/.asphodel_workspace.json  {"workspace": "/path/to/folder"}
+     (written by the first-run setup, core/firstrun.py; git ignores it)
   3. <repo>/data, if that folder exists (the layout before the suite was
      installable: existing setups keep working without any change)
+
+The choice is kept inside the code folder (the git clone), not in the home
+folder, so every clone is its own installation: a second clone (e.g. to test
+a fresh install) has its own first-run setup and workspace and never changes
+the settings of another clone.
 
 If none of these gives a folder, workspace() returns None and home.py runs the
 first-run setup, which suggests DEFAULT_WORKSPACE.
@@ -30,13 +35,9 @@ LEGACY_WORKSPACE = os.path.join(REPO_ROOT, "data")
 DEFAULT_WORKSPACE = os.path.join(os.path.expanduser("~"), "Asphodel-data")
 
 
-def config_dir():
-    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
-    return os.path.join(base, "asphodel")
-
-
 def config_file():
-    return os.path.join(config_dir(), "config.json")
+    """The file that remembers this clone's workspace."""
+    return os.path.join(REPO_ROOT, ".asphodel_workspace.json")
 
 
 def _read_config():
@@ -77,13 +78,12 @@ def source():
 
 
 def set_workspace(path):
-    """Remember `path` as the workspace (in ~/.config/asphodel/config.json) and
-    create the folder. Returns the absolute path."""
+    """Remember `path` as this clone's workspace (in <repo>/.asphodel_workspace.json)
+    and create the folder. Returns the absolute path."""
     p = _norm(path)
     os.makedirs(p, exist_ok=True)
     d = _read_config()
     d["workspace"] = p
-    os.makedirs(config_dir(), exist_ok=True)
     tmp = config_file() + ".tmp"
     with open(tmp, "w") as fh:
         json.dump(d, fh, indent=2)

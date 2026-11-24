@@ -157,15 +157,16 @@ def _desktop_exec(args):
     return " ".join(q(a) for a in args)
 
 
-def install_desktop_file(python=None):
-    """Write ~/.local/share/applications/asphodel.desktop: an 'Asphodel'
-    launcher (starts home.py, with its conda env activated) whose
-    StartupWMClass matches the window, so the dock shows the asphodel icon
-    for the suite's Firefox window."""
+def install_desktop_file(python=None, path=None, name="Asphodel"):
+    """Write ~/.local/share/applications/asphodel.desktop (or `path`): an
+    app-menu launcher called `name` (starts this clone's home.py, with its
+    conda env activated) whose StartupWMClass matches the window, so the dock
+    shows the asphodel icon for the suite's Firefox window."""
+    path = path or DESKTOP_FILE
     text = (
         "[Desktop Entry]\n"
         "Type=Application\n"
-        "Name=Asphodel\n"
+        f"Name={name}\n"
         "Comment=ESR analysis suite\n"
         f"Exec={_desktop_exec(launch_command(python))}\n"
         f"Path={REPO}\n"
@@ -174,20 +175,23 @@ def install_desktop_file(python=None):
         f"StartupWMClass={APP_ID}\n"
         "Categories=Science;Education;\n"
     )
-    os.makedirs(os.path.dirname(DESKTOP_FILE), exist_ok=True)
-    with open(DESKTOP_FILE, "w") as fh:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as fh:
         fh.write(text)
     try:
-        subprocess.run(["update-desktop-database", os.path.dirname(DESKTOP_FILE)],
+        subprocess.run(["update-desktop-database", os.path.dirname(path)],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
     except (OSError, subprocess.SubprocessError):
         pass
-    return DESKTOP_FILE
+    return path
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] == ["install"]:
-        print("Wrote", install_desktop_file())
+    if sys.argv[1:2] == ["install"]:
+        # python -m core.browser install [<desktop file> [<menu name>]]
+        args = sys.argv[2:]
+        print("Wrote", install_desktop_file(path=args[0] if args else None,
+                                            name=args[1] if len(args) > 1 else "Asphodel"))
         print("Launcher runs:", _desktop_exec(launch_command()))
         print("Log out and back in (or restart GNOME Shell) if the icon does not show at once.")
     else:
