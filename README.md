@@ -1,6 +1,6 @@
 # Asphodel
 
-Analysis suite for Schottky data from the ESR storage ring at GSI: isotope identification from revolution frequencies, spectrograms and decay fits, spectrum summing and corrections, level schemes and a Segrè chart. It brings together the earlier Theia, Asphodel, Tartarus and Elysium tools.
+Analysis suite for Schottky data from the ESR storage ring at GSI: isotope identification from revolution frequencies, spectrograms and decay fits, spectrum summing and corrections, level schemes and a Segrè chart.
 
 Every tool is its own program. The home page starts and stops them, keeps the experiment settings and the connected data folders, and shows the outputs.
 
