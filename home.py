@@ -53,7 +53,7 @@ if __name__ == "__main__":
     from core import firstrun
     firstrun.ensure_workspace()
 from core import (browser, corrections, folderpick, icon, jsonfile, labbook, logcapture, logpanel,
-                  paths, physics, sync, tabwatch, trackpad, version)
+                  paths, physics, ports, sync, tabwatch, trackpad, version)
 
 # output also to data/logs/ and the page's Log panel (core/logcapture.py)
 if __name__ == "__main__":
@@ -64,11 +64,13 @@ from dash import dcc, html, Input, Output, State, ALL, ctx
 
 REPO = paths.REPO_ROOT
 ACCENT, PALE, SIDE, LINE = "#f57d15", "#fff4ec", "#f9f9f9", "#dddddd"
-HOME_PORT = 8050
-THEIA_PORT = 8052
-SEGRE_PORT = 8054             # reference/segre_chart.py
-GUICORR_PORT = 8056           # tartarus/gui_2nd_order_correction.py
-LOGBOOK_PORT = 8058           # reference/results_logbook.py
+# ports of this copy (core/ports.py: a second copy of Asphodel uses others)
+HOME_PORT = ports.port("home")
+COPY_NAME = os.path.basename(paths.REPO_ROOT)  # shown when this is a second copy
+THEIA_PORT = ports.port("theia")
+SEGRE_PORT = ports.port("segre")              # reference/segre_chart.py
+GUICORR_PORT = ports.port("gui_correction")   # tartarus/gui_2nd_order_correction.py
+LOGBOOK_PORT = ports.port("logbook")          # reference/results_logbook.py
 
 # ===========================================================================
 # Tools
@@ -613,6 +615,10 @@ def sidebar():
         html.Div([
             html.Img(src=icon.ICON_URL, alt="Asphodel"),
             html.Div(f"Asphodel v{version.version()}", className="brand-name"),
+            # a second copy (e.g. a test clone) says which one it is
+            (html.Div(f"Copy: {COPY_NAME} · ports {HOME_PORT}–{LOGBOOK_PORT}",
+                      style={"fontSize": "11px", "color": "#666", "textAlign": "center"})
+             if ports.offset() else None),
             changelog_panel(),
         ], className="brand"),
     ])
@@ -965,7 +971,8 @@ a.btn{{text-decoration:none}}
 .btn.quit{{color:#c62828;border-color:#c62828}} .btn.quit:hover{{background:#c62828;color:#fff}}
 """
 
-app = dash.Dash(__name__, title="Asphodel", suppress_callback_exceptions=True)
+app = dash.Dash(__name__, title=f"Asphodel ({COPY_NAME})" if ports.offset() else "Asphodel",
+                suppress_callback_exceptions=True)
 app.index_string = app.index_string.replace("</head>", f"<style>{CSS}</style></head>")
 # tab and home page stop together: closing the home tab/window works like Quit
 app.index_string = app.index_string.replace(

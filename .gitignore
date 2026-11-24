@@ -11,5 +11,6 @@ Claude outputs/
 # Python environment made by install.sh
 .venv/
 
-# this clone's workspace choice (core/workspace.py)
+# this clone's own settings: workspace, port offset (core/workspace.py)
+.asphodel_local.json
 .asphodel_workspace.json

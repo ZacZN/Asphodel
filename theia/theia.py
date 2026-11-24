@@ -65,7 +65,7 @@ import sys
 import threading
 
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import browser, logcapture
+from core import browser, logcapture, ports
 
 # output also to data/logs/ and the page's Log panel (core/logcapture.py)
 if __name__ == "__main__":
@@ -85,8 +85,9 @@ from gui.app import app
 if __name__ == "__main__":
     # Hide the per-request access log lines; warnings and errors are still shown
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
-    url = "http://127.0.0.1:8052/"
+    port = ports.port("theia")          # 8052 (+ this copy's offset, core/ports.py)
+    url = f"http://127.0.0.1:{port}/"
     print(f"Starting Theia at {url}")
     # in the suite's Firefox window (core/browser.py), else the default browser
     threading.Timer(1.0, lambda: browser.open_url(url)).start()
-    app.run(debug=False, host="127.0.0.1", port=8052)
+    app.run(debug=False, host="127.0.0.1", port=port)

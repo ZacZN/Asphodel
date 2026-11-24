@@ -13,14 +13,15 @@
 # What it does:
 #   1. checks Python (3.9 or newer) with venv and Tk
 #   2. creates .venv/ in this folder and installs requirements.txt into it
-#   3. adds the command ~/.local/bin/asphodel and the "Asphodel" app-menu launcher
+#   3. if other copies of Asphodel are installed, gives this one its own ports
+#   4. adds the command ~/.local/bin/asphodel and the "Asphodel" app-menu launcher
 #
-# Every clone is its own installation: its environment (.venv/) and its
-# workspace choice (.asphodel_workspace.json, made at the first start) live in
-# the clone. Only the launcher and the command are shared by name, so when
-# another copy already has them (e.g. you install a second clone to test a
-# fresh install), this copy gets its own "Asphodel (<folder>)" launcher and
-# asphodel-<folder> command instead, unless you choose to replace them.
+# Every clone is its own installation: its environment (.venv/) and its own
+# settings (.asphodel_local.json: workspace, chosen at the first start, and
+# port offset) live in the clone. A second copy (e.g. a clone to test a fresh
+# install) gets other ports, so it can be open next to your working copy, and
+# its own "Asphodel (<folder>)" launcher and asphodel-<folder> command, unless
+# you choose to replace the existing ones.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -48,11 +49,11 @@ for arg in "$@"; do
                 if [ -f "$f" ] && grep -qF "$REPO/home.py" "$f"; then rm -f "$f"; echo "  removed $f"; fi
             done
             if [ -d "$VENV" ]; then rm -rf "$VENV"; echo "  removed $VENV"; fi
-            ws="$(sed -n 's/.*"workspace": *"\(.*\)".*/\1/p' "$REPO/.asphodel_workspace.json" 2>/dev/null || true)"
+            ws="$(sed -n 's/.*"workspace": *"\(.*\)".*/\1/p' "$REPO/.asphodel_local.json" "$REPO/.asphodel_workspace.json" 2>/dev/null | head -1 || true)"
             echo "Left alone: this folder${ws:+ and the workspace $ws}."
             echo "Delete them by hand if you no longer need them."
             exit 0 ;;
-        -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,27p' "$0"; exit 0 ;;
         *) fail "unknown option $arg (see ./install.sh --help)" ;;
     esac
 done
@@ -114,7 +115,24 @@ if bad:
 print("  all packages import")
 PY
 
-# ---------------------------------------------------------------- 3. launchers
+# ---------------------------------------------------------------- 3. ports
+# Other copies of Asphodel installed for this user (found through their
+# launchers). If there are any, this copy gets its own ports so both can be
+# open at the same time (core/workspace.py, core/ports.py).
+others=()
+for f in "$APPS_DIR"/asphodel*.desktop; do
+    [ -f "$f" ] || continue
+    p="$(sed -n 's/^Path=//p' "$f" | head -1)"
+    if [ -n "$p" ] && [ "$p" != "$REPO" ] && [ -f "$p/home.py" ]; then others+=("$p"); fi
+done
+if [ ${#others[@]} -gt 0 ]; then
+    off="$("$VENV/bin/python" -m core.workspace assign-port-offset "${others[@]}")"
+    if [ "$off" != 0 ]; then
+        say "Other copies of Asphodel found: this copy uses ports $((8050 + off))–$((8058 + off)), so it can run next to them"
+    fi
+fi
+
+# ---------------------------------------------------------------- 4. launchers
 # does a launcher / command file start another copy of Asphodel?
 other_copy() { [ -f "$1" ] && ! grep -qF "$REPO/home.py" "$1"; }
 
@@ -172,7 +190,7 @@ if [ "$LAUNCHER" = 1 ]; then
 else
     echo "Start Asphodel with:  $VENV/bin/python $REPO/home.py"
 fi
-if [ -f "$REPO/.asphodel_workspace.json" ] || [ -d "$REPO/data" ]; then
+if grep -qs '"workspace"' "$REPO/.asphodel_local.json" "$REPO/.asphodel_workspace.json" || [ -d "$REPO/data" ]; then
     echo "This copy's workspace is already set up."
 else
     echo "The first start asks where to keep the workspace (default ~/Asphodel-data)."

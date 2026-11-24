@@ -37,7 +37,7 @@ The first start asks for two things:
 
 Your input data does not have to be in the workspace. Connect data folders from anywhere on the home page ("Connect data folder…").
 
-The workspace choice is saved inside the Asphodel folder, in `.asphodel_workspace.json` (git ignores it). To use a different folder for one run, set `ASPHODEL_WORKSPACE=/path/to/folder`.
+The workspace choice is saved inside the Asphodel folder, in `.asphodel_local.json` (git ignores it). To use a different folder for one run, set `ASPHODEL_WORKSPACE=/path/to/folder`.
 
 ## Update
 
@@ -66,7 +66,7 @@ cd Asphodel-test
 ./install.sh
 ```
 
-`install.sh` notices that your working copy already has the "Asphodel" launcher and the `asphodel` command. It asks what to do, and by default adds the test copy separately, as "Asphodel (Asphodel-test)" and `asphodel-asphodel-test`. Start that one and you get the first-run setup exactly as a new user does. Close your working copy first: the tools use fixed ports, so only one copy can run at a time.
+`install.sh` notices that your working copy already has the "Asphodel" launcher and the `asphodel` command. It asks what to do, and by default adds the test copy separately, as "Asphodel (Asphodel-test)" and `asphodel-asphodel-test`. It also gives the test copy its own ports (8150–8158 instead of 8050–8058), so both copies can be open at the same time. Start "Asphodel (Asphodel-test)" and you get the first-run setup exactly as a new user does, while your working copy stays open. The test copy's home page shows "Copy: Asphodel-test" under the version, and its browser tab is titled "Asphodel (Asphodel-test)". Both copies open their pages in the same Asphodel Firefox window.
 
 To remove the test copy afterwards:
 
@@ -77,4 +77,4 @@ cd .. && rm -rf Asphodel-test
 rm -rf ~/Asphodel-data        # its workspace, if you used the default
 ```
 
-`tests/smoke_test.py` is a quick automatic check of an installed copy (`.venv/bin/python tests/smoke_test.py`). It checks that everything compiles and imports, and that the home page, Theia, the Segrè chart, the GUI correction tool and the results log book start and serve their pages. It runs in a temporary workspace and opens no browser.
+`tests/smoke_test.py` is a quick automatic check of an installed copy (`.venv/bin/python tests/smoke_test.py`). It checks that everything compiles and imports, and that the home page, Theia, the Segrè chart, the GUI correction tool and the results log book start and serve their pages. It runs in a temporary workspace on its own ports (8950–8958) and opens no browser, so it also works while Asphodel is open.

@@ -33,7 +33,7 @@ import threading
 from urllib.parse import parse_qs
 
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import browser, icon, logcapture, logpanel, paths, tabwatch
+from core import browser, icon, logcapture, logpanel, paths, ports, tabwatch
 from core import results_logbook as rlb
 
 # output also to data/logs/ and the page's Log panel (core/logcapture.py)
@@ -44,7 +44,7 @@ import dash
 import flask
 from dash import dcc, html, dash_table, Input, Output, State, ALL, ctx
 
-PORT = 8058
+PORT = ports.port("logbook")             # 8058 + this copy's offset
 ACCENT, PALE, SIDE, LINE = "#f57d15", "#fff4ec", "#f9f9f9", "#dddddd"
 
 CSS = f"""

@@ -66,7 +66,7 @@ import threading
 from functools import lru_cache
 
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import browser, corrections, icon, jsonfile, logcapture, logpanel, paths, physics, tabwatch, trackpad
+from core import browser, corrections, icon, jsonfile, logcapture, logpanel, paths, physics, ports, tabwatch, trackpad
 
 # output also to data/logs/ and the page's Log panel (core/logcapture.py)
 if __name__ == "__main__":
@@ -82,7 +82,7 @@ import dash
 from dash import dcc, html, dash_table, Input, Output, State, ALL, ctx
 
 APP_NAME = "GUI Second Order Correction"
-PORT = 8056
+PORT = ports.port("gui_correction")      # 8056 + this copy's offset
 ACCENT, PALE, SIDE, LINE = "#f57d15", "#fff4ec", "#f9f9f9", "#dddddd"
 LINE_COL = "#2E91E5"        # simulated lines
 ASSIGNED_COL = "#1CA71C"    # assigned lines

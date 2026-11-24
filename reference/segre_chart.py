@@ -43,7 +43,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import browser, icon, jsonfile, logcapture, logpanel, paths, physics, segre_ids, tabwatch, trackpad
+from core import browser, icon, jsonfile, logcapture, logpanel, paths, physics, ports, segre_ids, tabwatch, trackpad
 
 # output also to data/logs/ and the page's Log panel (core/logcapture.py)
 if __name__ == "__main__":
@@ -55,7 +55,7 @@ import dash
 from dash import dcc, html, Input, Output, State, ALL, Patch, ctx
 import plotly.graph_objects as go
 
-PORT = 8054
+PORT = ports.port("segre")               # 8054 + this copy's offset
 ACCENT, PALE, SIDE, LINE = "#f57d15", "#fff4ec", "#f9f9f9", "#dddddd"
 MAGIC = [8, 20, 28, 50, 82, 126]
 # overlay lines around the measured nuclides: (checklist value, table column, legend, colour, dash)

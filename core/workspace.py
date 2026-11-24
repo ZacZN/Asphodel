@@ -10,7 +10,7 @@ experiment on the home page.
 Which folder is the workspace, first match wins:
 
   1. the environment variable ASPHODEL_WORKSPACE (one run, e.g. tests)
-  2. <repo>/.asphodel_workspace.json  {"workspace": "/path/to/folder"}
+  2. <repo>/.asphodel_local.json  {"workspace": "/path/to/folder", ...}
      (written by the first-run setup, core/firstrun.py; git ignores it)
   3. <repo>/data, if that folder exists (the layout before the suite was
      installable: existing setups keep working without any change)
@@ -36,17 +36,30 @@ DEFAULT_WORKSPACE = os.path.join(os.path.expanduser("~"), "Asphodel-data")
 
 
 def config_file():
-    """The file that remembers this clone's workspace."""
-    return os.path.join(REPO_ROOT, ".asphodel_workspace.json")
+    """This clone's own settings (workspace, port offset); git ignores it."""
+    return os.path.join(REPO_ROOT, ".asphodel_local.json")
+
+
+_OLD_CONFIG_FILE = os.path.join(REPO_ROOT, ".asphodel_workspace.json")   # older name of the file
 
 
 def _read_config():
-    try:
-        with open(config_file()) as fh:
-            d = json.load(fh)
-        return d if isinstance(d, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    for f in (config_file(), _OLD_CONFIG_FILE):
+        try:
+            with open(f) as fh:
+                d = json.load(fh)
+            return d if isinstance(d, dict) else {}
+        except (OSError, ValueError):
+            continue
+    return {}
+
+
+def _write_config(d):
+    tmp = config_file() + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(d, fh, indent=2)
+        fh.write("\n")
+    os.replace(tmp, config_file())
 
 
 def _norm(p):
@@ -78,15 +91,71 @@ def source():
 
 
 def set_workspace(path):
-    """Remember `path` as this clone's workspace (in <repo>/.asphodel_workspace.json)
+    """Remember `path` as this clone's workspace (in <repo>/.asphodel_local.json)
     and create the folder. Returns the absolute path."""
     p = _norm(path)
     os.makedirs(p, exist_ok=True)
     d = _read_config()
     d["workspace"] = p
-    tmp = config_file() + ".tmp"
-    with open(tmp, "w") as fh:
-        json.dump(d, fh, indent=2)
-        fh.write("\n")
-    os.replace(tmp, config_file())
+    _write_config(d)
     return p
+
+
+# --------------------------------------------------------------------------- ports
+#
+# Every tool that is a web page listens on a fixed port (core/ports.py). Two
+# copies of Asphodel (e.g. your working copy and a test clone) can run at the
+# same time when they use different ports: each clone adds its port offset.
+# The working copy has offset 0; install.sh gives a second copy the next free
+# multiple of 100 (8150, 8152, ... instead of 8050, 8052, ...).
+
+ENV_PORT_OFFSET = "ASPHODEL_PORT_OFFSET"
+
+
+def port_offset():
+    """This clone's port offset: ASPHODEL_PORT_OFFSET, else .asphodel_local.json, else 0."""
+    for v in (os.environ.get(ENV_PORT_OFFSET), _read_config().get("port_offset")):
+        try:
+            if v is not None and str(v).strip() != "":
+                return int(v)
+        except (TypeError, ValueError):
+            pass
+    return 0
+
+
+def offset_of_clone(repo):
+    """The port offset saved in another clone (0 if it has none)."""
+    for name in (".asphodel_local.json", ".asphodel_workspace.json"):
+        try:
+            with open(os.path.join(repo, name)) as fh:
+                return int((json.load(fh) or {}).get("port_offset") or 0)
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue
+    return 0
+
+
+def assign_port_offset(other_clones):
+    """Give this clone a port offset that none of `other_clones` uses (keeps
+    the current one if it is already free). Returns the offset."""
+    used = {offset_of_clone(r) for r in other_clones
+            if os.path.realpath(r) != os.path.realpath(REPO_ROOT)}
+    cur = int(_read_config().get("port_offset") or 0)
+    if cur not in used:
+        off = cur
+    else:
+        off = 100
+        while off in used:
+            off += 100
+    d = _read_config()
+    d["port_offset"] = off
+    _write_config(d)
+    return off
+
+
+if __name__ == "__main__":
+    # python -m core.workspace assign-port-offset <other clone folder> ...   (install.sh)
+    import sys
+    if sys.argv[1:2] == ["assign-port-offset"]:
+        print(assign_port_offset(sys.argv[2:]))
+    else:
+        print(f"workspace: {workspace()} ({source()}); port offset: {port_offset()}")

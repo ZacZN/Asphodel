@@ -15,8 +15,9 @@ Checks:
   2. the required packages import
   3. home.py starts, runs the first-run setup (workspace + Experiment1) and
      serves its page
-  4. Theia, the Segrè chart and the GUI correction tool start and serve their
-     pages (skipped if their port is already in use, e.g. your own suite is open)
+  4. Theia, the Segrè chart, the GUI correction tool and the results log book
+     start and serve their pages (on ports 8952-8958, so Asphodel can be open
+     meanwhile; a tool is skipped if its port is in use anyway)
   5. the command-line tools answer --help (decay fit, sum spectra)
 
 Exit code 0 if everything passed.
@@ -38,12 +39,18 @@ import urllib.request
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PACKAGES = ["dash", "dash_bootstrap_components", "plotly", "flask", "numpy", "scipy", "pandas",
             "matplotlib", "pybaselines", "openpyxl", "odf"]
-# (name, script, fixed port or None = read the address from the output)
+# the test runs on its own ports (core/ports.py + this offset), so it also
+# works while Asphodel is open
+TEST_PORT_OFFSET = 900
+sys.path.insert(0, REPO)
+from core.ports import BASE  # noqa: E402
+# (name, script, port or None = read the address from the output)
 SERVERS = [("Home Page", "home.py", None),
-           ("Theia", "theia/theia.py", 8052),
-           ("Segrè Chart", "reference/segre_chart.py", 8054),
-           ("GUI correction", "tartarus/gui_2nd_order_correction.py", 8056),
-           ("Results Log Book", "reference/results_logbook.py", 8058)]
+           ("Theia", "theia/theia.py", BASE["theia"] + TEST_PORT_OFFSET),
+           ("Segrè Chart", "reference/segre_chart.py", BASE["segre"] + TEST_PORT_OFFSET),
+           ("GUI Correction", "tartarus/gui_2nd_order_correction.py",
+            BASE["gui_correction"] + TEST_PORT_OFFSET),
+           ("Results Log Book", "reference/results_logbook.py", BASE["logbook"] + TEST_PORT_OFFSET)]
 CLI_HELP = ["spectrogram/decay_fit.py", "tartarus/sum_spectra.py"]
 START_TIMEOUT = 90          # s per server
 
@@ -135,6 +142,7 @@ def main():
     tmp = tempfile.mkdtemp(prefix="asphodel_smoke_")
     ws = os.path.join(tmp, "workspace")
     env = dict(os.environ, ASPHODEL_WORKSPACE=ws, ASPHODEL_NONINTERACTIVE="1",
+               ASPHODEL_PORT_OFFSET=str(TEST_PORT_OFFSET),
                ASPHODEL_NO_BROWSER="1", MPLBACKEND=os.environ.get("MPLBACKEND", "Agg"))
     env.pop("ASPHODEL_EXPERIMENT", None)
     print(f"  workspace: {ws}")
