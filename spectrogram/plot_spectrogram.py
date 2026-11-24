@@ -1179,16 +1179,29 @@ function _regDraw3d() {
   var zr = (gd.layout && gd.layout.scene && gd.layout.scene.zaxis && gd.layout.scene.zaxis.range) ||
            (gd._fullLayout && gd._fullLayout.scene && gd._fullLayout.scene.zaxis.range);
   if (c && zr) {
-    var z0 = Math.min(zr[0], zr[1]), z1 = Math.max(zr[0], zr[1]);
+    // keep every edge a little inside the plot's floor, ceiling and walls: a
+    // line lying exactly on one of those planes fights with the grey
+    // background drawn there and breaks up into dots
+    var IN = 0.005;                              // fraction of each axis span
+    function inside(v, r) {
+      if (!r) return v;
+      var lo = Math.min(r[0], r[1]), hi = Math.max(r[0], r[1]), d = (hi - lo) * IN;
+      return Math.min(Math.max(v, lo + d), hi - d);
+    }
+    var fl = gd._fullLayout && gd._fullLayout.scene;
+    var xr = fl && fl.xaxis && fl.xaxis.range, yr = fl && fl.yaxis && fl.yaxis.range;
+    var P = function(t, f, z) { return [inside(t, xr), inside(f, yr), z]; };
+    var dz = (Math.max(zr[0], zr[1]) - Math.min(zr[0], zr[1])) * IN;
+    var z0 = Math.min(zr[0], zr[1]) + dz, z1 = Math.max(zr[0], zr[1]) - dz;
     c.edges.forEach(function(e) {               // bottom and top outlines
       var o = e[2] ? dsh : sol;
-      seg(o, [e[0][0], e[0][1], z0], [e[1][0], e[1][1], z0]);
-      seg(o, [e[0][0], e[0][1], z1], [e[1][0], e[1][1], z1]);
+      seg(o, P(e[0][0], e[0][1], z0), P(e[1][0], e[1][1], z0));
+      seg(o, P(e[0][0], e[0][1], z1), P(e[1][0], e[1][1], z1));
     });
     // vertical edges at the corners: dashed if the corner lies on a cut edge
     var L = c.edges[0][2], R = c.edges[1][2], B = c.edges[2][2], T = c.edges[3][2];
     [[c.t0, c.f0, L || B], [c.t1, c.f0, R || B], [c.t1, c.f1, R || T], [c.t0, c.f1, L || T]]
-      .forEach(function(k) { seg(k[2] ? dsh : sol, [k[0], k[1], z0], [k[0], k[1], z1]); });
+      .forEach(function(k) { seg(k[2] ? dsh : sol, P(k[0], k[1], z0), P(k[0], k[1], z1)); });
   }
   Plotly.restyle('specPlot', {x: [sol.x, dsh.x], y: [sol.y, dsh.y], z: [sol.z, dsh.z]}, [1, 2]);
 }
