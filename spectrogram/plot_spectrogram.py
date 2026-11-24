@@ -1099,15 +1099,20 @@ window.addEventListener('load', _harmInit);
 // Drawing uses the heatmap's normal drag-to-zoom: while drawing, the zoom
 // ranges are captured as the box and the view is put back to the sliders.
 var _regDrawing = false;
+var _regTarget  = 's';     // box being drawn: 's' standard, 'm' mother, 'b' daughter
 var _regLoaded  = false;   // saved region read back from the server yet?
 
 // ── Decay Fit popout tabs: "Standard Fit" (exponential) and "Bateman Fit".
-//    Each tab has its own region, drawn box, title, γ, plot options and Run;
-//    element ids in the Bateman tab end in "B". The heatmap shows the open
-//    tab's box.
+//    Each tab has its own region, title, γ and Run. Standard: sliders or one
+//    drawn box. Bateman: a drawn MOTHER box and a drawn DAUGHTER box; both are
+//    fitted over the time range where the two boxes overlap.
+//    Box / element keys: 's' (no suffix), 'b' (suffix "B": Bateman tab and its
+//    daughter box), 'm' (suffix "M": mother box). The heatmap shows the open
+//    tab's box(es).
 var DECAY_TAB = 's';
-function _did(id, tab) { return (tab || DECAY_TAB) === 'b' ? id + 'B' : id; }
-function _d(id, tab)   { return document.getElementById(_did(id, tab)); }
+var _SFX = {s: '', b: 'B', m: 'M'};
+function _did(id, key) { return id + _SFX[key || DECAY_TAB]; }
+function _d(id, key)   { return document.getElementById(_did(id, key)); }
 function decayTab(tab, save) {
   DECAY_TAB = tab === 'b' ? 'b' : 's';
   ['s', 'b'].forEach(function(t) {
@@ -1121,37 +1126,50 @@ function decayTab(tab, save) {
   _regSync();
 }
 
-function _regBoxValues(tab) {
-  var v = ['regT0', 'regT1', 'regF0', 'regF1'].map(function(id) {
-    var x = _d(id, tab).value.trim();
+var _BOX_IDS = ['regT0', 'regT1', 'regF0', 'regF1'];
+function _regBoxValues(key) {
+  var v = _BOX_IDS.map(function(id) {
+    var x = _d(id, key).value.trim();
     return x === '' ? NaN : +x;
   });
   return v.every(isFinite) ? v : null;
 }
-function _regIsBox(tab) { return _d('regBox', tab).checked; }
+// standard tab: sliders or drawn box; the Bateman boxes are always drawn boxes
+function _regIsBox(key) { return (key || DECAY_TAB) === 's' ? _d('regBox', 's').checked : true; }
 
-function _regSetFields(v, tab) {
-  ['regT0', 'regT1', 'regF0', 'regF1'].forEach(function(id, i) {
-    _d(id, tab).value = v ? (i < 2 ? (+v[i]).toFixed(3) : (+v[i]).toFixed(1)) : '';
+function _regSetFields(v, key) {
+  _BOX_IDS.forEach(function(id, i) {
+    _d(id, key).value = v ? (i < 2 ? (+v[i]).toFixed(3) : (+v[i]).toFixed(1)) : '';
   });
 }
 
 function _regSync() {
-  ['s', 'b'].forEach(function(t) {
-    var box = _regIsBox(t);
-    ['regT0', 'regT1', 'regF0', 'regF1'].forEach(function(id) { _d(id, t).disabled = !box; });
-    _d('regDrawBtn', t).disabled = !box;
-  });
+  var box = _regIsBox('s');
+  _BOX_IDS.forEach(function(id) { _d(id, 's').disabled = !box; });
+  _d('regDrawBtn', 's').disabled = !box;
   _regDrawShape();
 }
 
-// The fit region clipped to the visible window (time/frequency sliders).
+// boxes outlined on the plots for the open tab: [{v, color, fill, label}]
+function _regShownBoxes() {
+  var out = [];
+  if (DECAY_TAB === 's') {
+    var v = _regBoxValues('s');
+    if (_regIsBox('s') && v) out.push({v: v, color: '#f97316', fill: 'rgba(249,115,22,0.08)', label: ''});
+  } else {
+    var m = _regBoxValues('m'), d = _regBoxValues('b');
+    if (m) out.push({v: m, color: '#38bdf8', fill: 'rgba(56,189,248,0.08)', label: 'Mother'});
+    if (d) out.push({v: d, color: '#f97316', fill: 'rgba(249,115,22,0.08)', label: 'Daughter'});
+  }
+  return out;
+}
+
+// A box [t0, t1, f0, f1] clipped to the visible window (time/frequency sliders).
 // Returns null when there is nothing to draw, else the clipped corners and,
 // per edge, whether it is a real box edge (solid) or where the box runs past
 // the edge of the plot (cut → dashed line along the plot border).
-function _regClipped() {
-  var v = _regBoxValues();
-  if (!_regIsBox() || !v) return null;
+function _regClipped(v) {
+  if (!v) return null;
   var T0 = +document.getElementById('tMin').value, T1 = +document.getElementById('tMax').value;
   var F0 = +document.getElementById('fMin').value, F1 = +document.getElementById('fMax').value;
   var t0 = Math.min(v[0], v[1]), t1 = Math.max(v[0], v[1]);
@@ -1177,28 +1195,34 @@ function _regClipped() {
   return c;
 }
 
-// orange outline of the fit region on the heatmap (box mode only); parts cut
-// off by the view are drawn dashed along the plot border
+// outline of the fit region(s) on the heatmap (orange; the Bateman mother box
+// blue, both labelled); parts cut off by the view are drawn dashed along the
+// plot border
 function _regDrawShape() {
   if (typeof _heatReady !== 'undefined' && _heatReady) {
-    var c = _regClipped(), shapes = [];
-    if (c) {
-      shapes.push({type: 'rect', xref: 'x', yref: 'y', x0: c.t0, x1: c.t1, y0: c.f0, y1: c.f1,
-                   line: {width: 0}, fillcolor: 'rgba(249,115,22,0.08)'});
+    var shapes = [];
+    _regShownBoxes().forEach(function(b) {
+      var c = _regClipped(b.v);
+      if (!c) return;
+      var rect = {type: 'rect', xref: 'x', yref: 'y', x0: c.t0, x1: c.t1, y0: c.f0, y1: c.f1,
+                  line: {width: 0}, fillcolor: b.fill};
+      if (b.label) rect.label = {text: b.label, textposition: 'top left',
+                                 font: {color: b.color, size: 12}};
+      shapes.push(rect);
       c.edges.forEach(function(e) {
         shapes.push({type: 'line', xref: 'x', yref: 'y',
                      x0: e[0][0], y0: e[0][1], x1: e[1][0], y1: e[1][1],
-                     line: {color: '#f97316', width: e[2] ? 2.5 : 2, dash: e[2] ? 'dash' : 'solid'}});
+                     line: {color: b.color, width: e[2] ? 2.5 : 2, dash: e[2] ? 'dash' : 'solid'}});
       });
-    }
+    });
     Plotly.relayout('heatPlot', {shapes: shapes});
   }
   _regDraw3d();
 }
 
-// the same region as an orange wireframe box in the 3-D plot: rectangles at
+// the same region(s) as orange wireframe boxes in the 3-D plot: rectangles at
 // the bottom and top of the z-axis range joined by vertical edges. Real edges
-// go in trace 1 (solid), edges where the view cuts the box in trace 2 (dashed).
+// go in trace 1 (solid), edges where the view cuts a box in trace 2 (dashed).
 function _regDraw3d() {
   var gd = document.getElementById('specPlot');
   if (!gd || !gd.data || gd.data.length < 3) return;
@@ -1206,10 +1230,11 @@ function _regDraw3d() {
   function seg(o, a, b) {
     o.x.push(a[0], b[0], null); o.y.push(a[1], b[1], null); o.z.push(a[2], b[2], null);
   }
-  var c = _regClipped();
   var zr = (gd.layout && gd.layout.scene && gd.layout.scene.zaxis && gd.layout.scene.zaxis.range) ||
            (gd._fullLayout && gd._fullLayout.scene && gd._fullLayout.scene.zaxis.range);
-  if (c && zr) {
+  _regShownBoxes().forEach(function(b) {
+    var c = _regClipped(b.v);
+    if (!c || !zr) return;
     // keep every edge a little inside the plot's floor, ceiling and walls: a
     // line lying exactly on one of those planes fights with the grey
     // background drawn there and breaks up into dots
@@ -1233,44 +1258,49 @@ function _regDraw3d() {
     var L = c.edges[0][2], R = c.edges[1][2], B = c.edges[2][2], T = c.edges[3][2];
     [[c.t0, c.f0, L || B], [c.t1, c.f0, R || B], [c.t1, c.f1, R || T], [c.t0, c.f1, L || T]]
       .forEach(function(k) { seg(k[2] ? dsh : sol, P(k[0], k[1], z0), P(k[0], k[1], z1)); });
-  }
+  });
   Plotly.restyle('specPlot', {x: [sol.x, dsh.x], y: [sol.y, dsh.y], z: [sol.z, dsh.z]}, [1, 2]);
 }
 
 function setRegionMode() {
-  savePref(_did('decayRegion'), _regIsBox() ? 'box' : 'sliders');
+  savePref('decayRegion', _regIsBox('s') ? 'box' : 'sliders');
   _regSync();
 }
 function regFieldsChanged() { _regDrawShape(); saveSession(); }
-function clearRegionBox() { _regSetFields(null); _regDrawShape(); saveSession(); }
+function clearRegionBox(key) { _regSetFields(null, key || DECAY_TAB); _regDrawShape(); saveSession(); }
 
-function _initRegion(v, vB) {
+function _initRegion(v, vB, vM) {
   _regSetFields(v, 's');
   _regSetFields(vB, 'b');
+  _regSetFields(vM, 'm');
   _regSync();
   var gd = document.getElementById('heatPlot');
   if (gd && gd.on) gd.on('plotly_relayout', _regOnRelayout);
   // the page is built once per server start; re-read the saved state so a
-  // browser refresh keeps the mode and the box
+  // browser refresh keeps the mode and the boxes
   fetch('/get-region').then(function(r) { return r.json(); }).then(function(d) {
-    ['s', 'b'].forEach(function(t) {
-      var b = t === 'b';
-      _d((b ? d.modeB : d.mode) === 'box' ? 'regBox' : 'regSliders', t).checked = true;
-      if (b ? d.boxB : d.box) _regSetFields(b ? d.boxB : d.box, t);
-      _d('decayTitleBox', t).value = (b ? d.titleB : d.title) || '';
-    });
+    _d(d.mode === 'box' ? 'regBox' : 'regSliders', 's').checked = true;
+    if (d.box)  _regSetFields(d.box, 's');
+    if (d.boxB) _regSetFields(d.boxB, 'b');
+    if (d.boxM) _regSetFields(d.boxM, 'm');
+    _d('decayTitleBox', 's').value = d.title || '';
+    _d('decayTitleBox', 'b').value = d.titleB || '';
     _regSync();
     _regLoaded = true;
   }).catch(function() { _regLoaded = true; });
 }
 
-function startRegionDraw() {
-  _d('regBox').checked = true;
-  setRegionMode();
+var _REG_WHAT = {s: 'the decay-fit region', m: 'the MOTHER region', b: 'the DAUGHTER region'};
+// key: which box to draw ('s', 'm' or 'b'); default: the open tab's box
+function startRegionDraw(key) {
+  _regTarget = key || DECAY_TAB;
+  if (_regTarget === 's') { _d('regBox', 's').checked = true; setRegionMode(); }
   modalClose('decayModal');
   _regDrawing = true;
   Plotly.relayout('heatPlot', {dragmode: 'zoom'});
-  document.getElementById('regBanner').style.display = 'block';
+  var ban = document.getElementById('regBanner');
+  ban.textContent = 'Drag a box on the 2-D plot to set ' + _REG_WHAT[_regTarget] + ' · Esc to cancel';
+  ban.style.display = 'block';
   document.getElementById('heatDiv').classList.add('drawing');
 }
 function _regStopDrawing() {
@@ -1281,7 +1311,7 @@ function _regStopDrawing() {
 function cancelRegionDraw() {
   if (!_regDrawing) return;
   _regStopDrawing();
-  modalOpen('decayModal', _did('regDrawBtn'));
+  modalOpen('decayModal', _did('regDrawBtn', _regTarget));
 }
 
 function _regOnRelayout(ev) {
@@ -1293,28 +1323,43 @@ function _regOnRelayout(ev) {
   var yr = hasY ? [ev['yaxis.range[0]'], ev['yaxis.range[1]']] : gd._fullLayout.yaxis.range.slice();
   _regStopDrawing();
   _regSetFields([Math.min(xr[0], xr[1]), Math.max(xr[0], xr[1]),
-                 Math.min(yr[0], yr[1]), Math.max(yr[0], yr[1])]);
+                 Math.min(yr[0], yr[1]), Math.max(yr[0], yr[1])], _regTarget);
   update();                                // put the view back to the slider window
   _regDrawShape();
   saveSession();
-  modalOpen('decayModal', _did('regT0'));
+  modalOpen('decayModal', _did('regT0', _regTarget));
 }
 
-// window used by the fit: sliders, or the drawn box
-function decayWindow() {
-  if (!_regIsBox()) {
-    return {fMin: +document.getElementById('fMin').value, fMax: +document.getElementById('fMax').value,
-            tMin: +document.getElementById('tMin').value, tMax: +document.getElementById('tMax').value};
-  }
-  var v = _regBoxValues();
-  if (!v) throw new Error('draw a region first (or choose "sliders")');
+// a drawn box as {tMin, tMax, fMin, fMax} (throws if missing or empty)
+function _boxWindow(key, what) {
+  var v = _regBoxValues(key);
+  if (!v) throw new Error('draw ' + what + ' first');
   var w = {tMin: Math.min(v[0], v[1]), tMax: Math.max(v[0], v[1]),
            fMin: Math.min(v[2], v[3]), fMax: Math.max(v[2], v[3])};
-  if (!(w.tMax > w.tMin) || !(w.fMax > w.fMin)) throw new Error('region box has zero size');
+  if (!(w.tMax > w.tMin) || !(w.fMax > w.fMin)) throw new Error(what + ' has zero size');
   return w;
 }
 
+// window used by the fit of the open tab.
+//   Standard: sliders, or the drawn box.
+//   Bateman: daughter box frequencies (fMin/fMax), mother box frequencies
+//   (pMin/pMax), time = where the two boxes overlap.
+function decayWindow() {
+  if (DECAY_TAB === 'b') {
+    var m = _boxWindow('m', 'the mother box'), d = _boxWindow('b', 'the daughter box');
+    var t0 = Math.max(m.tMin, d.tMin), t1 = Math.min(m.tMax, d.tMax);
+    if (!(t1 > t0)) throw new Error('the mother and daughter boxes do not overlap in time');
+    return {tMin: t0, tMax: t1, fMin: d.fMin, fMax: d.fMax, pMin: m.fMin, pMax: m.fMax};
+  }
+  if (!_regIsBox('s')) {
+    return {fMin: +document.getElementById('fMin').value, fMax: +document.getElementById('fMax').value,
+            tMin: +document.getElementById('tMin').value, tMax: +document.getElementById('tMax').value};
+  }
+  return _boxWindow('s', 'a region (or choose "sliders")');
+}
+
 // ── Decay-fit title: pick from simulated ions inside the fit region ─────────
+//    (Bateman tab: ions in the mother box, then in the daughter box)
 function _sugStatus(msg, kind) {
   var s = _d('decaySugStatus');
   s.textContent = msg;
@@ -1326,38 +1371,46 @@ async function suggestDecayTitle() {
   list.innerHTML = '';
   var w;
   try { w = decayWindow(); } catch (e) { _sugStatus('✗ ' + e.message, 'err'); return; }
+  var ranges = DECAY_TAB === 'b'
+    ? [['Mother Box', w.pMin, w.pMax], ['Daughter Box', w.fMin, w.fMax]]
+    : [['', w.fMin, w.fMax]];
   _sugStatus('Looking…');
   try {
-    var r = await fetch('/region-ions', {method: 'POST', headers: {'Content-Type': 'application/json'},
-                                         body: JSON.stringify({fMin: w.fMin, fMax: w.fMax})});
-    var d = await r.json();
-    if (!r.ok) { _sugStatus('✗ ' + (d.error || 'error'), 'err'); return; }
-    if (!d.hits.length) { _sugStatus('No simulated ions in this region', 'err'); return; }
-    _sugStatus(d.n + ' in region, nearest centre first, click one', 'ok');
-    var hdr = document.createElement('div'); hdr.className = 'hdr';
-    ['Ion', 'Harmonic', 'f_sim (Hz)', 'From Centre'].forEach(function(t) {
-      var c = document.createElement('span'); c.textContent = t; hdr.appendChild(c);
-    });
-    list.appendChild(hdr);
-    d.hits.forEach(function(l) {
-      var it = document.createElement('div');
-      it.className = 'item' + (l.excluded ? ' ex' : ''); it.tabIndex = 0;
-      var txt = l.ion + ', h' + l.h;
-      it.title = 'Use "' + txt + '" as the title' + (l.excluded ? '  (below the T½ cut)' : '');
-      [l.ion + (l.is_ref ? '  (ref)' : ''), 'h' + l.h,
-       l.f.toLocaleString('en-GB', {maximumFractionDigits: 1}),
-       (l.df >= 0 ? '+' : '−') + Math.abs(l.df).toLocaleString('en-GB', {maximumFractionDigits: 0}) + ' Hz'
-      ].forEach(function(t) { var c = document.createElement('span'); c.textContent = t; it.appendChild(c); });
-      var pick = function() {
-        tbox.value = txt;
-        list.innerHTML = ''; _sugStatus('');
-        saveSession();
-        tbox.focus();
-      };
-      it.onclick = pick;
-      it.onkeydown = function(e) { if (e.key === 'Enter') pick(); };
-      list.appendChild(it);
-    });
+    var found = 0;
+    for (var k = 0; k < ranges.length; k++) {
+      var r = await fetch('/region-ions', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                           body: JSON.stringify({fMin: ranges[k][1], fMax: ranges[k][2]})});
+      var d = await r.json();
+      if (!r.ok) { _sugStatus('✗ ' + (d.error || 'error'), 'err'); return; }
+      if (!d.hits.length) continue;
+      found += d.n;
+      var hdr = document.createElement('div'); hdr.className = 'hdr';
+      [ranges[k][0] ? ranges[k][0] + ': Ion' : 'Ion', 'Harmonic', 'f_sim (Hz)', 'From Centre'].forEach(function(t) {
+        var c = document.createElement('span'); c.textContent = t; hdr.appendChild(c);
+      });
+      list.appendChild(hdr);
+      d.hits.forEach(function(l) {
+        var it = document.createElement('div');
+        it.className = 'item' + (l.excluded ? ' ex' : ''); it.tabIndex = 0;
+        var txt = l.ion + ', h' + l.h;
+        it.title = 'Use "' + txt + '" as the title' + (l.excluded ? '  (below the T½ cut)' : '');
+        [l.ion + (l.is_ref ? '  (ref)' : ''), 'h' + l.h,
+         l.f.toLocaleString('en-GB', {maximumFractionDigits: 1}),
+         (l.df >= 0 ? '+' : '−') + Math.abs(l.df).toLocaleString('en-GB', {maximumFractionDigits: 0}) + ' Hz'
+        ].forEach(function(t) { var c = document.createElement('span'); c.textContent = t; it.appendChild(c); });
+        var pick = function() {
+          tbox.value = txt;
+          list.innerHTML = ''; _sugStatus('');
+          saveSession();
+          tbox.focus();
+        };
+        it.onclick = pick;
+        it.onkeydown = function(e) { if (e.key === 'Enter') pick(); };
+        list.appendChild(it);
+      });
+    }
+    if (!found) { _sugStatus('No simulated ions in ' + (ranges.length > 1 ? 'these boxes' : 'this region'), 'err'); return; }
+    _sugStatus(found + ' in ' + (ranges.length > 1 ? 'the boxes' : 'region') + ', nearest centre first, click one', 'ok');
   } catch (e) { _sugStatus('✗ ' + e.message, 'err'); }
 }
 
@@ -1689,26 +1742,30 @@ async function lbOpen() {
   var val = function(id) { var el = document.getElementById(id); return el ? String(el.value).trim() : ''; };
   // decay-fit settings of the open tab of the Decay Fit popout
   var bat = DECAY_TAB === 'b';
-  var dval = function(id) { return val(_did(id)); }, dchk = function(id) { return chk(_did(id)); };
-  var boxMode = _regIsBox();
-  lbAddRow({label: 'Decay-Fit Region', value: boxMode ? 'drawn box' : 'sliders'});
-  var rb = (typeof _regBoxValues === 'function') ? _regBoxValues() : null;
-  lbAddRow({label: 'Drawn Box', value: rb ? ('t ' + (+rb[0]).toFixed(3) + ' – ' + (+rb[1]).toFixed(3) + ' s, f ' +
-            (+rb[2]).toFixed(1) + ' – ' + (+rb[3]).toFixed(1) + ' Hz') : 'none'});
+  var dval = function(id) { return val(_did(id)); };
+  var boxTxt = function(rb) {
+    return rb ? ('t ' + (+rb[0]).toFixed(3) + ' – ' + (+rb[1]).toFixed(3) + ' s, f ' +
+                 (+rb[2]).toFixed(1) + ' – ' + (+rb[3]).toFixed(1) + ' Hz') : 'none';
+  };
+  if (bat) {
+    lbAddRow({label: 'Decay-Fit Region', value: 'mother + daughter boxes (time overlap)'});
+    lbAddRow({label: 'Mother Box', value: boxTxt(_regBoxValues('m'))});
+    lbAddRow({label: 'Daughter Box', value: boxTxt(_regBoxValues('b'))});
+  } else {
+    lbAddRow({label: 'Decay-Fit Region', value: _regIsBox('s') ? 'drawn box' : 'sliders'});
+    lbAddRow({label: 'Drawn Box', value: boxTxt(_regBoxValues('s'))});
+  }
   lbAddRow({label: 'Decay-Fit Model', value: bat ? 'Bateman' : 'exponential decay'});
   lbAddRow({label: 'Offset', value: bat ? 'with offset (+ C)'
             : (chk('noOffset') === 'on' ? 'no offset' : 'with offset (+ C)')});
-  var pmin = val('parentMin'), pmax = val('parentMax');
-  lbAddRow({label: 'Parent Window', value: (bat && pmin && pmax) ? pmin + ' – ' + pmax : 'none',
-            unit: (bat && pmin && pmax) ? 'Hz' : ''});
   lbAddRow({label: 'Fixed T½ Isomer (c.o.m.)', value: (bat && val('hlIso')) || 'off',
             unit: (bat && val('hlIso')) ? 's' : ''});
   lbAddRow({label: 'Fixed T½ Ground State (c.o.m.)', value: (bat && val('hlGs')) || 'off',
             unit: (bat && val('hlGs')) ? 's' : ''});
   lbAddRow({label: 'Lorentz Factor γ', value: dval('gammaVal') || 'off'});
   lbAddRow({label: 'Decay-Fit Title', value: dval('decayTitleBox') || 'automatic'});
-  lbAddRow({label: 'Log Panel (data − C)', value: dchk('logPlotChk')});
-  lbAddRow({label: 'Residual Panels', value: dchk('residChk')});
+  lbAddRow({label: 'Log Panel (data − C)', value: bat ? 'off' : chk('logPlotChk')});
+  lbAddRow({label: 'Residual Panels', value: bat ? 'off' : chk('residChk')});
   lbAddRow({label: 'Power Scale', value: chk('dbCheck') === 'on' ? 'dB' : 'linear'});
   lbAddRow({label: 'Colour Scheme', value: (typeof CUR_CS === 'string') ? CUR_CS : val('colorscaleSel')});
   lbAddRow({label: '3-D Style', value: chk('surface3d') === 'on' ? 'surface' : 'bars'});
@@ -1858,69 +1915,92 @@ ldToggle(true);
 # Interactive browser plot (2-D heatmap + 3-D surface, side by side)
 # ---------------------------------------------------------------------------
 
+def _box_row(key, what, title):
+    """One drawn-box row of the Decay Fit popout: Draw button, t and f fields, Clear."""
+    S = {"s": "", "b": "B", "m": "M"}[key]
+    arg = "" if key == "s" else f"'{key}'"
+    return f"""    <div class="opt-grp" title="{title}">
+      <span>{what}</span>
+      <button id="regDrawBtn{S}" onclick="startRegionDraw({arg})"
+              title="Close this dialog and drag the {what.lower()} on the 2-D plot">Draw</button>
+      <span>t (s)</span>
+      <input type="number" id="regT0{S}" step="any" style="width:72px;" oninput="regFieldsChanged()">
+      <label>–</label>
+      <input type="number" id="regT1{S}" step="any" style="width:72px;" oninput="regFieldsChanged()">
+      <span>f (Hz)</span>
+      <input type="number" id="regF0{S}" step="any" style="width:104px;" oninput="regFieldsChanged()">
+      <label>–</label>
+      <input type="number" id="regF1{S}" step="any" style="width:104px;" oninput="regFieldsChanged()">
+      <button onclick="clearRegionBox({arg})" title="Remove this box">Clear</button>
+    </div>"""
+
+
 def decay_pane_html(tab, prefs, reg_box_mode):
     """Controls of one Decay Fit tab: "s" = Standard Fit (exponential decay),
     "b" = Bateman Fit. The tabs are independent: each has its own region,
-    title, γ, plot options and Run. Ids in the Bateman tab end in "B"."""
+    title, γ and Run. Ids in the Bateman tab end in "B" (mother box: "M").
+
+    Standard: region = sliders or one drawn box; "no offset"; log / residual panels.
+    Bateman: a drawn mother box and a drawn daughter box (joint parent +
+    daughter fit, both over the time range where the boxes overlap); fixed t½."""
     b = tab == "b"
     S = "B" if b else ""                                   # id suffix
     pk = (lambda k: k + "B") if b else (lambda k: k)       # pref key
-    # the Bateman tab's γ / plot options start from the old shared values
+    # the Bateman tab's γ starts from the old shared value
     pref = (lambda k: prefs.get(pk(k), prefs.get(k, ""))) if b else (lambda k: prefs.get(k, ""))
     chk = lambda k: "checked" if pref(k) else ""
-    box, sl = ("checked", "") if reg_box_mode else ("", "checked")
     hide = ' style="display:none;"' if tab != "s" else ""
-    model = (f"""
-    <div class="opt-grp" id="grpParent" title="Frequency window of the PARENT peak (Hz). When set, parent and daughter are fitted together with a shared τ_A: parent = A·e^(-t/τ_A) + C_A (with offset), daughter = this tab's fit region, Bateman growth with no offset. Leave blank for a single-window Bateman fit.">
-      <span>Parent Window</span>
-      <input type="number" id="parentMin" step="any" placeholder="f min"
-             style="width:120px;" value="{prefs.get('parentMin', '')}" oninput="savePref('parentMin', this.value); _syncDecayControls()">
-      <input type="number" id="parentMax" step="any" placeholder="f max"
-             style="width:120px;" value="{prefs.get('parentMax', '')}" oninput="savePref('parentMax', this.value); _syncDecayControls()">
-      <button id="parentFromSliders" onclick="_parentFromSliders()"
-              title="Copy the current frequency-slider range into the parent window">← Sliders</button>
-    </div>
+    if b:
+        region = (_box_row("m", "Mother Box",
+                           "Box around the MOTHER (parent) peak: fitted as A·e^(-t/τ_A) + C_A") + "\n" +
+                  _box_row("b", "Daughter Box",
+                           "Box around the DAUGHTER peak: Bateman growth with no offset, τ_A shared with the mother") + """
+    <div class="opt-grp"><span class="dbox-note">Both are fitted over the time range where the two boxes overlap.</span></div>""")
+        model = """
     <div class="opt-grp" id="grpFixedHl" title="Known c.o.m.-frame half-lives (s), converted to lab frame with γ. Fixes the corresponding τ in the Bateman fit. Requires γ.">
       <span>Fixed t½ (s)</span>
       <input type="number" id="hlIso" min="0" step="any" placeholder="isomer"
-             style="width:72px;" value="{prefs.get('hlIso', '')}" oninput="savePref('hlIso', this.value)">
+             style="width:72px;" value="{hi}" oninput="savePref('hlIso', this.value)">
       <input type="number" id="hlGs" min="0" step="any" placeholder="g.s."
-             style="width:72px;" value="{prefs.get('hlGs', '')}" oninput="savePref('hlGs', this.value)">
-    </div>""" if b else """
+             style="width:72px;" value="{hg}" oninput="savePref('hlGs', this.value)">
+    </div>""".format(hi=prefs.get("hlIso", ""), hg=prefs.get("hlGs", ""))
+        plots = ""          # log / residual panels: single-window fits only
+    else:
+        box, sl = ("checked", "") if reg_box_mode else ("", "checked")
+        region = f"""    <div class="opt-grp" title="Which time/frequency window the fit uses">
+      <span>Region</span>
+      <input type="radio" name="decayRegion" id="regSliders" value="sliders" {sl}
+             onchange="setRegionMode()">
+      <label for="regSliders">sliders</label>
+      <input type="radio" name="decayRegion" id="regBox" value="box" {box}
+             onchange="setRegionMode()">
+      <label for="regBox">drawn box</label>
+    </div>
+""" + _box_row("s", "Box", "Fit region from the drawn box (editable)")
+        model = """
     <div class="opt-grp">
       <span>Offset</span>
       <input type="checkbox" id="noOffset">
       <label for="noOffset" title="Fit A·exp(-t/τ) with no constant background">no offset</label>
-    </div>""")
+    </div>"""
+        plots = f"""
+    <div class="opt-grp" title="Extra panels in the fit plot">
+      <span>Plots</span>
+      <input type="checkbox" id="logPlotChk" {chk('logPlot')}
+             onchange="savePref('logPlot', this.checked ? '1' : '')">
+      <label for="logPlotChk" title="Semi-log panel to the right: data − C and fit − C on a log axis (C = fitted background), so an exponential decay is a straight line">log (data − C)</label>
+      <input type="checkbox" id="residChk" {chk('residuals')}
+             onchange="savePref('residuals', this.checked ? '1' : '')">
+      <label for="residChk" title="Residual panel under each plot: (data − fit)/σ">residuals</label>
+    </div>"""
     return f"""    <div class="sim-body dpane" id="dpane{tab.upper()}" role="tabpanel" aria-labelledby="dtab{tab.upper()}"{hide}>
-    <div class="opt-grp" title="Which time/frequency window the fit uses">
-      <span>Region</span>
-      <input type="radio" name="decayRegion{S}" id="regSliders{S}" value="sliders" {sl}
-             onchange="setRegionMode()">
-      <label for="regSliders{S}">sliders</label>
-      <input type="radio" name="decayRegion{S}" id="regBox{S}" value="box" {box}
-             onchange="setRegionMode()">
-      <label for="regBox{S}">drawn box</label>
-      <button id="regDrawBtn{S}" onclick="startRegionDraw()"
-              title="Close this dialog and drag a box on the 2-D plot">Draw Region</button>
-    </div>
-    <div class="opt-grp" title="Fit region from the drawn box (editable)">
-      <span>t (s)</span>
-      <input type="number" id="regT0{S}" step="any" style="width:80px;" oninput="regFieldsChanged()">
-      <label>–</label>
-      <input type="number" id="regT1{S}" step="any" style="width:80px;" oninput="regFieldsChanged()">
-      <span>f (Hz)</span>
-      <input type="number" id="regF0{S}" step="any" style="width:120px;" oninput="regFieldsChanged()">
-      <label>–</label>
-      <input type="number" id="regF1{S}" step="any" style="width:120px;" oninput="regFieldsChanged()">
-      <button onclick="clearRegionBox()" title="Remove the drawn box">Clear</button>
-    </div>
+{region}
     <div class="opt-grp" style="width:100%;" title="Title of the decay-fit plot. Empty = automatic (file, range, model)">
       <span>Title</span>
       <input type="text" id="decayTitleBox{S}" placeholder="automatic (file, range, model)"
              style="flex:1; width:auto; min-width:260px;" oninput="saveSession()">
       <button onclick="suggestDecayTitle()"
-              title="List simulated ions inside the fit region to pick a title from">Suggest ▾</button>
+              title="List simulated ions inside the fit region{' (mother and daughter boxes)' if b else ''} to pick a title from">Suggest ▾</button>
       <span id="decaySugStatus{S}" class="dsug-status"></span>
     </div>
     <div id="decaySugList{S}" class="srch-list"></div>{model}
@@ -1930,17 +2010,7 @@ def decay_pane_html(tab, prefs, reg_box_mode):
              placeholder="γ" title="Lorentz factor γ (optional{'; required for fixed half-lives' if b else ''})"
              style="width:64px;" value="{pref('gamma')}"
              oninput="savePref('{pk('gamma')}', this.value)">
-    </div>
-    <div class="opt-grp" title="Extra panels in the fit plot{' (single-window fits only)' if b else ''}">
-      <span>Plots</span>
-      <input type="checkbox" id="logPlotChk{S}" {chk('logPlot')}
-             onchange="savePref('{pk('logPlot')}', this.checked ? '1' : '')">
-      <label for="logPlotChk{S}" title="Semi-log panel to the right: data − C and fit − C on a log axis (C = fitted background), so an exponential decay is a straight line">log (data − C)</label>
-      <input type="checkbox" id="residChk{S}" {chk('residuals')}
-             onchange="savePref('{pk('residuals')}', this.checked ? '1' : '')">
-      <label for="residChk{S}" title="Residual panel under each plot: (data − fit)/σ">residuals</label>
-      <label id="plotsNote{S}" style="color:#fbbf24; font-size:11px;"></label>
-    </div>
+    </div>{plots}
     <div class="opt-grp">
       <button onclick="runDecayFit()">Run {'Bateman' if b else 'Standard'} Fit</button>
       <span id="decayStatus{S}" class="decay-status"></span>
@@ -1998,7 +2068,10 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
     _reg_init_js_b = json.dumps([float(v) for v in _rbb]
                                 if isinstance(_rbb, list) and len(_rbb) == 4 else None)
     _decay_pane_s = decay_pane_html("s", _prefs, _reg_box_mode)
-    _decay_pane_b = decay_pane_html("b", _prefs, _prefs.get("decayRegionB") == "box")
+    _rbm = _view.get("regBoxM")
+    _reg_init_js_m = json.dumps([float(v) for v in _rbm]
+                                if isinstance(_rbm, list) and len(_rbm) == 4 else None)
+    _decay_pane_b = decay_pane_html("b", _prefs, True)
     if _decay_tab == "b":   # open on the Bateman tab: swap which pane starts hidden
         _decay_pane_s = _decay_pane_s.replace('role="tabpanel" aria-labelledby="dtabS">',
                                               'role="tabpanel" aria-labelledby="dtabS" style="display:none;">', 1)
@@ -2198,6 +2271,9 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
            text-transform: uppercase; letter-spacing: .06em; padding: 6px 14px;
            margin-bottom: -1px; cursor: pointer; }}
   .dtab:hover {{ color: #e5e7eb; }}
+  #decayModal .sim-dialog {{ width: min(880px, calc(100vw - 32px)); }}
+  .opt-grp span.dbox-note {{ font-size: 11px; color: #9ca3af; text-transform: none;
+                             letter-spacing: normal; font-weight: 400; }}
   .dtab.active {{ color: #f97316; background: #1f2937; border-color: #374151;
                   box-shadow: inset 0 2px 0 #f97316; }}
   #plots {{ display: flex; gap: 10px; align-items: stretch; }}
@@ -2633,25 +2709,6 @@ function _renderSpec1d() {{
 }}
 
 // ── Decay-fit controls: enable only what applies to the chosen mode ──────────
-function _syncDecayControls() {{
-  // Bateman tab: log / residual panels are for single-window fits only (not
-  // the parent/daughter fit)
-  var joint = document.getElementById('parentMin').value.trim() !== '' ||
-              document.getElementById('parentMax').value.trim() !== '';
-  document.getElementById('logPlotChkB').disabled = joint;
-  document.getElementById('residChkB').disabled   = joint;
-  document.getElementById('plotsNoteB').textContent = joint ? 'not available for the parent/daughter fit' : '';
-}}
-
-function _parentFromSliders() {{
-  var fMin = document.getElementById('fMin').value;
-  var fMax = document.getElementById('fMax').value;
-  document.getElementById('parentMin').value = fMin;
-  document.getElementById('parentMax').value = fMax;
-  savePref('parentMin', fMin);
-  savePref('parentMax', fMax);
-}}
-
 // ── Persisted preferences ────────────────────────────────────────────────────
 function savePref(key, value) {{
   fetch('/save-pref', {{
@@ -2678,7 +2735,8 @@ function _sessionState() {{
       show1d: document.getElementById('show1d').checked,
       // undefined (= keep the saved box) until the saved region has been read back
       regBox:  _regLoaded ? _regBoxValues('s') : undefined,
-      regBoxB: _regLoaded ? _regBoxValues('b') : undefined,
+      regBoxB: _regLoaded ? _regBoxValues('b') : undefined,     // Bateman daughter box
+      regBoxM: _regLoaded ? _regBoxValues('m') : undefined,     // Bateman mother box
       decayTitle:  _regLoaded ? document.getElementById('decayTitleBox').value : undefined,
       decayTitleB: _regLoaded ? document.getElementById('decayTitleBoxB').value : undefined,
       camera: cam
@@ -2731,22 +2789,15 @@ async function runDecayFit() {{
     var gammaRaw = _d('gammaVal').value.trim();
     var hlIsoRaw = document.getElementById('hlIso').value.trim();
     var hlGsRaw  = document.getElementById('hlGs').value.trim();
-    var win = decayWindow();   // sliders or drawn box (throws if the box is invalid)
+    var win = decayWindow();   // sliders / drawn box / mother + daughter boxes (throws if invalid)
     if (bateman && (hlIsoRaw !== '' || hlGsRaw !== '') && gammaRaw === '') {{
       throw new Error('fixed half-lives need γ (they are c.o.m. values)');
     }}
     // Only pass the GUI title if the user edited it (the decay plot builds its own default)
     // decay-plot title from the dialog's own box (empty = decay_fit.py's automatic title)
     var titleFull = _d('decayTitleBox').value.trim() || null;
-    var pMinRaw = document.getElementById('parentMin').value.trim();
-    var pMaxRaw = document.getElementById('parentMax').value.trim();
-    var parentWindow = null;
-    if (bateman && (pMinRaw !== '' || pMaxRaw !== '')) {{
-      if (pMinRaw === '' || pMaxRaw === '' || +pMinRaw >= +pMaxRaw) {{
-        throw new Error('parent window needs f min < f max');
-      }}
-      parentWindow = [+pMinRaw, +pMaxRaw];
-    }}
+    // Bateman: always the joint fit, mother box frequencies = parent window
+    var parentWindow = bateman ? [win.pMin, win.pMax] : null;
     var payload = {{
       fMin:  win.fMin,
       fMax:  win.fMax,
@@ -2755,8 +2806,8 @@ async function runDecayFit() {{
       nAvg:  Math.max(1, Math.round(+document.getElementById('nAvg').value || 1)),
       gamma:    gammaRaw !== '' ? +gammaRaw : null,
       noOffset: !bateman && document.getElementById('noOffset').checked,
-      logPlot:   _d('logPlotChk').checked,
-      residuals: _d('residChk').checked,
+      logPlot:   !bateman && document.getElementById('logPlotChk').checked,
+      residuals: !bateman && document.getElementById('residChk').checked,
       bateman:  bateman,
       hlIso:    (bateman && hlIsoRaw !== '') ? +hlIsoRaw : null,
       hlGs:     (bateman && hlGsRaw  !== '') ? +hlGsRaw  : null,
@@ -3050,7 +3101,6 @@ function update() {{
 var _lastT1d = [null, null];
 
 // Initialise the 2-D heatmap and 1-D spectrum immediately on load
-_syncDecayControls();
 // Draw each plot once: data, colour range, z-range and height all known up front
 (function() {{
   var n = Math.max(1, Math.round(+document.getElementById('nAvg').value || 1));
@@ -3074,7 +3124,7 @@ _fetchFull();
 fitPlots();   // only redraws if the window changed size meanwhile
 _hookCamera();
 decayTab('{_decay_tab}', false);
-_initRegion({_reg_init_js}, {_reg_init_js_b});
+_initRegion({_reg_init_js}, {_reg_init_js_b}, {_reg_init_js_m});
 if (document.getElementById('sim_show').checked) runSim();
 </script>
 </body>
@@ -3278,14 +3328,15 @@ def serve(html, state):
                 sess = read_prefs().get("session") or {}
                 view = saved_view(STATE.get("npz_path"), sess.get("fMin"), sess.get("fMax")) \
                     if STATE.get("npz_path") else {}
-                # (Standard Fit tab; the Bateman Fit tab's keys end in "B")
+                # (Standard Fit tab; Bateman Fit tab: daughter box "B", mother box "M")
                 prefs = read_prefs()
                 rb, rbb = view.get("regBox"), view.get("regBoxB")
                 self._send(200, {"mode": prefs.get("decayRegion") or "sliders",
                                  "box": rb if isinstance(rb, list) and len(rb) == 4 else None,
                                  "title": view.get("decayTitle") or "",
-                                 "modeB": prefs.get("decayRegionB") or "sliders",
                                  "boxB": rbb if isinstance(rbb, list) and len(rbb) == 4 else None,
+                                 "boxM": (view.get("regBoxM") if isinstance(view.get("regBoxM"), list)
+                                          and len(view.get("regBoxM")) == 4 else None),
                                  "titleB": view.get("decayTitleB") or ""})
 
             elif url.path == "/decay-fit-status":
@@ -3590,7 +3641,7 @@ def serve(html, state):
                             if isinstance(body.get("view"), dict):
                                 new_view = dict(body["view"])
                                 old_view = sess.get("view") if isinstance(sess.get("view"), dict) else {}
-                                for k in ("regBox", "decayTitle", "regBoxB", "decayTitleB"):   # page not ready yet
+                                for k in ("regBox", "decayTitle", "regBoxB", "decayTitleB", "regBoxM"):   # page not ready yet
                                     if k not in new_view and k in old_view:
                                         new_view[k] = old_view[k]
                                 sess["view"] = new_view
@@ -3611,7 +3662,7 @@ def serve(html, state):
                     if pref_key not in ("gamma", "hlIso", "hlGs", "bateman", "decayTab",
                                         "parentMin", "parentMax", "bars3d", "fullOpen", "colorscale", "decayRegion",
                                         "logPlot", "residuals", "srchWidth",
-                                        "gammaB", "logPlotB", "residualsB", "decayRegionB"):
+                                        "gammaB"):
                         raise ValueError(f"unknown pref key: {pref_key!r}")
                     with _PREFS_LOCK:
                         prefs = read_prefs()
