@@ -80,13 +80,13 @@ header .exp{{color:#777;font-family:monospace;font-size:12px}}
 .bx{{background:#fff;border:1px solid {LINE};border-radius:5px;display:flex;flex-direction:column;overflow:hidden}}
 .bx.res{{border-left:5px solid {ACCENT}}}
 .bx .bx-head{{flex:none;display:flex;align-items:center;gap:8px;padding:5px 10px;background:{SIDE};
-  border-bottom:1px solid {LINE};cursor:move;font-size:24px;font-weight:600;color:#444;user-select:none}}
-.bx.res .bx-head{{font-size:28px;color:#222}}
-.bx .bx-head .ht{{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}}
-.bx .bx-head .st{{flex:none;font-family:monospace;font-size:22px;font-weight:700;padding:0 10px;border-radius:16px;
+  border-bottom:1px solid {LINE};cursor:move;font-size:18px;font-weight:600;color:#444;user-select:none}}
+.bx.res .bx-head{{font-size:21px;color:#222}}
+.bx .bx-head .ht{{min-width:0;white-space:normal;overflow-wrap:anywhere;line-height:1.25}}
+.bx .bx-head .st{{flex:none;font-family:monospace;font-size:17px;font-weight:700;padding:0 8px;border-radius:12px;
   border:1px solid {LINE};background:#fff;color:#555}}
 .bx .bx-head .st.iso{{background:{ACCENT};border-color:{ACCENT};color:#fff}}
-.bx .bx-head .x{{margin-left:auto;border:none;background:none;font-size:28px;line-height:1;cursor:pointer;color:#999}}
+.bx .bx-head .x{{margin-left:auto;border:none;background:none;font-size:24px;line-height:1;cursor:pointer;color:#999}}
 .bx .bx-head .x:hover{{color:#c62828}}
 .bx .bx-body{{flex:1 1 auto;min-height:0;overflow:auto;padding:6px 10px}}
 .bx.plot .bx-body{{padding:4px;display:flex;align-items:center;justify-content:center}}
