@@ -62,7 +62,6 @@ functions import from a later module inside the function (marked).
 import logging
 import os
 import sys
-import threading
 
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core import browser, logcapture, ports
@@ -89,5 +88,5 @@ if __name__ == "__main__":
     url = f"http://127.0.0.1:{port}/"
     print(f"Starting Theia at {url}")
     # in the suite's Firefox window (core/browser.py), else the default browser
-    threading.Timer(1.0, lambda: browser.open_url(url)).start()
+    browser.open_when_ready(url, port)      # as soon as the server answers
     app.run(debug=False, host="127.0.0.1", port=port)

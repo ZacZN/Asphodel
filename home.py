@@ -1612,5 +1612,5 @@ if __name__ == "__main__":
     port = _free_port(HOME_PORT)
     url = f"http://127.0.0.1:{port}/"
     print(f"Asphodel home page at {url}  (Quit button: closes everything; Ctrl-C: home page only)")
-    threading.Timer(1.0, lambda: open_in_new_window(url)).start()
+    browser.when_ready(port, lambda: open_in_new_window(url))   # as soon as the server answers
     app.run(debug=False, host="127.0.0.1", port=port)

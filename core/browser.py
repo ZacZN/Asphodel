@@ -124,6 +124,33 @@ def open_url(url, new_window=False):
         return False
 
 
+def when_ready(port, action, timeout=60.0):
+    """Run action() in a background thread as soon as 127.0.0.1:port accepts
+    connections (checked every 50 ms), instead of after a fixed wait.  Call it
+    just before app.run(): the page then opens the moment the server is up.
+    Gives up silently after `timeout` seconds (the server did not start)."""
+    import socket
+    import threading
+    import time
+
+    def wait():
+        end = time.time() + timeout
+        while time.time() < end:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(0.2)
+                if s.connect_ex(("127.0.0.1", port)) == 0:
+                    action()
+                    return
+            time.sleep(0.05)
+
+    threading.Thread(target=wait, daemon=True).start()
+
+
+def open_when_ready(url, port, new_window=False):
+    """open_url(url) as soon as the tool's server on `port` answers."""
+    when_ready(port, lambda: open_url(url, new_window=new_window))
+
+
 def _conda_exe(prefix):
     """The conda (or mamba) command that manages the env at prefix, or None."""
     for exe in (os.environ.get("CONDA_EXE"),

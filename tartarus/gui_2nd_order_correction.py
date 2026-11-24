@@ -2060,5 +2060,5 @@ if __name__ == "__main__":
         sys.exit(0)
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
     print(f"{APP_NAME} at {url}")
-    threading.Timer(1.0, lambda: browser.open_url(url)).start()
+    browser.open_when_ready(url, PORT)      # as soon as the server answers
     app.run(debug=False, host="127.0.0.1", port=PORT)

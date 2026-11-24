@@ -29,7 +29,6 @@ import logging
 import os
 import socket
 import sys
-import threading
 from urllib.parse import parse_qs
 
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -702,5 +701,5 @@ if __name__ == "__main__":
         sys.exit(0)
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
     print(f"Results log book at {url}")
-    threading.Timer(1.0, lambda: browser.open_url(url)).start()
+    browser.open_when_ready(url, PORT)      # as soon as the server answers
     app.run(debug=False, host="127.0.0.1", port=PORT)
