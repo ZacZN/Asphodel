@@ -408,6 +408,12 @@ async function ldList(dir) {
       });
       p.appendChild(cn);
     }
+    if (d.note) {
+      var nt = document.createElement('div'); nt.className = 'item';
+      nt.style.cssText = 'color:#fbbf24;cursor:default;white-space:normal;';
+      nt.textContent = d.note;
+      p.appendChild(nt);
+    }
     var cur = document.getElementById('ldPath').value;
     d.dirs.forEach(function(name) {
       var it = document.createElement('div'); it.className = 'item dir';
@@ -3417,6 +3423,17 @@ def serve(html, state):
             elif url.path == "/list-dir":
                 try:
                     d = q.get("path", [""])[0].strip() or read_prefs().get("lastDir") or paths.spectrograms()
+                    if not d:            # no spectrogram folder connected (and none used yet)
+                        try:
+                            conn = [{"name": f["name"], "path": f["path"],
+                                     "kind": paths.DATA_KINDS.get(f["kind"], f["kind"]),
+                                     "ok": os.path.isdir(f["path"])} for f in paths.connected("data")]
+                        except Exception:
+                            conn = []
+                        self._send(200, {"path": "", "parent": "", "dirs": [], "files": [],
+                                         "connected": conn,
+                                         "note": paths.no_data_folder("spectrograms")})
+                        return
                     d = os.path.abspath(os.path.expanduser(d))
                     if os.path.isfile(d):
                         d = os.path.dirname(d)

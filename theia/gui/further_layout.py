@@ -53,6 +53,7 @@ align_fit_tab = html.Div([
     html.Div([
         html.Span("Folder:", style={**LABEL_STYLE, "margin": "0 6px 0 0"}),
         dcc.Input(id="fsrc-dir", type="text", debounce=True, value=os.path.join(paths.summed_1d(), ""),
+                  placeholder="No folder connected: connect one on the home page, or Browse…",
                   className="form-control form-control-sm",
                   style={"width": "460px", "fontSize": "13px", "fontFamily": "monospace"}),
         html.Button("Browse…", id="btn-browse-fsrc-dir", className="btn btn-outline-secondary btn-sm",

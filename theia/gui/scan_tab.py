@@ -31,7 +31,8 @@ sidebar = html.Div([
 
     *section("Run"),
     inp("Run Label (optional)", "run_label", help="Free text stored with the database"),
-    with_browse(inp("Spectra Directory", "spectra_dir"), "btn-browse-spectra_dir"),
+    with_browse(inp("Spectra Directory", "spectra_dir",
+                    placeholder="No folder connected: connect one on the home page, or Browse…"), "btn-browse-spectra_dir"),
     inp("File Pattern", "file_pattern", help="Files are processed in natural (numeric) order"),
 
     *section("Reference Ion"),

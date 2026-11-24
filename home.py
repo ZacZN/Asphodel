@@ -409,10 +409,12 @@ def tool_forms():
         "sum_spectra": html.Div([
             lbl("Input Folder"),
             dcc.Dropdown(id="ss-in", options=_folder_opts("data", "spectra_1d"), clearable=False,
-                         value=paths.spectra_1d()),
+                         value=paths.spectra_1d() or None,
+                         placeholder="Connect a 1-D Spectra folder first (Folders below)"),
             lbl("Output Folder"),
             dcc.Dropdown(id="ss-out", options=_folder_opts("data", "summed_1d"), clearable=False,
-                         value=paths.summed_1d()),
+                         value=paths.summed_1d() or None,
+                         placeholder="Connect a Summed 1-D folder first (Folders below)"),
             lbl("Peak Tracking Window ± (Hz)"),
             html.Div(dcc.Input(id="ss-window", type="number", min=1, value=500, debounce=True),
                      title="The drift-corrected sum follows the strongest peak: each spectrum's "
@@ -1103,7 +1105,8 @@ def run_forms(_s, _l, ss_in, ss_out, ss_window, ls_file):
     try:
         if t == "ss-run":
             if not ss_in or not ss_out:
-                return "⚠ Sum spectra: give the input and output folders."
+                return ("⚠ Sum Spectra: connect a 1-D Spectra folder (input) and a Summed 1-D "
+                        "folder (output) in Folders below, then choose them here.")
             try:
                 window = float(ss_window)
             except (TypeError, ValueError):

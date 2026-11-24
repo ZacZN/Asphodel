@@ -74,7 +74,7 @@ def ref_peak_table(id_, records, columns=REF_TABLE_COLS, mark_h=None):
 SETTING_FIELDS = {}
 
 
-def inp(label, key, number=False, help=None, step="any"):
+def inp(label, key, number=False, help=None, step="any", placeholder=None):
     cid = f"s-{key}"
     SETTING_FIELDS[key] = (cid, "value")
     kw = dict(id=cid, value=CFG[key], debounce=True, className="form-control form-control-sm",
@@ -87,6 +87,8 @@ def inp(label, key, number=False, help=None, step="any"):
         kw.update(type="number", step=step)
     else:
         kw["value"] = str(CFG[key])
+    if placeholder:
+        kw["placeholder"] = placeholder
     children = [html.Label(label, style=LABEL_STYLE), dcc.Input(**kw)]
     if help:
         children.append(html.Small(help, style=HELP_STYLE))

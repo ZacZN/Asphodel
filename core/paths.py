@@ -7,14 +7,14 @@ first start, e.g. ~/Asphodel-data; <repo>/data/ on setups from before that):
     <workspace>/
       asphodel_settings.json      active experiment + experiment profiles (see below)
       <experiment>/               (default location; a profile can point anywhere)
-        spectra_1d/               1-D spectra (.npz)
-        spectrograms/             summed 2-D spectrograms (.npz)
-        summed_1d/                summed 1-D spectra (.npz)
-        levelschemes/             LevelSchemer files (.json)
-        rionid/                   RionID tables (.xlsx)
         settings/                 per-tool GUI settings (.json)
         outputs/scans|confirmed|fits|figures|isocurve|identified|logbook/
         notes.md                  notes from the home page
+
+Input data is not in the workspace: its folders are connected per experiment
+on the home page and can be anywhere. (Experiments from before that, e.g.
+E0203, still have spectra_1d/, spectrograms/, summed_1d/, levelschemes/ and
+rionid/ sub-folders; those are used as long as they hold files.)
 
 Every function takes an optional `exp`; without it the active experiment is used.
 Folders that tools write into (outputs/<kind>, settings/) are created on demand.
@@ -58,10 +58,14 @@ OUTPUT_KINDS = ("scans", "confirmed", "fits", "figures", "isocurve", "identified
 
 ENV_EXPERIMENT = "ASPHODEL_EXPERIMENT"
 
-# sub-folders of every experiment's data folder
-EXPERIMENT_SUBDIRS = ("spectra_1d", "spectrograms", "summed_1d", "levelschemes", "rionid",
-                      "settings", "outputs/scans", "outputs/confirmed", "outputs/fits",
+# sub-folders made for every new experiment: its settings and the default
+# output folders. No input-data folders: the user connects those (anywhere)
+# on the home page, so a new experiment starts with none.
+EXPERIMENT_SUBDIRS = ("settings", "outputs/scans", "outputs/confirmed", "outputs/fits",
                       "outputs/figures")
+# the standard data sub-folders of the layout before connected folders; still
+# used (listed as connected) where they exist and hold files, e.g. E0203
+LEGACY_DATA_SUBDIRS = ("spectra_1d", "spectrograms", "summed_1d", "levelschemes", "rionid")
 
 
 def _read_suite_settings():
@@ -182,9 +186,10 @@ def notes_file(exp=None):
 #
 # Each folder has a kind; a tool that needs e.g. the 1-D spectra uses the first
 # connected data folder of kind "spectra_1d" (spectra_1d() below), and its
-# folder choosers list all connected folders.  Without folders.json (or with no
-# folder of a kind) the experiment's standard sub-folders are used, as before,
-# so existing paths keep working.
+# folder choosers list all connected folders.  Without a connected output
+# folder of a kind the experiment's outputs/<kind> is used; without a connected
+# data folder of a kind there is none ("") and the tool asks for one.
+# Without folders.json the list is _default_folders() below.
 
 DATA_KINDS = {"spectra_1d": "1-D Spectra", "spectrograms": "Spectrograms", "summed_1d": "Summed 1-D",
               "levelschemes": "Level Schemes", "rionid": "RionID Tables", "other": "Other Data"}
@@ -204,9 +209,21 @@ def default_folder(group, kind, exp=None):
     return os.path.join(base, "outputs", kind) if kind != "other" else os.path.join(base, "outputs")
 
 
+def _has_files(d):
+    try:
+        return any(not n.startswith(".") for n in os.listdir(d))
+    except OSError:
+        return False
+
+
 def _default_folders(exp=None):
+    """Connected folders of an experiment without folders.json: the default
+    output folders, and as data folders only the standard data sub-folders
+    that exist and hold files (an experiment from before connected folders,
+    e.g. E0203). A new experiment has no data folders until some are connected."""
     return {"data": [{"path": default_folder("data", k, exp), "kind": k, "name": n}
-                     for k, n in DATA_KINDS.items() if k != "other"],
+                     for k, n in DATA_KINDS.items()
+                     if k in LEGACY_DATA_SUBDIRS and _has_files(default_folder("data", k, exp))],
             "output": [{"path": default_folder("output", k, exp), "kind": k, "name": n}
                        for k, n in OUTPUT_KIND_NAMES.items() if k != "other"]}
 
@@ -330,12 +347,22 @@ def connected(group, kind=None, exp=None):
 
 def folder_for(group, kind, exp=None):
     """The folder a tool uses for a kind: the first connected folder of that kind
-    that exists, else the standard sub-folder of the experiment."""
+    that exists. If there is none: for output, the experiment's standard
+    outputs/<kind>; for data, "" (no folder: the user has to connect one on the
+    home page first; no_data_folder() gives the message to show)."""
     for f in connected(group, kind, exp):
         if os.path.isdir(f["path"]):
             return f["path"]
-    return default_folder(group, kind, exp)
+    return default_folder(group, kind, exp) if group == "output" else ""
 
+
+def no_data_folder(kind):
+    """Message for a tool that needs a data folder of `kind` when none is connected."""
+    return (f"No {DATA_KINDS.get(kind, kind)} folder is connected for this experiment: "
+            f"connect one on the home page (Folders → Connect Data Folder…), or type a path.")
+
+
+# The data folders below are "" when no folder of the kind is connected.
 
 def spectra_1d(exp=None):
     return folder_for("data", "spectra_1d", exp)
@@ -387,15 +414,15 @@ def _legacy_map():
     exp = "E0203"
     pairs = []
     for old in ("Asphodel/summed", "Asphodel_old/summed"):
-        pairs.append((old, spectrograms(exp)))
+        pairs.append((old, default_folder("data", "spectrograms", exp)))
     for old in ("Tartarus", "Tartarus_old"):
-        pairs.append((old, summed_1d(exp)))
+        pairs.append((old, default_folder("data", "summed_1d", exp)))
     for old in ("Theia", "Theia_old"):
         pairs.append((old + "/scans", os.path.join(experiment_dir(exp), "outputs", "scans")))
         pairs.append((old + "/confirmed", os.path.join(experiment_dir(exp), "outputs", "confirmed")))
     for old in ("Elysium", "Elysium_old"):
-        pairs.append((old + "/levelschemes", levelschemes(exp)))
-    pairs.append(("1dSpectra/SplitTDMS_Output_2^17_nobaseline", spectra_1d(exp)))
+        pairs.append((old + "/levelschemes", default_folder("data", "levelschemes", exp)))
+    pairs.append(("1dSpectra/SplitTDMS_Output_2^17_nobaseline", default_folder("data", "spectra_1d", exp)))
     return [(os.path.join(desk, o), n) for o, n in pairs]
 
 

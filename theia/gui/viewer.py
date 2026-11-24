@@ -326,7 +326,8 @@ def v_input(label, key, number=False, step=None, help=None, placeholder=None):
 viewer_sidebar = html.Div([
     html.H5("Viewer Settings", style={"fontWeight": "700", "marginBottom": "4px"}),
     *section("Spectrum"),
-    with_browse(v_input("File Path", "file_path"), "btn-browse-v-file_path"),
+    with_browse(v_input("File Path", "file_path", placeholder="No folder connected: connect one on the home page, or Browse…"),
+                "btn-browse-v-file_path"),
     html.Div([
         html.Label("Spectrum", style=LABEL_STYLE),
         dcc.Dropdown(id="v-spectrum_name", value=str(VCFG["spectrum_name"]), clearable=False,

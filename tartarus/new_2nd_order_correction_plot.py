@@ -336,7 +336,8 @@ def plot_points(path):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("spreadsheet", nargs="?", default=os.path.join(paths.rionid(), DEFAULT_FILE))
+    ap.add_argument("spreadsheet", nargs="?",
+                    default=os.path.join(paths.rionid(), DEFAULT_FILE) if paths.rionid() else None)
     ap.add_argument("sheet", nargs="?", default=DEFAULT_SHEET)
     ap.add_argument("--weighted", action="store_true",
                     help="weight points by 1/sigma^2 of the simulated frequency")
@@ -345,6 +346,8 @@ def main():
     args = ap.parse_args()
     if args.points:
         return plot_points(args.points)
+    if not args.spreadsheet:
+        ap.error("give the spreadsheet: " + paths.no_data_folder("rionid"))
 
     df, ref_ion, ref_h_cell = read_sheet(args.spreadsheet, args.sheet)
     gamma_t = float(physics.load_shared()["gamma_t"])
