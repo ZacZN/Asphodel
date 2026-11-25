@@ -8,14 +8,17 @@ import datetime
 import json
 import os
 import re
+import collections
 import sqlite3
+import threading
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import dash
-from dash import dash_table, dcc, html, Input, Output, State
+from dash import dash_table, dcc, html, Input, Output, State, Patch
 
 from core import physics, segre_ids
 from core.physics import build_ion_database, hl_allowed
@@ -193,6 +196,14 @@ results_tab = html.Div([
                 dcc.Store(id="confirm-mode", data=False),
                 dcc.Store(id="confirm-store", data={}),
                 dcc.Store(id="snippet-idx", data=0),
+                # the hits-table row shown and the next one (set in the browser by
+                # snippet_step, so the whole table is not sent to Python on every click)
+                dcc.Store(id="snippet-row", data=None),
+                dcc.Store(id="snippet-next-row", data=None),
+                # what the snippet figure on screen was built for (show_snippet: Patch)
+                dcc.Store(id="snippet-base", data=None),
+                # bumped after accept / reject / unsure is recorded -> next peak
+                dcc.Store(id="confirm-advance", data=0),
                 # Grows downwards to fill the box (the box fills the page height)
                 dcc.Graph(id="snippet-graph", figure=empty_fig(), responsive=True,
                           style={"flex": "1 1 0", "minHeight": "300px"},
@@ -586,51 +597,65 @@ def query_hits(path, ion_filter, spec_filter, closest):
     return _fmt_records(df), info
 
 
-@app.callback(
+# Which row of the (filtered, sorted) hits table the snippet shows.  In the
+# browser: the table (up to 20 000 rows) stays there, and Python gets only the
+# row shown (snippet-row) and the next one (snippet-next-row, prepared in the
+# background).  Goes back to the first peak whenever the table contents change;
+# accept / reject / unsure move on once the decision is recorded (confirm-advance).
+app.clientside_callback(
+    """
+    function(_p, _n, _adv, typed, rows, current) {
+        var C = window.dash_clientside;
+        rows = rows || [];
+        var n = rows.length;
+        if (!n) return [0, 1, 'of 0', null, null];
+        var trig = ((C.callback_context.triggered || [])[0] || {}).prop_id || '';
+        var cur = +(current || 0), nw;
+        if (trig.indexOf('btn-snip-next') === 0 || trig.indexOf('confirm-advance') === 0) nw = cur + 1;
+        else if (trig.indexOf('btn-snip-prev') === 0) nw = cur - 1;
+        else if (trig.indexOf('snippet-idx-input') === 0 && typed != null && isFinite(+typed))
+            nw = Math.floor(+typed) - 1;
+        else nw = 0;
+        nw = Math.min(Math.max(nw, 0), n - 1);
+        return [nw, nw + 1, 'of ' + n, rows[nw], nw + 1 < n ? rows[nw + 1] : null];
+    }
+    """,
     Output("snippet-idx", "data"),
     Output("snippet-idx-input", "value"),
     Output("snippet-count", "children"),
+    Output("snippet-row", "data"),
+    Output("snippet-next-row", "data"),
     Input("btn-snip-prev", "n_clicks"),
     Input("btn-snip-next", "n_clicks"),
-    Input("btn-accept", "n_clicks"),
-    Input("btn-reject", "n_clicks"),
-    Input("btn-unsure", "n_clicks"),
+    Input("confirm-advance", "data"),
     Input("snippet-idx-input", "value"),
     Input("hits-table", "derived_virtual_data"),
     State("snippet-idx", "data"),
 )
-def snippet_step(_p, _n, _a, _r, _u, typed, rows, current):
-    """Which row of the (filtered, sorted) hits table the snippet shows.
-    Goes back to the first peak whenever the table contents change."""
-    n = len(rows or [])
-    if n == 0:
-        return 0, 1, "of 0"
-    trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
-    cur = int(current or 0)
-    if trig.startswith(("btn-snip-next", "btn-accept", "btn-reject", "btn-unsure")):
-        new = cur + 1   # accept / reject / unsure also move on to the next peak
-    elif trig.startswith("btn-snip-prev"):
-        new = cur - 1
-    elif trig.startswith("snippet-idx-input") and typed is not None:
-        new = int(typed) - 1
-    else:
-        new = 0
-    new = min(max(new, 0), n - 1)
-    return new, new + 1, f"of {n}"
 
 
-@app.callback(
-    Output("snippet-graph", "figure"),
-    Input("snippet-idx", "data"),
-    Input("snippet-width", "value"),
-    State("snippet-show-excluded", "value"),
-    State("hits-table", "derived_virtual_data"),
-    State("db-select", "value"),
-)
-def show_snippet(idx, half_width, show_excluded, rows, path):
-    if not rows or not path or idx is None or idx >= len(rows):
-        return empty_fig("No identifications to show")
-    row = rows[int(idx)]
+# Snippet figures: built by _build_snippet, kept for a few peaks, and the next
+# peak's prepared in a background thread while you look at the current one, so
+# Next / accept / reject usually find it ready.  When the next peak is in the
+# same spectrum with the same ion highlighted, only the view, title, match
+# window, peak marker and info box change: sent as a Patch, not the whole
+# figure (the spectrum and its simulated lines are several MB).
+_SNIP_CACHE = collections.OrderedDict()      # key -> (fig, meta)
+_SNIP_PENDING = {}                           # key -> Future of a background build
+_SNIP_LOCK = threading.Lock()
+_SNIP_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="snippet")
+_SNIP_KEEP = 6
+
+
+def _snip_key(row, half_width, show_excluded, path):
+    return json.dumps([path, row.get("spectrum_id"), row.get("peak_id"), row.get("ion"),
+                       row.get("harmonic"), float(half_width or 1000), bool(show_excluded)],
+                      default=str)
+
+
+def _build_snippet(row, half_width, show_excluded, path):
+    """The snippet figure for one hits-table row and what it was built for
+    (meta: base = spectrum + highlighted ion, indices of the per-peak parts)."""
     try:
         con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
         st = read_kv(con, "settings")
@@ -655,8 +680,10 @@ def show_snippet(idx, half_width, show_excluded, rows, path):
                               title=f"{row['spectrum']}  –  {row['ion']} (h={row['harmonic']}), "
                                     f"Δ = {row['delta_hz']:+.1f} Hz",
                               xrange=[x0, x1], highlight_ion=row["ion"])
+        n_vrect = len(fig.layout.shapes)
         fig.add_vrect(x0=row["sim_freq"] - s["match_tol_hz"], x1=row["sim_freq"] + s["match_tol_hz"],
                       fillcolor=ACCENT_PALE, opacity=0.8, line_width=0, layer="below")
+        n_marker = len(fig.data)
         fig.add_trace(go.Scatter(x=[row["peak_freq"]], y=[row["power"]], mode="markers",
                                  name="this peak", hoverinfo="skip",
                                  marker=dict(symbol="circle-open", size=18, color=ACCENT,
@@ -673,7 +700,9 @@ def show_snippet(idx, half_width, show_excluded, rows, path):
         # Peak properties (as stored by the scan) in a box at the top right
         pk = db_query(path, "SELECT power, prominence, snr, height_snr, width_hz, kind "
                             "FROM peaks WHERE peak_id = ?", (int(row["peak_id"]),))
+        n_box = None
         if len(pk):
+            n_box = len(fig.layout.annotations)
             p = pk.iloc[0]
             bin_hz = (ff[-1] - ff[0]) / (len(ff) - 1)
             fmt = lambda v, f: "–" if pd.isna(v) else format(float(v), f)
@@ -688,22 +717,122 @@ def show_snippet(idx, half_width, show_excluded, rows, path):
                                xanchor="right", yanchor="top", showarrow=False, align="left",
                                font=dict(size=12, color="#222"), bgcolor="rgba(255,255,255,0.88)",
                                bordercolor=ACCENT, borderwidth=1, borderpad=6)
-        return fig
+        meta = dict(base=json.dumps([path, int(row["spectrum_id"]), row["ion"], bool(show_excluded)]),
+                    vrect=n_vrect, marker=n_marker, box=n_box,
+                    n_shapes=len(fig.layout.shapes), n_ann=len(fig.layout.annotations),
+                    n_data=len(fig.data))
+        return fig, meta
     except Exception as exc:
         traceback.print_exc()
-        return empty_fig(f"Could not load spectrum: {exc}")
+        return empty_fig(f"Could not load spectrum: {exc}"), None
+
+
+
+
+def _snippet(row, half_width, show_excluded, path):
+    """(fig, meta) for a row: from the cache, from a background build already
+    running, or built now."""
+    key = _snip_key(row, half_width, show_excluded, path)
+    with _SNIP_LOCK:
+        hit = _SNIP_CACHE.get(key)
+        fut = _SNIP_PENDING.get(key)
+    if hit is None and fut is not None:
+        try:
+            fut.result()
+        except Exception:
+            pass
+        with _SNIP_LOCK:
+            hit = _SNIP_CACHE.get(key)
+    if hit is not None:
+        return hit
+    fig, meta = _build_snippet(row, half_width, show_excluded, path)
+    if meta is not None:
+        _snip_store(key, fig, meta)
+    return fig, meta
+
+
+def _snip_store(key, fig, meta):
+    with _SNIP_LOCK:
+        _SNIP_CACHE[key] = (fig, meta)
+        _SNIP_CACHE.move_to_end(key)
+        while len(_SNIP_CACHE) > _SNIP_KEEP:
+            _SNIP_CACHE.popitem(last=False)
+
+
+def _prefetch_snippet(row, half_width, show_excluded, path):
+    """Build the next peak's figure in the background (once)."""
+    if not row or not path:
+        return
+    key = _snip_key(row, half_width, show_excluded, path)
+    with _SNIP_LOCK:
+        if key in _SNIP_CACHE or key in _SNIP_PENDING:
+            return
+
+    def job():
+        try:
+            fig, meta = _build_snippet(row, half_width, show_excluded, path)
+            if meta is not None:
+                _snip_store(key, fig, meta)
+        finally:
+            with _SNIP_LOCK:
+                _SNIP_PENDING.pop(key, None)
+
+    with _SNIP_LOCK:
+        _SNIP_PENDING[key] = _SNIP_POOL.submit(job)
+
+
+def _same_layout(a, b):
+    return bool(a and b and a["base"] == b["base"] and a["n_shapes"] == b["n_shapes"]
+                and a["n_ann"] == b["n_ann"] and a["n_data"] == b["n_data"]
+                and a["vrect"] == b["vrect"] and a["marker"] == b["marker"] and a["box"] == b["box"])
+
+
+@app.callback(
+    Output("snippet-graph", "figure"),
+    Output("snippet-base", "data"),
+    Input("snippet-row", "data"),
+    Input("snippet-width", "value"),
+    State("snippet-show-excluded", "value"),
+    State("db-select", "value"),
+    State("snippet-next-row", "data"),
+    State("snippet-base", "data"),
+)
+def show_snippet(row, half_width, show_excluded, path, next_row, shown):
+    if not row or not path:
+        return empty_fig("No identifications to show"), None
+    fig, meta = _snippet(row, half_width, show_excluded, path)
+    # meanwhile prepare the next peak (after this reply has gone out)
+    threading.Timer(0.3, _prefetch_snippet, args=(next_row, half_width, show_excluded, path)).start()
+    if meta is None:
+        return fig, None
+    if not _same_layout(meta, shown):
+        return fig, meta
+    # same spectrum and highlighted ion as the figure on screen: send only what changes
+    p = Patch()
+    lay = fig.layout
+    p["layout"]["title"]["text"] = lay.title.text
+    p["layout"]["uirevision"] = lay.uirevision
+    p["layout"]["xaxis"]["range"] = list(lay.xaxis.range)
+    p["layout"]["xaxis"]["autorange"] = False
+    if lay.yaxis.range is not None:
+        p["layout"]["yaxis"]["range"] = list(lay.yaxis.range)
+        p["layout"]["yaxis"]["autorange"] = False
+    p["layout"]["shapes"][meta["vrect"]] = lay.shapes[meta["vrect"]].to_plotly_json()
+    p["data"][meta["marker"]] = fig.data[meta["marker"]].to_plotly_json()
+    if meta["box"] is not None:
+        p["layout"]["annotations"][meta["box"]] = lay.annotations[meta["box"]].to_plotly_json()
+    return p, meta
 
 
 @app.callback(
     Output("send-pid-msg", "children"),
     Input("btn-send-pid-confident", "n_clicks"),
     Input("btn-send-pid-unsure", "n_clicks"),
-    Input("snippet-idx", "data"),
-    State("hits-table", "derived_virtual_data"),
+    Input("snippet-row", "data"),
     State("db-select", "value"),
     prevent_initial_call=True,
 )
-def send_to_pid_plot(_n_conf, _n_unsure, idx, rows, path):
+def send_to_pid_plot(_n_conf, _n_unsure, row, path):
     """'Send to PID Plot' card: add the ion in the snippet (its charge state and
     harmonic) to the Segrè chart as an identification of your own, confident
     or unsure (whichever button was pressed), with the spectrum and the peak
@@ -716,9 +845,8 @@ def send_to_pid_plot(_n_conf, _n_unsure, idx, rows, path):
     if not trig.startswith("btn-send-pid-"):
         return ""
     status = "unsure" if trig.startswith("btn-send-pid-unsure") else "confident"
-    if not rows or not path or idx is None or int(idx) >= len(rows):
+    if not row or not path:
         return "No identification shown."
-    row = rows[int(idx)]
     try:
         # Exact (unrounded) values straight from the database, as in save_confirmed()
         con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
@@ -801,13 +929,45 @@ def toggle_confirm_mode(n, active):
     return False, style, "btn btn-outline-secondary btn-sm", {}
 
 
+def _decision(path, row, decision, flt, now):
+    return dict(decision=decision, db=os.path.basename(path), spectrum=row["spectrum"],
+                spectrum_id=int(row["spectrum_id"]), peak_id=int(row["peak_id"]),
+                ion=row["ion"], harmonic=int(row["harmonic"]), filter=flt, time=now)
+
+
 @app.callback(
     Output("confirm-store", "data"),
+    Output("confirm-advance", "data"),
     Input("btn-accept", "n_clicks"),
     Input("btn-reject", "n_clicks"),
     Input("btn-unsure", "n_clicks"),
+    State("snippet-row", "data"),
+    State("db-select", "value"),
+    State("ion-filter", "value"),
+    State("spec-filter", "value"),
+    State("closest-filter", "value"),
+    State("confirm-store", "data"),
+    State("confirm-advance", "data"),
+    prevent_initial_call=True,
+)
+def record_decision(_a, _r, _u, row, path, ion_filter, spec_filter, closest, store, adv):
+    """Remember accept / reject / unsure for the identification currently shown,
+    then move on to the next peak (confirm-advance -> snippet_step)."""
+    if not row or not path:
+        return dash.no_update, dash.no_update
+    trig = dash.callback_context.triggered[0]["prop_id"]
+    store = dict(store or {})
+    now = datetime.datetime.now().isoformat(timespec="seconds")
+    store[_ident_key(path, row)] = _decision(
+        path, row, "accept" if trig.startswith("btn-accept") else
+                   "unsure" if trig.startswith("btn-unsure") else "reject",
+        _filter_text(ion_filter, spec_filter, closest), now)
+    return store, (adv or 0) + 1
+
+
+@app.callback(
+    Output("confirm-store", "data", allow_duplicate=True),
     Input("btn-accept-all", "n_clicks"),
-    State("snippet-idx", "data"),
     State("hits-table", "derived_virtual_data"),
     State("db-select", "value"),
     State("ion-filter", "value"),
@@ -816,30 +976,16 @@ def toggle_confirm_mode(n, active):
     State("confirm-store", "data"),
     prevent_initial_call=True,
 )
-def record_decision(_a, _r, _u, _all, idx, rows, path, ion_filter, spec_filter, closest, store):
-    """Remember accept / reject / unsure for the identification currently shown,
-    or accept every identification in the filtered list ("Accept all")."""
+def accept_all(_all, rows, path, ion_filter, spec_filter, closest, store):
+    """"Accept all": accept every identification in the filtered list
+    (overwrites earlier decisions)."""
     if not rows or not path:
         return dash.no_update
-    trig = dash.callback_context.triggered[0]["prop_id"]
     store = dict(store or {})
     flt = _filter_text(ion_filter, spec_filter, closest)
     now = datetime.datetime.now().isoformat(timespec="seconds")
-
-    def _rec(row, decision):
-        store[_ident_key(path, row)] = dict(
-            decision=decision, db=os.path.basename(path), spectrum=row["spectrum"],
-            spectrum_id=int(row["spectrum_id"]), peak_id=int(row["peak_id"]),
-            ion=row["ion"], harmonic=int(row["harmonic"]), filter=flt, time=now)
-
-    if trig.startswith("btn-accept-all"):
-        for row in rows:          # whole filtered list; overwrites earlier decisions
-            _rec(row, "accept")
-        return store
-    if idx is None or idx >= len(rows):
-        return dash.no_update
-    _rec(rows[int(idx)], "accept" if trig.startswith("btn-accept") else
-                         "unsure" if trig.startswith("btn-unsure") else "reject")
+    for row in rows:
+        store[_ident_key(path, row)] = _decision(path, row, "accept", flt, now)
     return store
 
 
@@ -848,11 +994,10 @@ def record_decision(_a, _r, _u, _all, idx, rows, path, ion_filter, spec_filter, 
     Output("confirm-status", "style"),
     Output("confirm-counts", "children"),
     Input("confirm-store", "data"),
-    Input("snippet-idx", "data"),
-    Input("hits-table", "derived_virtual_data"),
+    Input("snippet-row", "data"),
     State("db-select", "value"),
 )
-def show_decision(store, idx, rows, path):
+def show_decision(store, row, path):
     base = {"fontSize": "14px", "fontWeight": "600"}
     if not path:
         return "", base, ""
@@ -864,9 +1009,8 @@ def show_decision(store, idx, rows, path):
     n_rej = len(mine) - n_acc - n_uns
     counts = (f"Accepted {n_acc} · unsure {n_uns} · rejected {n_rej} "
               f"(this database, unsaved until you press Save)")
-    if not rows or idx is None or idx >= len(rows):
+    if not row:
         return "", base, counts
-    row = rows[int(idx)]
     d = store.get(_ident_key(path, row))
     label = f"{row['ion']} (h={row['harmonic']}) in {row['spectrum']}: "
     if d is None:
