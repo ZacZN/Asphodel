@@ -307,6 +307,19 @@ def match_peaks(peaks, sims, ion_db, tol_hz):
     return out[cols]
 
 
+def nearby_counts(peak_freq, sim_freq, all_sim_freq, tol_hz):
+    """For each hit (peak matched to the simulated line at sim_freq): how many
+    OTHER simulated lines (any ion, any harmonic, including ions excluded by
+    the half-life cut) lie within ±tol_hz of the peak.  Used to step through
+    the most isolated peaks first."""
+    pf = np.asarray(peak_freq, dtype=float)
+    sf = np.asarray(sim_freq, dtype=float)
+    fs = np.sort(np.asarray(all_sim_freq, dtype=float))
+    n = np.searchsorted(fs, pf + tol_hz, side="right") - np.searchsorted(fs, pf - tol_hz, side="left")
+    own = (sf >= pf - tol_hz) & (sf <= pf + tol_hz)       # the matched line itself
+    return np.maximum(n - own.astype(int), 0)
+
+
 def natural_key(s):
     return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", s)]
 
@@ -348,6 +361,9 @@ def analyse_spectrum(ff, pp, s, predicted_ref):
         # never used for identification
         sims_id = sims[allowed[sims["ion_row"].to_numpy()]].reset_index(drop=True)
         matches = match_peaks(peaks, sims_id, ion_db, s["match_tol_hz"])
+        matches["n_nearby"] = (nearby_counts(matches["peak_freq"], matches["sim_freq"],
+                                             sims["f_sim"], s["match_tol_hz"])
+                               if len(matches) else [])
     return dict(peaks=peaks, base=base, sig=sig, ref=ref, ref_used=ref_used, status=status,
                 sims=sims, matches=matches, ion_db=ion_db, excluded=~allowed, ref_rows=ref_rows)
 
@@ -573,7 +589,8 @@ CREATE TABLE identifications (
     snr              REAL,
     kind             TEXT,
     closest_for_ion  INTEGER,
-    closest_for_peak INTEGER
+    closest_for_peak INTEGER,
+    n_nearby         INTEGER       -- other simulated lines within ± match window of the peak
 );
 CREATE TABLE ref_harmonics (
     spectrum_id INTEGER,
@@ -643,7 +660,8 @@ def run_scan(s, label):
         _kv_insert(con, "settings", stored)
         info = dict(created=datetime.datetime.now().isoformat(timespec="seconds"),
                     label=label, settings_hash=h, status="running",
-                    n_files=len(files), scanner_version=1)
+                    n_files=len(files), scanner_version=1,
+                    nearby_counted=True)
         _kv_insert(con, "run_info", info)
         con.commit()
 
@@ -695,14 +713,15 @@ def run_scan(s, label):
                 con.executemany(
                     "INSERT INTO identifications(spectrum_id, peak_id, ion, ion_base, Z, N, A, charge,"
                     " harmonic, sim_freq, peak_freq, delta_hz, power, snr, kind, closest_for_ion,"
-                    " closest_for_peak) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    " closest_for_peak, n_nearby) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     [(sid, int(first_pid + pr), io, ib, int(z), int(nn), int(a), int(q), int(hh),
-                      float(fs), float(fp), float(dd), float(pw), float(sn), kd, int(c1), int(c2))
-                     for pr, io, ib, z, nn, a, q, hh, fs, fp, dd, pw, sn, kd, c1, c2 in zip(
+                      float(fs), float(fp), float(dd), float(pw), float(sn), kd, int(c1), int(c2),
+                      int(nb))
+                     for pr, io, ib, z, nn, a, q, hh, fs, fp, dd, pw, sn, kd, c1, c2, nb in zip(
                          m["peak_row"], m["ion"], m["ion_base"], m["Z"], m["N"], m["A"],
                          m["charge"], m["harmonic"], m["sim_freq"], m["peak_freq"],
                          m["delta_hz"], m["power"], m["snr"], m["kind"],
-                         m["closest_for_ion"], m["closest_for_peak"])])
+                         m["closest_for_ion"], m["closest_for_peak"], m["n_nearby"])])
             n_ids_total += n_ids
             # the reference ion's peak in every harmonic (reference harmonic: the scan's own search)
             if r["ref_rows"]:
@@ -753,6 +772,68 @@ def run_scan(s, label):
                 con.close()
             except Exception:
                 pass
+
+
+def nearby_counted(path):
+    """True once every hit of the scan database has its n_nearby count
+    (new scans: from the start; older scans: after backfill_nearby)."""
+    try:
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            row = con.execute("SELECT value FROM run_info WHERE key = 'nearby_counted'").fetchone()
+        finally:
+            con.close()
+        return bool(row and json.loads(row[0]))
+    except Exception:
+        return False
+
+
+def backfill_nearby(path, progress=None):
+    """One-off for scans made before n_nearby existed: load each spectrum with
+    hits once, simulate it as the scan did (same settings, the reference the
+    scan used) and store each hit's count of other simulated lines within
+    ± match window of the peak.  progress(done, total) is called as it goes.
+    Spectra that cannot be loaded keep NULL (they sort last).
+    Returns the number of such spectra."""
+    con = sqlite3.connect(path, timeout=30)
+    try:
+        cols = [r[1] for r in con.execute("PRAGMA table_info(identifications)")]
+        if "n_nearby" not in cols:
+            con.execute("ALTER TABLE identifications ADD COLUMN n_nearby INTEGER")
+            con.commit()
+        s = parse_settings(read_kv(con, "settings"))
+        ion_db, ref_mq = build_ion_database(*s["ion_key"])
+        tol = float(s["match_tol_hz"])
+        specs = con.execute("SELECT spectrum_id, name, ref_found FROM spectra "
+                            "WHERE ref_found IS NOT NULL AND n_ids > 0 ORDER BY seq").fetchall()
+        failed = 0
+        for k, (sid, name, ref) in enumerate(specs):
+            if progress:
+                progress(k, len(specs))
+            try:
+                ff, pp = load_spectrum(s["spectra_dir"], name)
+                sims, _, _ = physics.simulate_spectrum(ion_db, ref_mq, float(ref), s, ff, pp)
+            except Exception:
+                traceback.print_exc()
+                failed += 1
+                continue
+            rows = con.execute("SELECT id, peak_freq, sim_freq FROM identifications "
+                               "WHERE spectrum_id = ?", (sid,)).fetchall()
+            if not rows:
+                continue
+            ids, pf, sf = zip(*rows)
+            n = nearby_counts(pf, sf, sims["f_sim"], tol)
+            con.executemany("UPDATE identifications SET n_nearby = ? WHERE id = ?",
+                            [(int(c), int(i)) for c, i in zip(n, ids)])
+            if k % 20 == 0:
+                con.commit()
+        _kv_insert(con, "run_info", {"nearby_counted": True, "nearby_failed": failed})
+        con.commit()
+        if progress:
+            progress(len(specs), len(specs))
+        return failed
+    finally:
+        con.close()
 
 
 def _record_failed_run(con, stem, info, stored):

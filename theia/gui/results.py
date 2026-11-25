@@ -11,6 +11,7 @@ import re
 import collections
 import sqlite3
 import threading
+import time
 import traceback
 
 import numpy as np
@@ -22,8 +23,9 @@ from dash import dash_table, dcc, html, Input, Output, State
 
 from core import physics, segre_ids
 from core.physics import build_ion_database, hl_allowed
-from core.scan import (db_query, DEFAULTS, list_databases, load_config, load_spectrum,
-                       natural_key, parse_settings, read_kv, read_run_info, save_config)
+from core.scan import (backfill_nearby, db_query, DEFAULTS, list_databases, load_config,
+                       load_spectrum, natural_key, nearby_counted, parse_settings, read_kv,
+                       read_run_info, save_config)
 
 from .common import (ACCENT, ACCENT_PALE, ACCEPT_BTN, CFG, CONFIRM_BAR, CONFIRMED_DIR, FILL_BOX,
                      FILTER_HEAD_PX, HELP_STYLE, KV_WRAP, LABEL_STYLE, REF_FOLD_SUMMARY,
@@ -113,12 +115,16 @@ results_tab = html.Div([
                     ], value=[], inline=True, inputStyle={"marginRight": "4px"},
                         labelStyle={"marginRight": "16px"}, style={"fontSize": "13px", "marginBottom": "6px"}),
                     html.Div(id="hits-info", style={"fontSize": "13px", "color": "#333", "marginBottom": "4px"}),
+                    # older scans: one-off count of nearby simulated lines (backfill_nearby)
+                    dcc.Store(id="hits-info-base", data=""),
+                    dcc.Store(id="nearby-done", data=None),
+                    dcc.Interval(id="nearby-poll", interval=1000, disabled=True),
                 ], style={"height": f"{FILTER_HEAD_PX}px", "minWidth": "0", "flex": "0 0 auto"}),
 
                 # hits table (Export button, always-visible horizontal scroll bar); its
                 # page size is set in the browser to fill the space (see _HITS_FILL_JS)
                 html.Div(_table("hits-table", ["spectrum", "ion", "harmonic", "peak_freq", "sim_freq",
-                                               "delta_hz", "power", "snr", "kind"],
+                                               "delta_hz", "n_nearby", "power", "snr", "kind"],
                                 page_size=TABLE_PAGE_SIZE, export_format="csv", overflow_x="scroll"),
                          id="hits-table-wrap", style={"minWidth": "0", "flex": "1 1 0", "minHeight": "0",
                                                       "overflow": "hidden"}),
@@ -547,21 +553,58 @@ def refh_summary(path, st):
 
 
 HIT_COLUMNS = ["spectrum", "seq", "spectrum_id", "peak_id", "ion", "harmonic", "peak_freq", "sim_freq",
-               "delta_hz", "power", "snr", "kind", "closest_for_ion", "closest_for_peak", "ref_found"]
+               "delta_hz", "n_nearby", "power", "snr", "kind", "closest_for_ion", "closest_for_peak",
+               "ref_found"]
 MAX_ROWS = 20000
+
+# Older scans have no n_nearby counts: counted once in a background thread
+# (core.scan.backfill_nearby, written into that scan's database) the first time
+# the scan is opened here.  path -> {state: running / done / failed, done, total, msg}
+_NEARBY = {}
+_NEARBY_LOCK = threading.Lock()
+
+
+def _start_nearby(path):
+    with _NEARBY_LOCK:
+        if path in _NEARBY and _NEARBY[path]["state"] in ("running", "done"):
+            return
+        _NEARBY[path] = dict(state="running", done=0, total=0, msg="")
+
+    def _progress(done, total):
+        _NEARBY[path].update(done=done, total=total)
+
+    def _run():
+        try:
+            failed = backfill_nearby(path, _progress)
+            msg = (f"{failed} spectra could not be loaded: their hits have no count and come last"
+                   if failed else "")
+            print(f"[Theia] nearby lines counted for {os.path.basename(path)}"
+                  + (f" ({msg})" if msg else ""))
+            _NEARBY[path].update(state="done", msg=msg)
+        except Exception as exc:
+            traceback.print_exc()
+            _NEARBY[path].update(state="failed", msg=f"Could not count nearby lines: {exc}")
+
+    threading.Thread(target=_run, daemon=True, name="theia-nearby").start()
 
 
 @app.callback(
     Output("hits-table", "data"),
     Output("hits-info", "children"),
+    Output("hits-info-base", "data"),
+    Output("nearby-poll", "disabled"),
     Input("db-select", "value"),
     Input("ion-filter", "value"),
     Input("spec-filter", "value"),
     Input("closest-filter", "value"),
+    Input("nearby-done", "data"),
 )
-def query_hits(path, ion_filter, spec_filter, closest):
+def query_hits(path, ion_filter, spec_filter, closest, _nearby_done):
     if not path or not os.path.exists(path):
-        return [], ""
+        return [], "", "", True
+    counted = nearby_counted(path)
+    if not counted:
+        _start_nearby(path)
     where, params = [], []
     ions = [v[4:] for v in (ion_filter or []) if v.startswith("ion:")]
     bases = [v[5:] for v in (ion_filter or []) if v.startswith("base:")]
@@ -581,11 +624,18 @@ def query_hits(path, ion_filter, spec_filter, closest):
         where.append("closest_for_ion = 1")
     if "peak" in (closest or []):
         where.append("closest_for_peak = 1")
-    # With an ion filter, closest to the prediction first (|Δ| over all the
-    # selected ions together), so the snippet viewer steps through the best
-    # matches first; otherwise run order.  Sorting a column still overrides.
-    order = "ABS(delta_hz), seq, peak_freq" if ors else "seq, peak_freq"
-    sql = (f"SELECT {', '.join(HIT_COLUMNS)} FROM hits"
+    # With an ion filter, the most isolated peaks first (fewest other simulated
+    # lines within ± match window of the peak: n_nearby), then closest to the
+    # prediction (|Δ| over all the selected ions together), so the snippet
+    # viewer steps through the clearest matches first; otherwise run order.
+    # Sorting a column still overrides.  Until an older scan's counts exist:
+    # |Δ| only.
+    if ors:
+        order = ("n_nearby IS NULL, n_nearby, " if counted else "") + "ABS(delta_hz), seq, peak_freq"
+    else:
+        order = "seq, peak_freq"
+    cols = [c if (c != "n_nearby" or counted) else "NULL AS n_nearby" for c in HIT_COLUMNS]
+    sql = (f"SELECT {', '.join(cols)} FROM hits"
            + (" WHERE " + " AND ".join(where) if where else "")
            + f" ORDER BY {order} LIMIT {MAX_ROWS + 1}")
     df = db_query(path, sql, params)
@@ -593,10 +643,44 @@ def query_hits(path, ion_filter, spec_filter, closest):
     df = df.iloc[:MAX_ROWS]
     n_spec = df["spectrum_id"].nunique() if len(df) else 0
     info = (f"{len(df)} identifications in {n_spec} spectra"
-            + ("  (closest to prediction first)" if ors else "")
+            + (("  (fewest nearby lines, then closest to prediction, first)" if counted
+                else "  (closest to prediction first)") if ors else "")
             + (f"  (showing first {MAX_ROWS}; narrow the filter)" if truncated else ""))
+    st = _NEARBY.get(path, {})
+    if counted and st.get("msg"):
+        info += f"  –  {st['msg']}"
+    return _fmt_records(df), _nearby_info(info, path, counted), info, counted
 
-    return _fmt_records(df), info
+
+def _nearby_info(base, path, counted):
+    """hits-info text: the table summary plus, while an older scan's nearby
+    lines are being counted, the progress."""
+    if counted:
+        return base
+    st = _NEARBY.get(path) or {}
+    if st.get("state") == "failed":
+        return f"{base}  –  {st['msg']}"
+    prog = f"{st.get('done', 0)} / {st['total']} spectra" if st.get("total") else "starting"
+    return (f"{base}  –  counting nearby simulated lines for this older scan (one-off): {prog}; "
+            f"the order uses them when done")
+
+
+@app.callback(
+    Output("hits-info", "children", allow_duplicate=True),
+    Output("nearby-done", "data"),
+    Output("nearby-poll", "disabled", allow_duplicate=True),
+    Input("nearby-poll", "n_intervals"),
+    State("db-select", "value"),
+    State("hits-info-base", "data"),
+    prevent_initial_call=True,
+)
+def nearby_poll(_n, path, base):
+    st = _NEARBY.get(path) or {}
+    if st.get("state") == "done":
+        return dash.no_update, f"{path}|{time.time()}", True     # re-query the table
+    if st.get("state") == "failed":
+        return _nearby_info(base or "", path, False), dash.no_update, True
+    return _nearby_info(base or "", path, False), dash.no_update, False
 
 
 # Which row of the (filtered, sorted) hits table the snippet shows.  In the

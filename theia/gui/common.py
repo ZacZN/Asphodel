@@ -148,7 +148,7 @@ def section(title):
 # column headings of the tables made by _table (the ids stay the database column
 # names, and an exported CSV keeps them as its header row)
 COLUMN_TITLES = {"spectrum": "Spectrum", "ion": "Ion", "harmonic": "Harmonic",
-                 "peak_freq": "Peak Freq (Hz)", "sim_freq": "Sim Freq (Hz)", "delta_hz": "Δ (Hz)",
+                 "peak_freq": "Peak Freq (Hz)", "sim_freq": "Sim Freq (Hz)", "delta_hz": "Δ (Hz)", "n_nearby": "Nearby Lines",
                  "power": "Power", "snr": "SNR", "kind": "Kind", "closest_for_ion": "Closest for Ion",
                  "closest_for_peak": "Closest for Peak", "key": "Key", "value": "Value"}
 
