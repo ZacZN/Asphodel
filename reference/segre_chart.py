@@ -2046,7 +2046,7 @@ app.clientside_callback(
                 // alternatives) draws curved double arrows between the two nuclides.
                 // Drawn in an SVG overlay, not by Plotly, so the chart is not redrawn.
                 var NS = 'http://www.w3.org/2000/svg', altSvg = null;
-                var clearAlt = function() { if (altSvg) altSvg.innerHTML = ''; };
+                var clearAlt = function() { if (altSvg) altSvg.innerHTML = ''; altTargets = null; };
                 var mk = function(tag, attrs, parent) {
                     var el = document.createElementNS(NS, tag);
                     for (var k in attrs) el.setAttribute(k, attrs[k]);
@@ -2088,6 +2088,84 @@ app.clientside_callback(
                     return [u*u*u*p0[0] + 3*u*u*t*c1[0] + 3*u*t*t*c2[0] + t*t*t*p1[0],
                             u*u*u*p0[1] + 3*u*u*t*c1[1] + 3*u*t*t*c2[1] + t*t*t*p1[1]];
                 };
+                // Plotly's hover label must not cover the alternative's square: if it does,
+                // it is moved beside the hovered square (right, left, above or below, the
+                // first spot clear of every alternative square and of the hovered square).
+                // Plotly redraws the label on every mouse move, so an observer puts it back.
+                var altTargets = null;          // {hov: [x0,y0,x1,y1], far: [[...], ...]} in overlay px
+                var ovl = function(a, b) {
+                    var w = Math.min(a[2], b[2]) - Math.max(a[0], b[0]);
+                    var h = Math.min(a[3], b[3]) - Math.max(a[1], b[1]);
+                    return (w > 0 && h > 0) ? w * h : 0;
+                };
+                var moveLabel = function() {
+                    if (!altTargets) return;
+                    var hl = L0().hoverlayer;
+                    if (!hl) return;
+                    var L = gd._fullLayout;
+                    hl.querySelectorAll('g.hovertext').forEach(function(g) {
+                        var mv = g._segreMoved, tr = g.getAttribute('transform') || '';
+                        var path = g.querySelector('path');
+                        if (!path) return;
+                        if (mv && mv.t === tr && mv.d === path.getAttribute('d')) return;   // ours
+                        var m = /translate\(\s*([-\d.e]+)[ ,]+([-\d.e]+)/.exec(tr);
+                        if (!m) return;
+                        var tx = +m[1], ty = +m[2];
+                        // the box = union of the label's texts + Plotly's 3 px padding (the
+                        // path also holds the arrow notch)
+                        var bx = null;
+                        g.querySelectorAll('text').forEach(function(t) {
+                            var b = t.getBBox();
+                            if (!b.width) return;
+                            bx = bx ? [Math.min(bx[0], b.x), Math.min(bx[1], b.y),
+                                       Math.max(bx[2], b.x + b.width), Math.max(bx[3], b.y + b.height)]
+                                    : [b.x, b.y, b.x + b.width, b.y + b.height];
+                        });
+                        if (!bx) return;
+                        bx = [bx[0] - 3, bx[1] - 3, bx[2] + 3, bx[3] + 3];
+                        var w = bx[2] - bx[0], h = bx[3] - bx[1];
+                        var now = [tx + bx[0], ty + bx[1], tx + bx[2], ty + bx[3]];
+                        var far = altTargets.far, hov = altTargets.hov;
+                        var hitsFar = function(r) {
+                            var s = 0;
+                            far.forEach(function(f) { s += ovl(r, f); });
+                            return s;
+                        };
+                        if (!hitsFar(now)) return;        // Plotly's spot is fine
+                        var cx = (hov[0] + hov[2]) / 2, cy = (hov[1] + hov[3]) / 2, gap = 6;
+                        var xs = {right: hov[2] + gap, left: hov[0] - gap - w, mid: cx - w / 2};
+                        var ys = {mid: cy - h / 2, top: hov[1], bot: hov[3] - h,
+                                  above: hov[1] - gap - h, below: hov[3] + gap};
+                        var cands = [[xs.right, ys.mid], [xs.left, ys.mid],
+                                     [xs.right, ys.top], [xs.right, ys.bot],
+                                     [xs.left, ys.top], [xs.left, ys.bot],
+                                     [xs.mid, ys.above], [xs.mid, ys.below],
+                                     [xs.right, ys.above], [xs.right, ys.below],
+                                     [xs.left, ys.above], [xs.left, ys.below]];
+                        var best = null;
+                        cands.forEach(function(c, k) {
+                            // keep it inside the figure
+                            var x = Math.max(0, Math.min(c[0], L.width - w));
+                            var y = Math.max(0, Math.min(c[1], L.height - h));
+                            var r = [x, y, x + w, y + h];
+                            var score = hitsFar(r) * 1e4 + ovl(r, hov) * 10 + k;
+                            if (!best || score < best.score) best = {score: score, x: x, y: y};
+                        });
+                        var ntr = 'translate(' + (best.x - bx[0]) + ',' + (best.y - bx[1]) + ')';
+                        // a plain box: the arrow notch would point nowhere
+                        var nd = 'M' + bx[0] + ',' + bx[1] + 'H' + bx[2] + 'V' + bx[3] + 'H' + bx[0] + 'Z';
+                        g._segreMoved = {t: ntr, d: nd};
+                        path.setAttribute('d', nd);
+                        g.setAttribute('transform', ntr);
+                    });
+                };
+                var watchLabels = function() {
+                    var hl = L0().hoverlayer;
+                    if (!hl || hl._segreWatched) return;
+                    hl._segreWatched = true;
+                    new MutationObserver(moveLabel).observe(hl, {subtree: true, childList: true,
+                        attributes: true, attributeFilter: ['transform', 'd']});
+                };
                 var drawAlt = function(ev) {
                     clearAlt();
                     var meta = (gd.layout && gd.layout.meta) || {}, links = meta.altlinks || {};
@@ -2108,6 +2186,18 @@ app.clientside_callback(
                     }
                     altSvg.setAttribute('width', L.width); altSvg.setAttribute('height', L.height);
                     var origin = altSvg.getBoundingClientRect();
+                    // move Plotly's label off the alternatives' squares before routing round it
+                    var sq0 = ya._length / Math.abs(ya.range[1] - ya.range[0]), hs = sq0 / 2;
+                    var sqRect = function(n, z) {
+                        var c = [xa._offset + xa.d2p(n), ya._offset + ya.d2p(z)];
+                        return [c[0] - hs, c[1] - hs, c[0] + hs, c[1] + hs];
+                    };
+                    altTargets = {hov: sqRect(pt.x, pt.y), far: segs.map(function(sg) {
+                        var mine = Math.round(sg[0]) === Math.round(pt.x) && Math.round(sg[1]) === Math.round(pt.y);
+                        return mine ? sqRect(sg[2], sg[3]) : sqRect(sg[0], sg[1]);
+                    })};
+                    watchLabels();
+                    moveLabel();
                     var avoid = avoidRects(origin);
                     var defs = mk('defs', {}, altSvg);
                     var m = mk('marker', {id: 'segreArrow', viewBox: '0 0 10 10', refX: '8', refY: '5',
