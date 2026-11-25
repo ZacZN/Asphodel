@@ -204,9 +204,11 @@ results_tab = html.Div([
                 # bumped after accept / reject / unsure is recorded -> next peak
                 dcc.Store(id="confirm-advance", data=0),
                 # Grows downwards to fill the box (the box fills the page height)
-                dcc.Graph(id="snippet-graph", figure=empty_fig(), responsive=True,
-                          style={"flex": "1 1 0", "minHeight": "300px"},
-                          config={"scrollZoom": True}),
+                # drawn by the page itself (not a dcc.Graph: Dash would redraw its own,
+                # empty figure over it after every zoom); see the snippet callbacks
+                html.Div(id="snippet-graph", style={"flex": "1 1 0", "minHeight": "300px"},
+                         children=html.Div(id="snippet-plot", style={"width": "100%", "height": "100%"})),
+                dcc.Store(id="_snippet-drawn", data=0),   # bumped after each drawing
             ], className="theia-box", style=FILL_BOX),
         ], id="results-page-ions", style=RESULTS_PAGE_GRID),
 
@@ -303,7 +305,8 @@ app.clientside_callback(
     }
     """ % json.dumps(_FILL_GRAPHS),
     Output("_snippet-resize-hook", "children"),
-    *[Input(g, "figure") for g in _FILL_GRAPHS],
+    *[Input(g, "figure") if g != "snippet-graph" else Input("_snippet-drawn", "data")
+      for g in _FILL_GRAPHS],
 )
 
 # The hits table shows as many rows per page as fit in the space under the
@@ -810,7 +813,7 @@ app.clientside_callback(
         var seq = ++S.seq;
         var draw = function(res) {
             if (seq !== S.seq) return;                     // a newer click won
-            var gd = document.querySelector('#snippet-graph .js-plotly-plot');
+            var gd = document.getElementById('snippet-plot');
             if (!gd) { setTimeout(function() { draw(res); }, 100); return; }
             var fig = res.fig, meta = res.meta, data = fig.data;
             if (meta && same(meta, S.shown) && gd.data && gd.data.length === data.length) {
@@ -821,7 +824,10 @@ app.clientside_callback(
                 data.forEach(function(t) { if (t.name === '%s') t.visible = ex; });
             }
             S.shown = meta;
-            Plotly.react(gd, data, fig.layout, {scrollZoom: true, responsive: true});
+            Plotly.react(gd, data, fig.layout, {scrollZoom: true, responsive: true}).then(function() {
+                // tells the hooks that need the plot (readout, resize) it is there
+                window.dash_clientside.set_props('_snippet-drawn', {data: (S.drawn = (S.drawn || 0) + 1)});
+            });
         };
         if (!row || !db) {
             draw({fig: {data: [], layout: {template: 'plotly_white', title: {text: ''},

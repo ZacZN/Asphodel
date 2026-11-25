@@ -497,5 +497,6 @@ for _gid in READOUT_GRAPHS:
     app.clientside_callback(
         _READOUT_JS % _gid,
         Output(f"_readout-hook-{_gid}", "children"),
-        Input(_gid, "figure"),
+        # the snippet is drawn by the page itself (theia/gui/results.py), not a dcc.Graph
+        Input(_gid, "figure") if _gid != "snippet-graph" else Input("_snippet-drawn", "data"),
     )
