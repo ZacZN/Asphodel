@@ -300,52 +300,90 @@ function(figure) {
                 var px = it.g.__data__.xa._offset + (Number(pt.x0) + Number(pt.x1)) / 2;
                 var py = pt.ya._offset + (Number(pt.y0) + Number(pt.y1)) / 2;
                 if (!isFinite(px)) return;
-                var bb;
-                try { bb = it.path.getBBox(); } catch (e) { return; }
-                if (!bb || !bb.width) return;
-                // the box without Plotly's arrow notch (its tip is at 0,0, 6 px long)
-                var x0 = bb.x, x1 = bb.x + bb.width;
-                if (Math.abs(x0) < 1) x0 += 6; else if (Math.abs(x1) < 1) x1 -= 6;
-                it.box = {x0: x0, x1: x1, y0: bb.y, y1: bb.y + bb.height};
+                // the box itself: the text plus Plotly's 3 px padding.  Not the path's
+                // bounding box: when Plotly stacks labels it draws each box away from
+                // its arrow tip, and the path then also spans the gap up to the tip
+                var texts = it.g.querySelectorAll('text'), x0 = Infinity, x1 = -Infinity,
+                    y0 = Infinity, y1 = -Infinity;
+                for (var t = 0; t < texts.length; t++) {
+                    var tb;
+                    try { tb = texts[t].getBBox(); } catch (e) { continue; }
+                    if (!tb || !tb.width) continue;
+                    x0 = Math.min(x0, tb.x); x1 = Math.max(x1, tb.x + tb.width);
+                    y0 = Math.min(y0, tb.y); y1 = Math.max(y1, tb.y + tb.height);
+                }
+                if (!isFinite(x0)) return;
+                it.box = {x0: x0 - 3, x1: x1 + 3, y0: y0 - 3, y1: y1 + 3};
                 it.tgt = {x: px, y: isFinite(py) ? py : null,
                           line: !!(pt.trace && pt.trace.mode === 'lines') || !isFinite(py),
                           ylo: pt.ya._offset, yhi: pt.ya._offset + pt.ya._length};
                 it.colour = getComputedStyle(it.path).fill || '#555';
+                it.h = it.box.y1 - it.box.y0;
+                it.w = it.box.x1 - it.box.x0;
+                // vertical wish: lines keep Plotly's height, markers go level with their point
+                it.want = it.tgt.line ? it.y + it.box.y0 : it.tgt.y - it.h / 2;
                 ok.push(it);
             });
             if (ok.length < 2) return;
-            var tMin = Infinity, tMax = -Infinity, wMax = 0;
-            ok.forEach(function(it) {
-                tMin = Math.min(tMin, it.tgt.x); tMax = Math.max(tMax, it.tgt.x);
-                wMax = Math.max(wMax, it.box.x1 - it.box.x0);
-            });
-            var roomR = (W - 4) - (tMax + LEAD_GAP), roomL = (tMin - LEAD_GAP) - 4;
-            var right = roomR >= wMax || roomR >= roomL;
-            var colX = right ? Math.min(tMax + LEAD_GAP, W - 4 - wMax)
-                             : Math.max(tMin - LEAD_GAP, 4 + wMax);
-            // vertical order: lines keep Plotly's height, markers go level with their point;
-            // then stacked downwards without overlaps, and lifted to stay in the plot
-            ok.forEach(function(it) {
-                it.h = it.box.y1 - it.box.y0;
-                it.want = it.tgt.line ? it.y + it.box.y0 : it.tgt.y - it.h / 2;
-            });
-            ok.sort(function(a, b) { return (a.want - b.want) || (a.tgt.x - b.tgt.x); });
-            var prev = -Infinity;
-            ok.forEach(function(it) { it.top = Math.max(it.want, prev + 4); prev = it.top + it.h; });
-            var nextTop = Infinity;                 // then push up from the bottom of the plot
-            for (var k = ok.length - 1; k >= 0; k--) {
-                var lim = Math.min(ok[k].tgt.yhi, nextTop - 4);
-                if (ok[k].top + ok[k].h > lim) ok[k].top = lim - ok[k].h;
-                nextTop = ok[k].top;
+            var GAP = 4, H = gd._fullLayout.height;
+            var ylo = ok[0].tgt.ylo, yhi = ok[0].tgt.yhi;
+            var stackH = function(g) {
+                return g.reduce(function(s, it) { return s + it.h + GAP; }, -GAP);
+            };
+            // one column of labels on one side of its lines, stacked without overlaps
+            // inside the plot area (the whole graph if they don't fit in the plot)
+            var column = function(group, side) {
+                var tMin = Infinity, tMax = -Infinity, wMax = 0;
+                group.forEach(function(it) {
+                    tMin = Math.min(tMin, it.tgt.x); tMax = Math.max(tMax, it.tgt.x);
+                    wMax = Math.max(wMax, it.w);
+                });
+                var right = side === 'right';
+                if (!side) {
+                    var roomR = (W - 4) - (tMax + LEAD_GAP), roomL = (tMin - LEAD_GAP) - 4;
+                    right = roomR >= wMax || roomR >= roomL;
+                }
+                var colX = right ? Math.min(tMax + LEAD_GAP, W - 4 - wMax)
+                                 : Math.max(tMin - LEAD_GAP, 4 + wMax);
+                var lo = ylo, hi = yhi;
+                if (stackH(group) > hi - lo) { lo = 2; hi = H - 2; }
+                group.sort(function(a, b) { return (a.want - b.want) || (a.tgt.x - b.tgt.x); });
+                var prev = lo - GAP;                              // top-down, not above lo
+                group.forEach(function(it) { it.top = Math.max(it.want, prev + GAP); prev = it.top + it.h; });
+                var nextTop = hi + GAP;                           // bottom-up, not below hi
+                for (var k = group.length - 1; k >= 0; k--) {
+                    if (group[k].top + group[k].h > nextTop - GAP) group[k].top = nextTop - GAP - group[k].h;
+                    nextTop = group[k].top;
+                }
+                if (group[0].top < lo) {                          // still too tall: keep the top in
+                    prev = lo - GAP;
+                    group.forEach(function(it) { it.top = prev + GAP; prev = it.top + it.h; });
+                }
+                group.forEach(function(it) {
+                    var b = it.box, near = right ? b.x0 : b.x1;
+                    it.tx = colX - near;
+                    it.ty = it.top - b.y0;
+                    it.pd = 'M' + b.x0.toFixed(1) + ',' + b.y0.toFixed(1) + 'H' + b.x1.toFixed(1) +
+                            'V' + b.y1.toFixed(1) + 'H' + b.x0.toFixed(1) + 'Z';
+                    it.lead = {near: near};
+                });
+            };
+            if (stackH(ok) <= yhi - ylo) { column(ok, null); return; }
+            // too tall for one column inside the plot: the labels of the left-most lines
+            // go to the left of the lines, the rest to the right, about half the height each
+            ok.sort(function(a, b) { return a.tgt.x - b.tgt.x; });
+            var total = stackH(ok), acc = 0, cut = 1;
+            for (var i = 0; i < ok.length - 1; i++) {
+                acc += ok[i].h + GAP;
+                if (acc >= total / 2) { cut = i + 1; break; }
+                cut = i + 1;
             }
-            ok.forEach(function(it) {
-                var b = it.box, near = right ? b.x0 : b.x1;
-                it.tx = colX - near;
-                it.ty = it.top - b.y0;
-                it.pd = 'M' + b.x0.toFixed(1) + ',' + b.y0.toFixed(1) + 'H' + b.x1.toFixed(1) +
-                        'V' + b.y1.toFixed(1) + 'H' + b.x0.toFixed(1) + 'Z';
-                it.lead = {near: near};
-            });
+            var leftG = ok.slice(0, cut), rightG = ok.slice(cut);
+            var lMin = Math.min.apply(null, ok.map(function(it) { return it.tgt.x; }));
+            var lw = Math.max.apply(null, leftG.map(function(it) { return it.w; }));
+            if (lMin - LEAD_GAP - lw < 4) { column(ok, null); return; }      // no room on the left
+            column(leftG, 'left');
+            column(rightG, 'right');
         };
         // leader from the label's inner edge to its line (level with the label) or point;
         // drawn inside the label's own <g>, under the box, so Plotly removes it with the label
