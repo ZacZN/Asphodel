@@ -144,9 +144,13 @@ def _results_prefill(idx, rows, db, half_width, extra):
     except Exception as exc:
         print(f"Results log book: could not read the scan settings: {exc}", flush=True)
     ion_f, spec_f, closest, show_ex, dark = extra
-    values += [dict(r, group="settings") for r in [{"label": "Snippet Half-Width", "value": _num(half_width), "unit": "Hz"},
-               {"label": "Ion Filter", "value": (ion_f or "").strip() or "none"},
-               {"label": "Spectrum Filter", "value": ", ".join(spec_f) if spec_f else "none"},
+    # the ion filter is a multi-select: values "ion:<ion>" or "base:<nuclide>" (all charge states)
+    if isinstance(ion_f, (list, tuple)):
+        ion_f = ", ".join(str(v).split(":", 1)[-1] + (" (all charge states)" if str(v).startswith("base:") else "")
+                          for v in ion_f)
+    values +=[dict(r, group="settings") for r in [{"label": "Snippet Half-Width", "value": _num(half_width), "unit": "Hz"},
+               {"label": "Ion Filter", "value": str(ion_f or "").strip() or "none"},
+               {"label": "Spectrum Filter", "value": ", ".join(map(str, spec_f)) if spec_f else "none"},
                {"label": "Only Closest Peak for Each Ion", "value": "on" if "ion" in (closest or []) else "off"},
                {"label": "Only Closest Ion for Each Peak", "value": "on" if "peak" in (closest or []) else "off"},
                {"label": "Show Ions Excluded by T½ Cut", "value": "on" if show_ex else "off"},
