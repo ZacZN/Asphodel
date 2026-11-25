@@ -11,7 +11,8 @@ An entry sent from Theia also has "peaks": one dict per spectrum / peak it
 was sent from, with the same columns as a Theia confirmed list (spectrum,
 seq, spectrum_id, peak_id, peak_freq, sim_freq, delta_hz, power, snr, kind,
 ...) plus "database", "run_info", "scan_settings" and "sent".  Sending the
-same ion again from another peak adds that peak to the entry.
+same ion again from another peak adds that peak to the entry; sending it as
+confident upgrades an unsure entry.
 """
 import datetime
 import os
@@ -51,7 +52,9 @@ def add_identification(Z, N, ion, harmonic, status="confident", notes="", exp=No
     N of the nuclide), optionally with the peak it was found in (a dict, see
     the module docstring).  If an entry with the same nuclide, energy state,
     charge and harmonic is already there, the peak is added to it (its status
-    and notes are left as they are); the same peak twice is skipped.
+    and notes are left as they are, except that status "confident" upgrades an
+    unsure entry; "unsure" never downgrades a confident one); the same peak
+    twice is skipped.
     Returns (changed, message); raises if the file can't be written."""
     m = ION_RE.match(str(ion).strip())
     if not m:
@@ -77,20 +80,30 @@ def add_identification(Z, N, ion, harmonic, status="confident", notes="", exp=No
                      and x.get("isomer", "g") == iso and x.get("charge") == q
                      and x.get("harmonic") == h), None)
         if same is not None:
-            if not peak:
-                return False, (f"{ion_name(same)} h{h} is already in the Segrè chart "
-                               f"({same.get('status', 'confident')}) – left as it is.")
-            peaks = same.setdefault("peaks", [])
-            if not isinstance(peaks, list):
+            # confident upgrades an unsure entry; unsure never downgrades a confident one
+            upgrade = entry["status"] == "confident" and same.get("status", "confident") == "unsure"
+            up_msg = " Now confident." if upgrade else ""
+            if upgrade:
+                same["status"] = "confident"
+            peaks = same.setdefault("peaks", []) if peak else None
+            if peak and not isinstance(peaks, list):
                 peaks = same["peaks"] = []
-            if any(isinstance(x, dict) and _peak_key(x) == _peak_key(peak) for x in peaks):
-                return False, (f"{ion_name(same)} h{h} from {peak_label(peak)} is already in the "
-                               f"Segrè chart – left as it is.")
+            dup = bool(peak) and any(isinstance(x, dict) and _peak_key(x) == _peak_key(peak)
+                                     for x in peaks)
+            if not peak or dup:
+                where = f" from {peak_label(peak)}" if peak else ""
+                if not upgrade:
+                    return False, (f"{ion_name(same)} h{h}{where} is already in the Segrè chart "
+                                   f"({same.get('status', 'confident')}) – left as it is.")
+                same["updated"] = entry["updated"]
+                jsonfile.write(path, d, indent=1, ensure_ascii=False)
+                return True, f"✓ {ion_name(same)} h{h}{where} is already in the Segrè chart.{up_msg}"
             peaks.append(peak)
             same["updated"] = entry["updated"]
             jsonfile.write(path, d, indent=1, ensure_ascii=False)
             return True, (f"✓ Added {peak_label(peak)} to {ion_name(same)} h{h} in the Segrè chart "
-                          f"({len(peaks)} peak{'s' if len(peaks) != 1 else ''}).")
+                          f"({len(peaks)} peak{'s' if len(peaks) != 1 else ''}, "
+                          f"{same.get('status', 'confident')}).{up_msg}")
         entry["id"] = uuid.uuid4().hex[:10]
         entries.append(entry)
         jsonfile.write(path, d, indent=1, ensure_ascii=False)

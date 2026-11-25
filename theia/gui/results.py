@@ -33,6 +33,16 @@ from .figures import add_sim_lines, empty_fig, spectrum_figure
 from .scan_tab import _fmt_records
 from .logbook import logbook_button
 
+# 'Send to PID Plot' card in the snippet controls; button colours match the
+# Segrè chart's (reference/segre_chart.py ID_COLOURS: confident green, unsure orange)
+SEND_PID_CARD = {"display": "inline-flex", "alignItems": "center", "gap": "6px",
+                 "border": "1px solid #dddddd", "borderRadius": "6px", "background": "#f9f9f9",
+                 "padding": "3px 6px", "marginRight": "8px"}
+SEND_PID_TITLE = {"fontSize": "12px", "fontWeight": "600", "color": "#333", "marginRight": "2px"}
+_SEND_PID_BTN = {"color": "white", "fontWeight": "600", "padding": "1px 10px", "border": "none"}
+SEND_PID_CONFIDENT_BTN = {**_SEND_PID_BTN, "background": "#2e9e4a"}
+SEND_PID_UNSURE_BTN = {**_SEND_PID_BTN, "background": "#f59a23"}
+
 
 # Columns saved for each identification in a confirmed list (and with a peak
 # sent to the PID plot)
@@ -131,11 +141,19 @@ results_tab = html.Div([
                     html.Button("Confirmation Mode", id="btn-confirm-mode",
                                 className="btn btn-outline-secondary btn-sm",
                                 style={"marginRight": "16px"}),
-                    html.Button("Send to PID Plot", id="btn-send-pid",
-                                title="Add the ion shown (charge state and harmonic) to the Segrè "
-                                      "chart's identified ions, as confident",
-                                className="btn btn-outline-secondary btn-sm",
-                                style={"marginRight": "8px"}),
+                    # 'Send to PID Plot' card: the ion shown goes to the Segrè chart as
+                    # confident (green there) or unsure (orange there)
+                    html.Div([
+                        html.Span("Send to PID Plot", style=SEND_PID_TITLE),
+                        html.Button("✓ Confident", id="btn-send-pid-confident",
+                                    title="Identified: add the ion shown (charge state and harmonic) "
+                                          "to the Segrè chart as confident (green)",
+                                    className="btn btn-sm", style=SEND_PID_CONFIDENT_BTN),
+                        html.Button("? Unsure", id="btn-send-pid-unsure",
+                                    title="Not sure: add the ion shown (charge state and harmonic) "
+                                          "to the Segrè chart as unsure (orange)",
+                                    className="btn btn-sm", style=SEND_PID_UNSURE_BTN),
+                    ], style=SEND_PID_CARD),
                     logbook_button("results", marginRight="8px"),
                     html.Span(id="send-pid-msg", style={"fontSize": "12px", "marginRight": "16px"}),
                     dcc.Checklist(id="snippet-show-excluded", value=["on"],
@@ -678,22 +696,26 @@ def show_snippet(idx, half_width, show_excluded, rows, path):
 
 @app.callback(
     Output("send-pid-msg", "children"),
-    Input("btn-send-pid", "n_clicks"),
+    Input("btn-send-pid-confident", "n_clicks"),
+    Input("btn-send-pid-unsure", "n_clicks"),
     Input("snippet-idx", "data"),
     State("hits-table", "derived_virtual_data"),
     State("db-select", "value"),
     prevent_initial_call=True,
 )
-def send_to_pid_plot(_n, idx, rows, path):
-    """'Send to PID Plot': add the ion in the snippet (its charge state and
-    harmonic) to the Segrè chart as a confident identification of your own,
-    with the spectrum and the peak found in it: the same columns, run info and
-    scan settings a confirmed list saves (core/segre_ids.py).  If the ion is
-    already there the peak is added to it; the same peak twice is skipped.
-    The message is cleared when the snippet moves to another peak."""
+def send_to_pid_plot(_n_conf, _n_unsure, idx, rows, path):
+    """'Send to PID Plot' card: add the ion in the snippet (its charge state and
+    harmonic) to the Segrè chart as an identification of your own, confident
+    or unsure (whichever button was pressed), with the spectrum and the peak
+    found in it: the same columns, run info and scan settings a confirmed list
+    saves (core/segre_ids.py).  If the ion is already there the peak is added
+    to it, and Confident upgrades an unsure entry (Unsure never downgrades a
+    confident one); the same peak twice is skipped.  The message is cleared
+    when the snippet moves to another peak."""
     trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
-    if not trig.startswith("btn-send-pid"):
+    if not trig.startswith("btn-send-pid-"):
         return ""
+    status = "unsure" if trig.startswith("btn-send-pid-unsure") else "confident"
     if not rows or not path or idx is None or int(idx) >= len(rows):
         return "No identification shown."
     row = rows[int(idx)]
@@ -714,7 +736,7 @@ def send_to_pid_plot(_n, idx, rows, path):
         peak = json.loads(r.to_json(orient="records"))[0]       # plain Python values for the JSON file
         peak.update(database=path, run_info=info, scan_settings=st)
         added, msg = segre_ids.add_identification(int(peak["Z"]), int(peak["N"]), row["ion"],
-                                                   int(row["harmonic"]), "confident", "", peak=peak)
+                                                   int(row["harmonic"]), status, "", peak=peak)
         print(f"Send to PID plot: {msg}", flush=True)
         return msg
     except Exception as exc:
