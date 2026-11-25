@@ -136,6 +136,13 @@ body.dark .current-page::placeholder { color: #fff !important; opacity: 1 !impor
 body.dark .current-page-shadow { color: transparent !important; }
 /* plots: full inversion -> black background, white traces; orange stays orange */
 body.dark .js-plotly-plot { filter: invert(1) hue-rotate(180deg) contrast(1.15); }
+/* hover labels and their leader lines (theia/gui/layout.py): colours here are before the
+   inversion, so black shows as white.  White borders on the labels; the leaders' casing and
+   dot rings white (they would invert to black and vanish on the black background) */
+body.dark .js-plotly-plot .hoverlayer g.hovertext > path { stroke: #000000 !important; stroke-width: 1.5px !important; }
+body.dark .js-plotly-plot .theia-leader-halo { stroke: #000000 !important; stroke-opacity: 1 !important; stroke-width: 5px !important; }
+body.dark .js-plotly-plot .theia-leader-line { stroke-width: 2px !important; }
+body.dark .js-plotly-plot .theia-leader-dot { stroke: #000000 !important; stroke-width: 2px !important; r: 4px; }
 """
 app.index_string = app.index_string.replace(
     "{%css%}", "{%css%}\n<style>" + _TABLE_CSS + _FB_CSS + _CALIB_CSS + _FIT_CSS + _INPUT_CSS + _HARM_CSS + _DARK_CSS + "</style>")

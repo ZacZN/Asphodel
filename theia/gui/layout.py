@@ -400,10 +400,13 @@ function(figure) {
                 for (var k in attrs) el.setAttribute(k, attrs[k]);
                 grp.appendChild(el);
             };
+            // classes: dark mode restyles them (theia/gui/app.py, _DARK_CSS)
             mk('line', {x1: sx, y1: sy, x2: ex, y2: ey, stroke: '#ffffff', 'stroke-width': 4,
-                        'stroke-opacity': 0.85, 'stroke-linecap': 'round'});
-            mk('line', {x1: sx, y1: sy, x2: ex, y2: ey, stroke: it.colour, 'stroke-width': 1.5});
-            mk('circle', {cx: ex, cy: ey, r: 3.5, fill: it.colour, stroke: '#ffffff', 'stroke-width': 1.5});
+                        'stroke-opacity': 0.85, 'stroke-linecap': 'round', 'class': 'theia-leader-halo'});
+            mk('line', {x1: sx, y1: sy, x2: ex, y2: ey, stroke: it.colour, 'stroke-width': 1.5,
+                        'class': 'theia-leader-line'});
+            mk('circle', {cx: ex, cy: ey, r: 3.5, fill: it.colour, stroke: '#ffffff', 'stroke-width': 1.5,
+                          'class': 'theia-leader-dot'});
             it.g.insertBefore(grp, it.g.firstChild);
         };
         var fitHover = function() {
