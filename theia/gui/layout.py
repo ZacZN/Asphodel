@@ -284,6 +284,90 @@ function(figure) {
         // pushed downwards.  After each hover, shift the label layer up (or
         // down) so all labels sit inside the visible area: the window, cut by
         // every scrolling box around the plot, and above the coordinate readout.
+        // Several labels at once (nearby lines, hovermode "x"): Plotly stacks them next
+        // to each other and their small arrows don't show which line each belongs to.
+        // Then the labels are moved into one column beside the lines (right of the
+        // outermost one, or left if there is no room), clear of them, and each gets a
+        // leader line in its own colour, ending in a dot on its line (or on its point
+        // for markers such as peak maxima).  A single label is left as Plotly draws it.
+        var LEAD_GAP = 28;                      // px between the outermost target and the column
+        var SVGNS = 'http://www.w3.org/2000/svg';
+        var spreadLabels = function(items) {
+            var W = gd._fullLayout.width, ok = [];
+            items.forEach(function(it) {
+                var pt = it.g.__data__;
+                if (!pt || !pt.xa || !pt.ya || !it.path) return;
+                var px = it.g.__data__.xa._offset + (Number(pt.x0) + Number(pt.x1)) / 2;
+                var py = pt.ya._offset + (Number(pt.y0) + Number(pt.y1)) / 2;
+                if (!isFinite(px)) return;
+                var bb;
+                try { bb = it.path.getBBox(); } catch (e) { return; }
+                if (!bb || !bb.width) return;
+                // the box without Plotly's arrow notch (its tip is at 0,0, 6 px long)
+                var x0 = bb.x, x1 = bb.x + bb.width;
+                if (Math.abs(x0) < 1) x0 += 6; else if (Math.abs(x1) < 1) x1 -= 6;
+                it.box = {x0: x0, x1: x1, y0: bb.y, y1: bb.y + bb.height};
+                it.tgt = {x: px, y: isFinite(py) ? py : null,
+                          line: !!(pt.trace && pt.trace.mode === 'lines') || !isFinite(py),
+                          ylo: pt.ya._offset, yhi: pt.ya._offset + pt.ya._length};
+                it.colour = getComputedStyle(it.path).fill || '#555';
+                ok.push(it);
+            });
+            if (ok.length < 2) return;
+            var tMin = Infinity, tMax = -Infinity, wMax = 0;
+            ok.forEach(function(it) {
+                tMin = Math.min(tMin, it.tgt.x); tMax = Math.max(tMax, it.tgt.x);
+                wMax = Math.max(wMax, it.box.x1 - it.box.x0);
+            });
+            var roomR = (W - 4) - (tMax + LEAD_GAP), roomL = (tMin - LEAD_GAP) - 4;
+            var right = roomR >= wMax || roomR >= roomL;
+            var colX = right ? Math.min(tMax + LEAD_GAP, W - 4 - wMax)
+                             : Math.max(tMin - LEAD_GAP, 4 + wMax);
+            // vertical order: lines keep Plotly's height, markers go level with their point;
+            // then stacked downwards without overlaps, and lifted to stay in the plot
+            ok.forEach(function(it) {
+                it.h = it.box.y1 - it.box.y0;
+                it.want = it.tgt.line ? it.y + it.box.y0 : it.tgt.y - it.h / 2;
+            });
+            ok.sort(function(a, b) { return (a.want - b.want) || (a.tgt.x - b.tgt.x); });
+            var prev = -Infinity;
+            ok.forEach(function(it) { it.top = Math.max(it.want, prev + 4); prev = it.top + it.h; });
+            var nextTop = Infinity;                 // then push up from the bottom of the plot
+            for (var k = ok.length - 1; k >= 0; k--) {
+                var lim = Math.min(ok[k].tgt.yhi, nextTop - 4);
+                if (ok[k].top + ok[k].h > lim) ok[k].top = lim - ok[k].h;
+                nextTop = ok[k].top;
+            }
+            ok.forEach(function(it) {
+                var b = it.box, near = right ? b.x0 : b.x1;
+                it.tx = colX - near;
+                it.ty = it.top - b.y0;
+                it.pd = 'M' + b.x0.toFixed(1) + ',' + b.y0.toFixed(1) + 'H' + b.x1.toFixed(1) +
+                        'V' + b.y1.toFixed(1) + 'H' + b.x0.toFixed(1) + 'Z';
+                it.lead = {near: near};
+            });
+        };
+        // leader from the label's inner edge to its line (level with the label) or point;
+        // drawn inside the label's own <g>, under the box, so Plotly removes it with the label
+        var drawLeader = function(it, ty) {
+            var b = it.box, sx = it.lead.near, sy = (b.y0 + b.y1) / 2;
+            var gy = ty + sy;
+            var ty2 = it.tgt.line ? Math.min(Math.max(gy, it.tgt.ylo), it.tgt.yhi) : it.tgt.y;
+            var ex = it.tgt.x - it.tx, ey = ty2 - ty;
+            var grp = document.createElementNS(SVGNS, 'g');
+            grp.setAttribute('class', 'theia-leader');
+            grp.style.pointerEvents = 'none';
+            var mk = function(tag, attrs) {
+                var el = document.createElementNS(SVGNS, tag);
+                for (var k in attrs) el.setAttribute(k, attrs[k]);
+                grp.appendChild(el);
+            };
+            mk('line', {x1: sx, y1: sy, x2: ex, y2: ey, stroke: '#ffffff', 'stroke-width': 4,
+                        'stroke-opacity': 0.85, 'stroke-linecap': 'round'});
+            mk('line', {x1: sx, y1: sy, x2: ex, y2: ey, stroke: it.colour, 'stroke-width': 1.5});
+            mk('circle', {cx: ex, cy: ey, r: 3.5, fill: it.colour, stroke: '#ffffff', 'stroke-width': 1.5});
+            it.g.insertBefore(grp, it.g.firstChild);
+        };
         var fitHover = function() {
             var hl = gd._fullLayout && gd._fullLayout._hoverlayer && gd._fullLayout._hoverlayer.node();
             if (!hl) return;
@@ -298,14 +382,28 @@ function(figure) {
                 var m = /translate\\(\\s*([-\\d.e]+)[ ,]+([-\\d.e]+)\\s*\\)/.exec(g.getAttribute('transform') || '');
                 if (!m) continue;
                 var x = parseFloat(m[1]), y = parseFloat(m[2]);
+                var path = g.querySelector('path'), d = path ? path.getAttribute('d') : '';
                 var sh = g._theiaShift;
-                if (sh && Math.abs(y - sh.to) < 0.01 && Math.abs(x - sh.x) < 0.01) y = sh.from;  // our own move
-                else fresh = true;                                                        // drawn by Plotly
-                items.push({g: g, x: x, y: y});
+                if (sh && Math.abs(y - sh.y) < 0.01 && Math.abs(x - sh.x) < 0.01 && d === sh.d) {
+                    x = sh.fromX; y = sh.fromY; d = sh.fromD;                             // our own move
+                } else fresh = true;                                                      // drawn by Plotly
+                items.push({g: g, path: path, x: x, y: y, d: d});
             }
             if (!items.length || !fresh) return;          // nothing new since the last fit
-            // measure at Plotly's positions
-            items.forEach(function(it) { it.g.setAttribute('transform', 'translate(' + it.x + ',' + it.y + ')'); });
+            // back to Plotly's own drawing, then spread the labels if there are several
+            items.forEach(function(it) {
+                it.g.setAttribute('transform', 'translate(' + it.x + ',' + it.y + ')');
+                if (it.path) it.path.setAttribute('d', it.d);
+                var old = it.g.querySelectorAll('g.theia-leader');
+                for (var j = 0; j < old.length; j++) old[j].parentNode.removeChild(old[j]);
+                it.tx = it.x; it.ty = it.y; it.pd = it.d; it.lead = null;
+            });
+            if (items.length > 1) spreadLabels(items);
+            // measure at those positions
+            items.forEach(function(it) {
+                it.g.setAttribute('transform', 'translate(' + it.tx + ',' + it.ty + ')');
+                if (it.path) it.path.setAttribute('d', it.pd);
+            });
             var top = Infinity, bot = -Infinity, left = Infinity, right = -Infinity;
             items.forEach(function(it) {
                 var r = it.g.getBoundingClientRect();
@@ -332,9 +430,10 @@ function(figure) {
                 dy = Math.round(dy);
             }
             items.forEach(function(it) {
-                var to = it.y + dy;
-                it.g.setAttribute('transform', 'translate(' + it.x + ',' + to + ')');
-                it.g._theiaShift = {x: it.x, from: it.y, to: to};
+                var to = it.ty + dy;
+                it.g.setAttribute('transform', 'translate(' + it.tx + ',' + to + ')');
+                it.g._theiaShift = {x: it.tx, y: to, d: it.pd, fromX: it.x, fromY: it.y, fromD: it.d};
+                if (it.lead) drawLeader(it, to);
             });
         };
         // Plotly redraws the labels on every mouse move (it only reports a hover when
