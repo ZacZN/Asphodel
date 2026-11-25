@@ -34,6 +34,13 @@ from .scan_tab import _fmt_records
 from .logbook import logbook_button
 
 
+# Columns saved for each identification in a confirmed list (and with a peak
+# sent to the PID plot)
+CONFIRMED_COLS = ("s.name AS spectrum, s.seq, i.spectrum_id, i.peak_id, i.ion, i.ion_base, i.Z, i.N, "
+                  "i.A, i.charge, i.harmonic, i.peak_freq, i.sim_freq, i.delta_hz, i.power, i.snr, "
+                  "i.kind, i.closest_for_ion, i.closest_for_peak, s.ref_found")
+
+
 results_tab = html.Div([
     html.Div([
         html.Div([
@@ -679,9 +686,11 @@ def show_snippet(idx, half_width, show_excluded, rows, path):
 )
 def send_to_pid_plot(_n, idx, rows, path):
     """'Send to PID Plot': add the ion in the snippet (its charge state and
-    harmonic) to the Segrè chart as a confident identification of your own
-    (core/segre_ids.py).  Already there -> left as it is.  The message is
-    cleared when the snippet moves to another peak."""
+    harmonic) to the Segrè chart as a confident identification of your own,
+    with the spectrum and the peak found in it: the same columns, run info and
+    scan settings a confirmed list saves (core/segre_ids.py).  If the ion is
+    already there the peak is added to it; the same peak twice is skipped.
+    The message is cleared when the snippet moves to another peak."""
     trig = dash.callback_context.triggered[0]["prop_id"] if dash.callback_context.triggered else ""
     if not trig.startswith("btn-send-pid"):
         return ""
@@ -689,15 +698,23 @@ def send_to_pid_plot(_n, idx, rows, path):
         return "No identification shown."
     row = rows[int(idx)]
     try:
-        r = db_query(path, "SELECT Z, N FROM identifications WHERE spectrum_id = ? AND peak_id = ? "
-                           "AND ion = ? AND harmonic = ? LIMIT 1",
-                     (int(row["spectrum_id"]), int(row["peak_id"]), row["ion"], int(row["harmonic"])))
+        # Exact (unrounded) values straight from the database, as in save_confirmed()
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            r = pd.read_sql_query(
+                f"SELECT {CONFIRMED_COLS} FROM identifications i JOIN spectra s USING (spectrum_id) "
+                "WHERE i.spectrum_id = ? AND i.peak_id = ? AND i.ion = ? AND i.harmonic = ? LIMIT 1",
+                con, params=(int(row["spectrum_id"]), int(row["peak_id"]), row["ion"],
+                             int(row["harmonic"])))
+            info, st = read_run_info(con, path), read_kv(con, "settings")
+        finally:
+            con.close()
         if not len(r):
             return "✗ This identification is not in the database any more."
-        note = (f"Sent from Theia: {row['spectrum']}, peak {float(row['peak_freq']):.1f} Hz, "
-                f"Δ = {float(row['delta_hz']):+.1f} Hz ({os.path.basename(path)})")
-        added, msg = segre_ids.add_identification(int(r.iloc[0]["Z"]), int(r.iloc[0]["N"]), row["ion"],
-                                                   int(row["harmonic"]), "confident", note)
+        peak = json.loads(r.to_json(orient="records"))[0]       # plain Python values for the JSON file
+        peak.update(database=path, run_info=info, scan_settings=st)
+        added, msg = segre_ids.add_identification(int(peak["Z"]), int(peak["N"]), row["ion"],
+                                                   int(row["harmonic"]), "confident", "", peak=peak)
         print(f"Send to PID plot: {msg}", flush=True)
         return msg
     except Exception as exc:
@@ -869,9 +886,7 @@ def save_confirmed(_n, store, path, ion_filter, spec_filter, closest, table_filt
     # Exact (unrounded) values straight from the database
     con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     info, st = read_run_info(con, path), read_kv(con, "settings")
-    cols = ("s.name AS spectrum, s.seq, i.spectrum_id, i.peak_id, i.ion, i.ion_base, i.Z, i.N, i.A, "
-            "i.charge, i.harmonic, i.peak_freq, i.sim_freq, i.delta_hz, i.power, i.snr, i.kind, "
-            "i.closest_for_ion, i.closest_for_peak, s.ref_found")
+    cols = CONFIRMED_COLS
     out = []
     for v in sorted(to_save, key=lambda d: (d["spectrum_id"], d["peak_id"], d["ion"])):
         r = pd.read_sql_query(

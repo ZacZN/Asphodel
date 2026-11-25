@@ -610,7 +610,8 @@ def find_nuclide(q):
 # Your own marks, per experiment, in data/<exp>/outputs/identified/segre_identified.json:
 #   {"format": "asphodel-segre-identified", "version": 1,
 #    "entries": [{"id", "Z", "N", "A", "sym", "isomer": "g"/"m"/..., "charge",
-#                 "harmonic", "status": "confident"/"unsure", "notes", "updated"}],
+#                 "harmonic", "status": "confident"/"unsure", "notes", "updated",
+#                 "peaks": [...]  (sent from Theia; see core/segre_ids.py)}],
 #    "confirmed_lists": ["confirmed_....csv", ...]}     <- Theia lists shown too
 # Marks belong to the nuclide's ground-state square; the isomer is a field of
 # the entry.  A square is green if any entry for it is confident, else orange.
@@ -1012,6 +1013,10 @@ header .exp{{color:#777;font-family:monospace;font-size:12px}}
 .entry .ion{{font-weight:700;font-family:monospace;font-size:13px}} .entry .st{{color:#555;margin-left:6px}}
 .entry .notes{{white-space:pre-wrap;margin-top:3px;color:#333}} .entry .src{{color:#777;font-size:11px;margin-top:3px;word-break:break-all}}
 .entry .btns{{margin-top:5px;display:flex;gap:6px}}
+.entry table.peaks{{border-collapse:collapse;font-size:11px;margin-top:2px;width:100%}}
+.entry table.peaks th{{text-align:left;color:#555;font-weight:600;border-bottom:1px solid {LINE};padding:1px 4px}}
+.entry table.peaks td{{padding:1px 4px;font-family:monospace;white-space:nowrap}}
+.entry table.peaks td.spec{{white-space:normal;word-break:break-all;font-family:inherit}}
 .form{{background:#fff;border:1px solid {LINE};border-radius:5px;padding:8px 10px;margin-top:8px}}
 .form .row{{display:flex;gap:10px}} .form .row>div{{flex:1}}
 .form label.f{{display:block;font-size:11px;color:#777;margin:6px 0 2px;text-transform:uppercase;letter-spacing:.5px}}
@@ -1317,6 +1322,35 @@ def _gs_row(zz, nn):
     return None if r.empty else r.iloc[0]
 
 
+def _peak_num(p, key, fmt):
+    try:
+        return format(float(p[key]), fmt)
+    except (KeyError, TypeError, ValueError):
+        return "–"
+
+
+def _peaks_table(peaks):
+    """The spectra / peaks an own entry was sent from (Theia's 'Send to PID Plot');
+    the rest of the saved details are in the row's tooltip."""
+    head = html.Tr([html.Th(x) for x in ("Spectrum", "Peak (Hz)", "Δ (Hz)", "SNR")])
+    body = []
+    for p in peaks:
+        if not isinstance(p, dict):
+            continue
+        tip = "\n".join([f"Database: {os.path.basename(str(p.get('database', '')))}",
+                          f"Predicted: {_peak_num(p, 'sim_freq', '.1f')} Hz",
+                          f"Power: {_peak_num(p, 'power', '.4g')}",
+                          f"Kind: {p.get('kind', '–')}",
+                          f"Sent: {str(p.get('sent', ''))[:16].replace('T', ' ')}"])
+        body.append(html.Tr([html.Td(str(p.get("spectrum", "?")), className="spec"),
+                             html.Td(_peak_num(p, "peak_freq", ".1f")),
+                             html.Td(_peak_num(p, "delta_hz", "+.1f")),
+                             html.Td(_peak_num(p, "snr", ".1f"))], title=tip))
+    n = len(body)
+    return html.Div([html.Div(f"Sent From Theia ({n} peak{'s' if n != 1 else ''})", className="src"),
+                     html.Table([html.Thead(head), html.Tbody(body)], className="peaks")])
+
+
 def _entry_card(e):
     st = "confident" if e["status"] == "confident" else "unsure"
     body = [html.Span(ion_name(e), className="ion"),
@@ -1332,6 +1366,8 @@ def _entry_card(e):
         out.append(html.Div(txt, className="alts"))
     if (e.get("notes") or "").strip():
         out.append(html.Div(e["notes"], className="notes"))
+    if e.get("peaks"):
+        out.append(_peaks_table(e["peaks"]))
     if e.get("source"):
         out.append(html.Div(f"Theia list: {os.path.basename(e['source'])} · {e.get('peaks', '')}",
                             className="src"))
