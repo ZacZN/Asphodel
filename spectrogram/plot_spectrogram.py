@@ -326,6 +326,9 @@ BOOT_OVERLAY = """
   var m = /[?&]asph_t0=(\\d+)/.exec(location.search);
   var t0 = m ? +m[1] : (performance.timeOrigin || Date.now());
   if (m) document.getElementById('asphBootH').innerHTML = 'Starting Spectrogram&hellip;';
+  if (m && history.replaceState) {   // a reload starts its own timer
+    history.replaceState(null, '', location.pathname + location.search.replace(/([?&])asph_t0=\\d+&?/, '$1').replace(/[?&]$/, '') + location.hash);
+  }
   var tick = setInterval(function() {
     var el = document.getElementById('asphBootT');
     if (el) el.textContent = ((Date.now() - t0) / 1000).toFixed(1) + ' s';

@@ -6,7 +6,7 @@ Part of Theia (theia/theia.py); split out of theia.py in Nov 2026.
 
 import dash
 
-from core import icon, offline, tabwatch, trackpad
+from core import bootscreen, icon, offline, tabwatch, trackpad
 
 
 # Bootstrap CSS served from core/static/ (not cdn.jsdelivr.net), so Theia
@@ -143,4 +143,6 @@ app.index_string = app.index_string.replace(
 app.index_string = app.index_string.replace(
     "{%scripts%}", "{%scripts%}\n<script>" + tabwatch.watch_js("Theia") + "</script>")
 trackpad.install_dash(app)      # touchpad zoom in the plots (core/trackpad.py)
+# loading screen until the page (and each tab when first opened) is ready (core/bootscreen.py)
+bootscreen.install_dash(app, "Theia", tabs="tabs")
 icon.use_in_dash(app, "theia")   # browser-tab icon: core/icons/theia.png, else asphodel.png

@@ -147,7 +147,10 @@ WEB_TOOLS = {
     "gui_correction":  (GUICORR_PORT, "/"),
     "spectrogram":     (None, "/spectrogram.html"),
 }
-_STARTING = {}              # token -> dict(name, proc, port, page, t0), see _starting_state
+_STARTING = {}              # token -> dict(key, name, proc, port, page, t0), see _starting_state
+# tools whose page has its own loading screen, continued from the starting page
+# (?asph_t0=): spectrogram BOOT_OVERLAY, core/bootscreen.py
+BOOT_TOOLS = ("spectrogram", "theia")
 _HOME_PORT_USED = [HOME_PORT]   # the port this home page really runs on (set at start)
 
 
@@ -199,7 +202,7 @@ def start_tool(key, args=(), launch=None):
     if web:
         token = f"{key}-{proc.pid}"
         with _PROCS_LOCK:
-            _STARTING[token] = dict(name=name, proc=proc, port=port, page=WEB_TOOLS[key][1],
+            _STARTING[token] = dict(key=key, name=name, proc=proc, port=port, page=WEB_TOOLS[key][1],
                                     t0=time.time())
         if launch is not None:
             launch["token"] = token
@@ -1603,9 +1606,10 @@ pre{background:#f9f9f9;border:1px solid #ddd;padding:10px;font-size:12px;white-s
       misses = 0;
       if (s.state === 'ready') {
         done = true;
-        // the spectrogram keeps this loading screen (and its timer) until its plots are drawn
-        location.replace(s.url.indexOf('spectrogram.html') >= 0
-                         ? s.url + (s.url.indexOf('?') >= 0 ? '&' : '?') + 'asph_t0=' + t0 : s.url);
+        // tools with their own loading screen (spectrogram, Theia: BOOT_TOOLS) keep
+        // showing it, with this timer, until their page is ready
+        location.replace(s.boot ? s.url + (s.url.indexOf('?') >= 0 ? '&' : '?') + 'asph_t0=' + t0
+                                : s.url);
         return;
       }
       if (s.state === 'failed') { fail(s.why, s.log); return; }
@@ -1690,7 +1694,8 @@ def _starting_state(token):
     if _port_open(st["port"]):
         with _PROCS_LOCK:
             _STARTING.pop(token, None)
-        return jsonify(state="ready", url=f"http://127.0.0.1:{st['port']}{st['page']}")
+        return jsonify(state="ready", url=f"http://127.0.0.1:{st['port']}{st['page']}",
+                       boot=st.get("key") in BOOT_TOOLS)
     rc = st["proc"].poll()
     if rc is not None:
         with _PROCS_LOCK:
