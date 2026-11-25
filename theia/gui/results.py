@@ -162,7 +162,7 @@ results_tab = html.Div([
                                     title="Not sure: add the ion shown (charge state and harmonic) "
                                           "to the Segrè chart as unsure (orange)",
                                     className="btn btn-sm", style=SEND_PID_UNSURE_BTN),
-                    ], style=SEND_PID_CARD),
+                    ], className="send-pid-card", style=SEND_PID_CARD),
                     logbook_button("results", marginRight="8px"),
                     html.Span(id="send-pid-msg", style={"fontSize": "12px", "marginRight": "16px"}),
                     dcc.Checklist(id="snippet-show-excluded", value=["on"],

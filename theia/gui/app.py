@@ -94,6 +94,7 @@ body.dark .dash-input-stepper { background: #1c1c1c !important; color: #f0f0f0 !
 body.dark .btn-outline-secondary { color: #f0f0f0 !important; border-color: #9a9a9a !important; }
 body.dark .btn-outline-secondary:hover { background: #2e2e2e !important; }
 body.dark #btn-settings { background: #1c1c1c !important; }
+body.dark .send-pid-card { background: #1c1c1c !important; border-color: #6a6a6a !important; }
 body.dark .btn-outline-danger { color: #ff9c94 !important; border-color: #e0574c !important; }
 /* tabs */
 body.dark .tab { background: #141414 !important; color: #d6d6d6 !important; border-color: #4a4a4a !important; }
