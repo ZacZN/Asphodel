@@ -2199,6 +2199,7 @@ app.clientside_callback(
                     watchLabels();
                     moveLabel();
                     var avoid = avoidRects(origin);
+                    var curvePts = [];                 // points of the curves drawn so far
                     var defs = mk('defs', {}, altSvg);
                     var m = mk('marker', {id: 'segreArrow', viewBox: '0 0 10 10', refX: '8', refY: '5',
                                           markerWidth: '4', markerHeight: '4',
@@ -2262,16 +2263,34 @@ app.clientside_callback(
                                             fill: '%s'}, g);
                         t.textContent = text;
                         var w = t.getComputedTextLength ? t.getComputedTextLength() : text.length * 8.2, h = 21;
-                        var spots = [0.5, 0.65, 0.35, 0.8, 0.2, 0.9];
-                        var placed = null;
-                        for (var j = 0; j < spots.length && !placed; j++) {
+                        // Spots along the curve, each with boxes beside / above / below it.  A
+                        // box must stay clear of the hover labels, earlier line labels, the
+                        // hovered and alternative squares and the curves themselves; if none
+                        // is, the one with the least overlap wins (earlier spots on ties).
+                        var curve = [];
+                        for (var n2 = 0; n2 <= 60; n2++) curve.push(bez(best.a, best.c1, best.c2, best.b, n2 / 60));
+                        curvePts = curvePts.concat(curve);
+                        var sqs = [altTargets.hov].concat(altTargets.far);
+                        var bw = w + 12, spots = [0.5, 0.6, 0.4, 0.7, 0.3, 0.8, 0.2, 0.9, 0.1];
+                        var offs = [[8, -h - 6], [8, 8], [-bw - 8, -h - 6], [-bw - 8, 8],
+                                    [-bw / 2, -h - 10], [-bw / 2, 10]];
+                        var placed = null, bestScore = Infinity, k2 = 0;
+                        for (var j = 0; j < spots.length && bestScore > 0; j++) {
                             var q = bez(best.a, best.c1, best.c2, best.b, spots[j]);
-                            [[8, -h - 4], [8, 6], [-w - 16, -h - 4], [-w - 16, 6]].forEach(function(o) {
-                                if (placed) return;
-                                var box = [q[0] + o[0], q[1] + o[1], q[0] + o[0] + w + 12, q[1] + o[1] + h];
-                                if (box[0] < 0 || box[2] > L.width || box[1] < 0 || box[3] > L.height) return;
-                                if (!boxHits(box, avoid)) placed = box;
-                            });
+                            for (var oi = 0; oi < offs.length; oi++, k2++) {
+                                var o = offs[oi];
+                                var box = [q[0] + o[0], q[1] + o[1], q[0] + o[0] + bw, q[1] + o[1] + h];
+                                if (box[0] < 0 || box[2] > L.width || box[1] < 0 || box[3] > L.height) continue;
+                                var sc = 0;
+                                avoid.forEach(function(r) { sc += 1e4 * ovl(box, r); });
+                                sqs.forEach(function(r) { sc += 100 * ovl(box, r); });
+                                var big = [box[0] - 3, box[1] - 3, box[2] + 3, box[3] + 3];
+                                curvePts.forEach(function(c) {
+                                    if (c[0] > big[0] && c[0] < big[2] && c[1] > big[1] && c[1] < big[3]) sc += 500;
+                                });
+                                if (sc === 0) { placed = box; bestScore = 0; break; }
+                                if (sc + k2 * 0.01 < bestScore) { bestScore = sc + k2 * 0.01; placed = box; }
+                            }
                         }
                         if (!placed) {
                             var qm = bez(best.a, best.c1, best.c2, best.b, 0.5);
