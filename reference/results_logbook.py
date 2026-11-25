@@ -495,7 +495,9 @@ app.clientside_callback(
             g.on('change', function() {
                 clearTimeout(timer);
                 timer = setTimeout(function() {
-                    var items = g.save(false).map(function(n) {
+                    // read the engine's nodes, not g.save(): save() drops w / h when they
+                    // equal the minimum size, so a box shrunk to 2 wide was not stored
+                    var items = g.engine.nodes.map(function(n) {
                         return {id: n.id, x: n.x, y: n.y, w: n.w, h: n.h}; });
                     fetch('/logbook-layout', {method: 'POST', headers: {'Content-Type': 'application/json'},
                                               body: JSON.stringify({ion: ion, items: items})});

@@ -532,7 +532,10 @@ def save_layout(ion, items, exp=None):
         lay = {}
         for it in items or []:
             try:
-                lay[str(it["id"])] = {k: max(0, int(it[k])) for k in ("x", "y", "w", "h")}
+                # GridStack leaves out x / y at 0 and w / h at the minimum (2): fill them in
+                lay[str(it["id"])] = {k: max(0, int(it.get(k) if it.get(k) is not None else
+                                                    (0 if k in ("x", "y") else 2)))
+                                      for k in ("x", "y", "w", "h")}
             except (KeyError, TypeError, ValueError):
                 continue
         d["layouts"][ion] = lay
