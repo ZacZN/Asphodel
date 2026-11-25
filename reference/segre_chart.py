@@ -282,20 +282,24 @@ def outline(cells):
     return xs, ys
 
 
-def magic_shapes(rows):
-    """Lines along both sides of each magic proton row and neutron column."""
-    shapes = []
-    style = dict(type="line", line=dict(color="#555555", width=1), layer="above")
+def magic_trace(rows):
+    """Lines along both sides of each magic proton row and neutron column, as
+    one line trace (None gaps).  Not layout shapes: Plotly redraws every shape
+    on each zoom step, which made zooming lag."""
+    xs, ys = [], []
     for m in MAGIC:
         nz = rows.loc[rows["Z"] == m, "N"]
         if len(nz):
             for y in (m - .5, m + .5):
-                shapes.append(dict(style, x0=nz.min() - 3, x1=nz.max() + 3, y0=y, y1=y))
+                xs += [float(nz.min() - 3), float(nz.max() + 3), None]
+                ys += [y, y, None]
         zn = rows.loc[rows["N"] == m, "Z"]
         if len(zn):
             for x in (m - .5, m + .5):
-                shapes.append(dict(style, x0=x, x1=x, y0=zn.min() - 3, y1=zn.max() + 3))
-    return shapes
+                xs += [x, x, None]
+                ys += [float(zn.min() - 3), float(zn.max() + 3), None]
+    return go.Scatter(x=xs, y=ys, mode="lines", line=dict(color="#555555", width=1),
+                      name="magic numbers", hoverinfo="skip", showlegend=False)
 
 
 def _hex(c):
@@ -370,9 +374,14 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
     flicker).  Paths are vectors, so a zoom just redraws them; as layout
     shapes they redraw about twice as fast as filled scatter traces.  On top:
     an invisible WebGL marker per nuclide for the hover label (the page sets
-    hoverdistance to the square size after each zoom), the A + symbol labels
-    around the view (copied by the page from the hidden "labels-all" trace),
-    and a dummy trace that carries the colour bar."""
+    hoverdistance to the square size after each zoom) and a dummy trace that
+    carries the colour bar.
+
+    Since 25 Nov the squares, their corner marks, the stars and the A + symbol
+    and charge-state labels are not in the figure at all: they go to the page as
+    data (layout.meta.cells) and the page draws them on a canvas under the plot
+    on every frame (CANVAS_JS).  Even as shapes, ~3500 SVG squares redrawn on
+    every drag / zoom step made the chart lag."""
     rows = state_rows(state)
     id_cells = entries_by_cell(all_entries()) if by == "identified" else None
     z, scale, zmin, zmax, cbar = colouring(rows, by, id_cells)
@@ -391,24 +400,30 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
     # trace 0: outline of the square selected for editing (Identified ions);
     # kept first so the selection callback can patch data[0]
     fig.add_trace(selection_trace(sel))
-    by_colour = {}
-    for n, zz, c in zip(n_arr, z_arr, cols):
-        by_colour.setdefault(c, []).append((n, zz))
-    cell_shapes = []
-    for c, cells in by_colour.items():
-        path = "".join(f"M{n - HALF:g},{zz - HALF:g}H{n + HALF:g}V{zz + HALF:g}H{n - HALF:g}Z"
-                       for n, zz in cells)
-        cell_shapes.append(dict(type="path", path=path, fillcolor=c, line=dict(width=0),
-                                layer="below", xref="x", yref="y"))
+    # the squares, their corner marks and the stars are drawn by the page on a
+    # canvas under the plot (layout.meta.cells, see CANVAS_JS), not as Plotly shapes:
+    # redrawing ~3500 SVG squares on every frame made dragging and zooming slow
+    pal, ci = [], []
+    pal_index = {}
+    for c in cols:
+        if c not in pal_index:
+            pal_index[c] = len(pal)
+            pal.append(c)
+        ci.append(pal_index[c])
+    tpal = ["#000000", "#ffffff"]
+    canvas = {"half": HALF, "k": STABLE_CORNER, "starR": STAR_R, "inset": LABEL_INSET,
+              "labelPx": LABEL_PX, "pal": pal, "tpal": tpal,
+              "n": n_arr.astype(int).tolist(), "z": z_arr.astype(int).tolist(), "ci": ci,
+              # A + symbol label and its colour (index into tpal) per square
+              "lab": (rows["A"].astype(str) + rows["sym"]).tolist(),
+              "lc": [tpal.index(_text_colour(c)) if _text_colour(c) in tpal else 0 for c in cols],
+              "stable": [], "iso": [], "srch": [], "star": [],
+              "q": {"n": [], "z": [], "t": [], "c": []}}
     if by == "identified":
         # stable nuclides: the top-right corner of the square filled in black
         st_rows = rows[np.isinf(rows["hl_s"].to_numpy(dtype=float))]
-        k = STABLE_CORNER
-        path = "".join(f"M{n + HALF:g},{zz + HALF:g}H{n + HALF - k:g}L{n + HALF:g},{zz + HALF - k:g}Z"
-                       for n, zz in zip(st_rows["N"], st_rows["Z"]))
-        if path:
-            cell_shapes.append(dict(type="path", path=path, fillcolor="#000000", line=dict(width=0),
-                                    layer="below", xref="x", yref="y"))
+        canvas["stable"] = [v for n, zz in zip(st_rows["N"], st_rows["Z"]) for v in (int(n), int(zz))]
+        if canvas["stable"]:
             fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name="stable",
                                      marker=dict(symbol="triangle-ne", size=LEGEND_MARK, color="#000000"),
                                      hoverinfo="skip", showlegend=True))
@@ -416,37 +431,23 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
         # observation): bottom-left corner purple.  A first observation shows only the star.
         iso_cells = [c for c, es in (id_cells or {}).items()
                      if any(e.get("isomer", "g") not in ("g", NEW_ISOMER) and not is_first_obs(e) for e in es)]
-        path = "".join(f"M{n - HALF:g},{zz - HALF:g}H{n - HALF + k:g}L{n - HALF:g},{zz - HALF + k:g}Z"
-                       for zz, n in iso_cells)
-        if path:
-            cell_shapes.append(dict(type="path", path=path, fillcolor=ISOMER_CORNER_COLOUR,
-                                    line=dict(width=0), layer="below", xref="x", yref="y"))
+        canvas["iso"] = [v for zz, n in iso_cells for v in (int(n), int(zz))]
+        if iso_cells:
             fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name="isomer identified",
                                      marker=dict(symbol="triangle-sw", size=LEGEND_MARK, color=ISOMER_CORNER_COLOUR),
                                      hoverinfo="skip", showlegend=True))
         # searched for but not identified: bottom-right corner red
-        path = "".join(f"M{n + HALF:g},{zz - HALF:g}H{n + HALF - k:g}L{n + HALF:g},{zz - HALF + k:g}Z"
-                       for zz, n in sorted(srch))
-        if path:
-            cell_shapes.append(dict(type="path", path=path, fillcolor=SEARCHED_COLOUR,
-                                    line=dict(width=0), layer="below", xref="x", yref="y"))
+        canvas["srch"] = [v for zz, n in sorted(srch) for v in (int(n), int(zz))]
+        if srch:
             fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name="searched, not identified",
                                      marker=dict(symbol="triangle-se", size=LEGEND_MARK, color=SEARCHED_COLOUR),
                                      hoverinfo="skip", showlegend=True))
         # an isomer not seen before (a new one not in NUBASE, or a NUBASE one flagged as a first
-        # observation): yellow star in the bottom-left corner
-        # (a path shape in data units, so it zooms with the square; drawn over the purple corner
-        # when a known isomer of the nuclide is identified as well)
+        # observation): yellow star in the bottom-left corner (in data units, so it zooms with the
+        # square; drawn over the purple corner when a known isomer is identified as well)
         new_cells = [c for c, es in (id_cells or {}).items() if any(star_entry(e) for e in es)]
+        canvas["star"] = [v for zz, n in new_cells for v in (int(n), int(zz))]
         if new_cells:
-            ang = np.pi / 2 + np.arange(10) * np.pi / 5
-            rad = np.where(np.arange(10) % 2 == 0, STAR_R, STAR_R * 0.42)
-            sx, sy = rad * np.cos(ang), rad * np.sin(ang)
-            c0 = -HALF + STAR_R + 0.03
-            path = "".join("M" + "L".join(f"{n + c0 + x:.3f},{zz + c0 + y:.3f}" for x, y in zip(sx, sy)) + "Z"
-                           for zz, n in new_cells)
-            cell_shapes.append(dict(type="path", path=path, fillcolor=NEW_STAR_COLOUR,
-                                    line=dict(color="#000000", width=0.8), layer="below", xref="x", yref="y"))
             fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name="isomer not seen before",
                                      marker=dict(symbol="star", size=LEGEND_MARK + 3, color=NEW_STAR_COLOUR,
                                                  line=dict(color="#000000", width=0.8)),
@@ -458,41 +459,20 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
         x=n_arr, y=z_arr, mode="markers", name="hover",
         marker=dict(symbol="square", size=1, color=cols, opacity=0),
         hovertext=hover, hoverinfo="text", showlegend=False))
-    # A + symbol labels: all of them in a hidden trace (data for the page), and
-    # the ones around the view, copied by the page into "labels" once the
-    # squares are big enough (a few hundred text elements instead of 3500)
-    fig.add_trace(go.Scatter(
-        # plain lists: numpy arrays reach the page base64-encoded, which the
-        # page's own code can't read
-        # anchored at the square's top-left corner (data units, so it stays there when zooming)
-        x=(n_arr - HALF + LABEL_INSET).round(3).tolist(), y=(z_arr + HALF - LABEL_INSET).round(3).tolist(),
-        mode="text", name="labels-all", visible=False, textposition="bottom right",
-        text=(rows["A"].astype(str) + rows["sym"]).tolist(),
-        textfont=dict(size=9, color=[_text_colour(c) for c in cols]),
-        hoverinfo="skip", showlegend=False))
-    fig.add_trace(go.Scatter(
-        x=[], y=[], text=[], mode="text", name="labels", textfont=dict(size=9), textposition="bottom right",
-        hoverinfo="skip", showlegend=False))
     # identified charge states ("72+ 73+", every entry of the nuclide: g / isomers, confident /
-    # unsure, own / Theia list) at the bottom-right corner; shown by the page like the A + symbol
-    # labels ("qlabels-all" -> "qlabels"), two per line, extra lines growing upwards
-    qx, qy, qt, qc = [], [], [], []
+    # unsure, own / Theia list) at the bottom-right corner, two per line, extra lines growing
+    # upwards; drawn by the page on the canvas like the A + symbol labels
     if by == "identified" and id_cells:
+        q = canvas["q"]
         for zz, nn, c in zip(z_arr, n_arr, cols):
             es = id_cells.get((int(zz), int(nn)))
             if not es:
                 continue
-            qs = [f"{q}+" for q in sorted({int(e["charge"]) for e in es})]
-            qx.append(round(float(nn) + HALF - LABEL_INSET, 3))
-            qy.append(round(float(zz) - HALF + LABEL_INSET, 3))
-            qt.append("<br>".join(" ".join(qs[i:i + 2]) for i in range(0, len(qs), 2)))
-            qc.append(_text_colour(c))
-    fig.add_trace(go.Scatter(
-        x=qx, y=qy, text=qt, mode="text", name="qlabels-all", visible=False, textposition="top left",
-        textfont=dict(size=9, color=qc), hoverinfo="skip", showlegend=False))
-    fig.add_trace(go.Scatter(
-        x=[], y=[], text=[], mode="text", name="qlabels", textfont=dict(size=9), textposition="top left",
-        hoverinfo="skip", showlegend=False))
+            qs = [f"{qq}+" for qq in sorted({int(e["charge"]) for e in es})]
+            q["n"].append(int(nn))
+            q["z"].append(int(zz))
+            q["t"].append("\n".join(" ".join(qs[i:i + 2]) for i in range(0, len(qs), 2)))
+            q["c"].append(_text_colour(c))
     # colour key: Identified ions -> square entries in the legend (first, above the corner marks);
     # the other colourings keep their colour bar
     if by == "identified":
@@ -507,7 +487,7 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
             marker=dict(color=[zmin], colorscale=scale, cmin=zmin, cmax=zmax, showscale=True,
                         colorbar=dict(thickness=14, len=0.9, **cbar))))
 
-    shapes = magic_shapes(TABLE[TABLE["state"] == "g"]) if "magic" in overlays else []
+    shapes = []
     region_text = ""
     if "region" in overlays:
         try:
@@ -536,6 +516,8 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
         add_cased_line(fig, xs, ys, colour, LIMIT_CASING, width=2.5, dash=dash, name=label)
         extra = f"{label}: {len(sel)} of {len(rows)}"
         region_text = f"{region_text} · {extra}" if region_text else extra
+    if "magic" in overlays:          # on top of the other lines, as the shapes were
+        fig.add_trace(magic_trace(TABLE[TABLE["state"] == "g"]))
     if mark:
         zz, nn = mark
         shapes.append(dict(type="rect", x0=nn - .5, x1=nn + .5, y0=zz - .5, y1=zz + .5,
@@ -548,14 +530,16 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
             t.legendgroup = t.name
     xr, yr = (view or {}).get("x"), (view or {}).get("y")
     fig.update_layout(
-        margin=dict(l=55, r=10, t=10, b=45), plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
+        # see-through: the squares are on the page's canvas behind the plot (white page behind it)
+        margin=dict(l=55, r=10, t=10, b=45), plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
         hovermode="closest", hoverdistance=1,
         legend=dict(x=0.01, y=0.99, xanchor="left", yanchor="top", bgcolor="#ffffff",
                     bordercolor="#999999", borderwidth=1, font=dict(size=LEGEND_FONT),
                     itemwidth=LEGEND_ITEMWIDTH, tracegroupgap=LEGEND_ROW_GAP),
-        shapes=cell_shapes + shapes, dragmode="pan", uirevision=uirev,
-        # uncertain identification <-> its alternatives, drawn by the page on hover
-        meta={"altlinks": links if by == "identified" else {}},
+        shapes=shapes, dragmode="pan", uirevision=uirev,
+        # altlinks: uncertain identification <-> its alternatives, drawn by the page on hover;
+        # cells: the squares, marks and labels, drawn by the page on its canvas
+        meta={"altlinks": links if by == "identified" else {}, "cells": canvas},
         xaxis=dict(title="N (neutrons)", range=xr or [-1, N_MAX + 1], showgrid=False,
                    zeroline=False, constrain="domain", ticks="outside"),
         yaxis=dict(title="Z (protons)", range=yr or [-1, Z_MAX + 1], showgrid=False,
@@ -991,7 +975,7 @@ header .exp{{color:#777;font-family:monospace;font-size:12px}}
 .info{{flex:none;padding:4px 18px;font-size:12px;color:#8a4a10;background:{PALE};
   border-bottom:1px solid {LINE};min-height:24px}}
 .main{{flex:1 1 auto;min-height:0;display:flex}}
-.graph{{flex:1 1 auto;min-width:0;min-height:0}}
+.graph{{flex:1 1 auto;min-width:0;min-height:0;background:#ffffff}}
 /* Identified ions: editing panel on the right */
 .panel{{flex:none;width:370px;border-left:1px solid {LINE};background:{SIDE};padding:12px 14px;
   overflow-y:auto;font-size:13px}}
@@ -1033,7 +1017,212 @@ header .exp{{color:#777;font-family:monospace;font-size:12px}}
 """
 
 app = dash.Dash(__name__, title="Segrè Chart", suppress_callback_exceptions=True)
+
+# The squares, corner marks, stars and labels, drawn on a canvas under the plot
+# (Plotly's backgrounds are see-through) from layout.meta.cells, on every frame
+# of a drag / wheel zoom (plotly_relayouting carries the live axis ranges) and
+# after every redraw.  ~3500 rectangles take a few ms; as SVG shapes Plotly
+# needed ~70-100 ms per frame.  Also the PNG download: Plotly's own export does
+# not see the canvas, so the modebar camera button makes a picture of both.
+CANVAS_JS = r"""
+window.segreCanvas = (function() {
+  var FONT = '"Open Sans", verdana, arial, sans-serif';
+  function cellsOf(gd) { return ((gd.layout || {}).meta || {}).cells; }
+  function groups(C) {           // square indices by colour, made once per figure
+    // (Plotly.react may update the old meta object in place: check the arrays)
+    if (C._g && C._gci === C.ci && C._gpal === C.pal) return C._g;
+    var g = C.pal.map(function() { return []; });
+    for (var i = 0; i < C.n.length; i++) g[C.ci[i]].push(i);
+    C._gci = C.ci; C._gpal = C.pal;
+    return (C._g = g);
+  }
+  // draw everything for axis ranges xr, yr into a w x h area at (ox, oy) of ctx
+  function draw(ctx, C, xr, yr, w, h, ox, oy) {
+    var sx = w / (xr[1] - xr[0]), sy = h / (yr[1] - yr[0]);
+    var X = function(n) { return ox + (n - xr[0]) * sx; };
+    var Y = function(z) { return oy + h - (z - yr[0]) * sy; };
+    var H = C.half, k = C.k, px = Math.abs(sy);
+    var nlo = Math.min(xr[0], xr[1]) - 1, nhi = Math.max(xr[0], xr[1]) + 1;
+    var zlo = Math.min(yr[0], yr[1]) - 1, zhi = Math.max(yr[0], yr[1]) + 1;
+    var inView = function(n, z) { return n >= nlo && n <= nhi && z >= zlo && z <= zhi; };
+    var side = 2 * H;
+    groups(C).forEach(function(idx, g) {
+      ctx.fillStyle = C.pal[g];
+      for (var j = 0; j < idx.length; j++) {
+        var i = idx[j], n = C.n[i], z = C.z[i];
+        if (!inView(n, z)) continue;
+        var x0 = X(n - H), x1 = X(n + H), y0 = Y(z + H), y1 = Y(z - H);
+        ctx.fillRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0));
+      }
+    });
+    // corner triangles: [list, colour, corner (dx, dy) signs]
+    [[C.stable, '#000000', 1, 1], [C.iso, '#8e44ad', -1, -1], [C.srch, '#d62728', 1, -1]].forEach(function(t) {
+      var L = t[0] || [];
+      if (!L.length) return;
+      ctx.fillStyle = t[1];
+      ctx.beginPath();
+      for (var i = 0; i < L.length; i += 2) {
+        var n = L[i], z = L[i + 1];
+        if (!inView(n, z)) continue;
+        var cx = n + t[2] * H, cz = z + t[3] * H;
+        ctx.moveTo(X(cx), Y(cz));
+        ctx.lineTo(X(cx - t[2] * k), Y(cz));
+        ctx.lineTo(X(cx), Y(cz - t[3] * k));
+        ctx.closePath();
+      }
+      ctx.fill();
+    });
+    // stars: an isomer not seen before (bottom-left corner)
+    if ((C.star || []).length) {
+      var R = C.starR, c0 = -H + R + 0.03, pts = [];
+      for (var a = 0; a < 10; a++) {
+        var ang = Math.PI / 2 + a * Math.PI / 5, r = a % 2 === 0 ? R : R * 0.42;
+        pts.push([r * Math.cos(ang), r * Math.sin(ang)]);
+      }
+      ctx.beginPath();
+      for (var i = 0; i < C.star.length; i += 2) {
+        var n = C.star[i], z = C.star[i + 1];
+        if (!inView(n, z)) continue;
+        pts.forEach(function(p, q) {
+          var xx = X(n + c0 + p[0]), yy = Y(z + c0 + p[1]);
+          if (q) ctx.lineTo(xx, yy); else ctx.moveTo(xx, yy);
+        });
+        ctx.closePath();
+      }
+      ctx.fillStyle = '#ffd21f'; ctx.fill();
+      ctx.lineWidth = 0.8; ctx.strokeStyle = '#000000'; ctx.stroke();
+    }
+    // labels once the squares are big enough to read them
+    if (px >= C.labelPx) {
+      var fs = Math.round(Math.min(26, Math.max(9, px * 0.22)));
+      var pad = Math.max(1, fs * 0.15);
+      ctx.font = fs + 'px ' + FONT;
+      ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+      for (var i = 0; i < C.n.length; i++) {
+        var n = C.n[i], z = C.z[i];
+        if (!inView(n, z)) continue;
+        ctx.fillStyle = C.tpal[C.lc[i]];
+        ctx.fillText(C.lab[i], X(n - H + C.inset) + pad, Y(z + H - C.inset) + pad);
+      }
+      // identified charge states, bottom-right corner, extra lines growing upwards
+      var Q = C.q || {n: []};
+      ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
+      for (var i = 0; i < Q.n.length; i++) {
+        var n = Q.n[i], z = Q.z[i];
+        if (!inView(n, z)) continue;
+        ctx.fillStyle = Q.c[i];
+        var lines = String(Q.t[i]).split('\n');
+        for (var l = 0; l < lines.length; l++)
+          ctx.fillText(lines[l], X(n + H - C.inset) - pad,
+                       Y(z - H + C.inset) - pad - (lines.length - 1 - l) * fs * 1.3);
+      }
+    }
+  }
+  function layer(gd) {
+    var box = gd.querySelector('.svg-container');
+    if (!box) return null;
+    var cv = gd._segreCanvas;
+    if (!cv || cv.parentNode !== box) {
+      cv = document.createElement('canvas');
+      cv.className = 'segre-cells';
+      cv.style.position = 'absolute';
+      cv.style.pointerEvents = 'none';
+      box.insertBefore(cv, box.firstChild);      // under Plotly's (see-through) SVG
+      gd._segreCanvas = cv;
+    }
+    return cv;
+  }
+  function area(fl) {
+    var xa = fl.xaxis, ya = fl.yaxis;
+    return {l: xa._offset, t: ya._offset, w: xa._length, h: ya._length};
+  }
+  function paint(gd, ranges) {
+    var fl = gd._fullLayout, C = cellsOf(gd);
+    if (!fl || !fl.xaxis || !fl.yaxis || !(fl.xaxis._length > 0)) return;
+    var cv = layer(gd);
+    if (!cv) return;
+    // the axes' own extent: with constrain='domain' (square cells) it is
+    // narrower than the plot area fl._size
+    var s = area(fl), dpr = window.devicePixelRatio || 1;
+    var W = Math.max(1, Math.round(s.w * dpr)), Hh = Math.max(1, Math.round(s.h * dpr));
+    if (cv.width !== W || cv.height !== Hh) { cv.width = W; cv.height = Hh; }
+    cv.style.left = s.l + 'px'; cv.style.top = s.t + 'px';
+    cv.style.width = s.w + 'px'; cv.style.height = s.h + 'px';
+    var ctx = cv.getContext('2d');
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, W, Hh);
+    if (!C) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    var xr = (ranges && ranges.x) || fl.xaxis.range, yr = (ranges && ranges.y) || fl.yaxis.range;
+    draw(ctx, C, xr.map(Number), yr.map(Number), s.w, s.h, 0, 0);
+  }
+  function schedule(gd) {
+    if (gd._segreFrame) return;
+    gd._segreFrame = requestAnimationFrame(function() { gd._segreFrame = 0; paint(gd); });
+  }
+  // PNG: Plotly's picture (see-through background) over the squares on white
+  function exportPng(gd) {
+    var opts = ((gd._context || {}).toImageButtonOptions) || {};
+    var scale = opts.scale || 1, fl = gd._fullLayout, s = area(fl);
+    var W = fl.width, Hh = fl.height;
+    return Plotly.toImage(gd, {format: 'png', width: W, height: Hh, scale: scale}).then(function(url) {
+      return new Promise(function(res, rej) {
+        var img = new Image();
+        img.onload = function() {
+          var cv = document.createElement('canvas');
+          cv.width = Math.round(W * scale); cv.height = Math.round(Hh * scale);
+          var ctx = cv.getContext('2d');
+          ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, cv.width, cv.height);
+          ctx.setTransform(scale, 0, 0, scale, 0, 0);
+          ctx.save();
+          ctx.beginPath(); ctx.rect(s.l, s.t, s.w, s.h); ctx.clip();
+          var C = cellsOf(gd);
+          if (C) draw(ctx, C, fl.xaxis.range.map(Number), fl.yaxis.range.map(Number), s.w, s.h, s.l, s.t);
+          ctx.restore();
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          ctx.drawImage(img, 0, 0, cv.width, cv.height);
+          var a = document.createElement('a');
+          a.href = cv.toDataURL('image/png');
+          a.download = (opts.filename || 'segre_chart') + '.png';
+          document.body.appendChild(a); a.click(); a.remove();
+          res();
+        };
+        img.onerror = rej;
+        img.src = url;
+      });
+    });
+  }
+  function install(gd) {
+    if (gd._segreCanvasHook) { schedule(gd); return; }
+    gd._segreCanvasHook = true;
+    // live ranges during a drag / wheel zoom
+    gd.on('plotly_relayouting', function(ev) {
+      var fl = gd._fullLayout;
+      var x = [ev['xaxis.range[0]'], ev['xaxis.range[1]']], y = [ev['yaxis.range[0]'], ev['yaxis.range[1]']];
+      paint(gd, {x: x[0] != null && x[1] != null ? x : fl.xaxis.range,
+                 y: y[0] != null && y[1] != null ? y : fl.yaxis.range});
+    });
+    gd.on('plotly_relayout', function() { schedule(gd); });
+    gd.on('plotly_afterplot', function() { schedule(gd); });
+    window.addEventListener('resize', function() { schedule(gd); });
+    // the camera button: our picture instead of Plotly's (which has no squares)
+    gd.addEventListener('click', function(ev) {
+      var b = ev.target.closest && ev.target.closest('.modebar-btn');
+      if (!b) return;
+      var t = b.getAttribute('data-title') || '';
+      if (!/^download plot/i.test(t)) return;        // "Download plot as a PNG"
+      ev.preventDefault(); ev.stopImmediatePropagation();
+      exportPng(gd).catch(function(e) { console.log('[segre png] ' + e); });
+    }, true);
+    schedule(gd);
+  }
+  return {install: install, paint: paint, schedule: schedule, exportPng: exportPng, draw: draw};
+})();
+"""
+
 app.index_string = app.index_string.replace("</head>", f"<style>{CSS}</style></head>")
+app.index_string = app.index_string.replace(
+    "{%scripts%}", "{%scripts%}\n<script>" + CANVAS_JS + "</script>")
 app.index_string = app.index_string.replace(
     "{%scripts%}", "{%scripts%}\n<script>" + tabwatch.watch_js("Segrè Chart") + "</script>")
 trackpad.install_dash(app)           # touchpad zoom (core/trackpad.py)
@@ -1725,19 +1914,19 @@ def _id_lists(chosen, ver):
     return (ver or 0) + 1, f"{len(d['confirmed_lists'])} Theia list(s) shown ({n} ion/harmonic entries)."
 
 
-# A + symbol in the squares once they are big enough on screen to read
-# (done in the browser: it knows the size of a square in pixels).
-# Only when the view is still, as for Theia's isochronicity labels: a
-# scroll-wheel zoom is a preview that Plotly commits later, and a restyle in
-# between throws the preview away (the zoom pulses and the squares flicker).
-# So the labels are switched 0.4 s after the last wheel step / view change,
-# and never while a mouse button is held (drag-zoom / pan).
+# Page hooks, set up once per graph: the canvas with the squares (CANVAS_JS),
+# the hover distance, the counts box under the legend, the enlarged legend
+# symbols and the alternative-identification arrows.  The hover distance and
+# the remembered view are updated only when the view is still (0.4 s after the
+# last wheel step, never while a mouse button is held): a relayout during a
+# wheel zoom throws Plotly's preview away (the zoom pulses).
 app.clientside_callback(
     r"""
     function(_fig) {
         setTimeout(function() {
             var gd = document.querySelector('#chart .js-plotly-plot');
             if (!gd) return;
+            if (window.segreCanvas) window.segreCanvas.install(gd);   // squares (CANVAS_JS)
             if (!gd._segreHook) {
                 gd._segreHook = true;
                 var timer = null, lastWheel = 0, mouseDown = false, QUIET = 400;
@@ -1745,56 +1934,12 @@ app.clientside_callback(
                     if (!gd._fullLayout || !gd._fullLayout.yaxis || !gd.data || !gd.data.length) return;
                     var ya = gd._fullLayout.yaxis, r = ya.range;
                     var px = ya._length / Math.abs(r[1] - r[0]);       // one square, in pixels
-                    var iL = -1, iA = -1, iQ = -1, iQA = -1;
-                    gd.data.forEach(function(t, i) {
-                        if (t.name === 'labels') iL = i;
-                        if (t.name === 'labels-all') iA = i;
-                        if (t.name === 'qlabels') iQ = i;           // identified charge states
-                        if (t.name === 'qlabels-all') iQA = i;
-                    });
-                    // [shown trace, hidden source] pairs, filled together
-                    var pairs = [[iL, iA]];
-                    if (iQ >= 0 && iQA >= 0) pairs.push([iQ, iQA]);
                     var jobs = [], relayoutHD = null;
                     // WebGL hover finds the nearest marker centre within hoverdistance
                     // pixels; the nearest centre is the square under the mouse, so a
                     // radius of ~0.6 square covers the whole square
                     var hd = Math.max(2, Math.round(px * 0.6));
                     if (gd._fullLayout.hoverdistance !== hd) relayoutHD = hd;
-                    // labels: the squares in and around the view (half a view width
-                    // each side, so a short pan still shows them), only when big enough
-                    if (iL >= 0 && iA >= 0) {
-                        var xr = gd._fullLayout.xaxis.range.map(Number), yr = r.map(Number);
-                        var x0 = Math.min(xr[0], xr[1]), x1 = Math.max(xr[0], xr[1]);
-                        var y0 = Math.min(yr[0], yr[1]), y1 = Math.max(yr[0], yr[1]);
-                        var cov = gd._segreCover;      // region the current labels cover
-                        if (px < %d) {
-                            pairs.forEach(function(pr) {
-                                if (gd.data[pr[0]].x.length) jobs.push([{x: [[]], y: [[]], text: [[]]}, [pr[0]]]);
-                            });
-                            gd._segreCover = null;
-                        } else if (!cov || x0 < cov[0] || x1 > cov[1] || y0 < cov[2] || y1 > cov[3]) {
-                            var w = x1 - x0, h = y1 - y0;
-                            cov = [x0 - w / 2, x1 + w / 2, y0 - h / 2, y1 + h / 2];
-                            pairs.forEach(function(pr) {
-                                var A = gd.data[pr[1]], X = [], Y = [], T = [], C = [];
-                                for (var k = 0; k < (A.x || []).length; k++) {
-                                    if (A.x[k] < cov[0] || A.x[k] > cov[1] || A.y[k] < cov[2] || A.y[k] > cov[3]) continue;
-                                    X.push(A.x[k]); Y.push(A.y[k]); T.push(A.text[k]); C.push(A.textfont.color[k]);
-                                }
-                                jobs.push([{x: [X], y: [Y], text: [T], 'textfont.color': [C]}, [pr[0]]]);
-                            });
-                            gd._segreCover = cov;
-                        }
-                        // font grows with the squares: "188Re" fills about 3/4 of a square
-                        if (px >= %d) {
-                            var fs = Math.round(Math.min(26, Math.max(9, px * 0.22)));
-                            pairs.forEach(function(pr) {
-                                if ((gd.data[pr[0]].textfont || {}).size !== fs)
-                                    jobs.push([{'textfont.size': fs}, [pr[0]]]);
-                            });
-                        }
-                    }
                     // remember the view for the next redraw (other colouring, state, overlays)
                     var cv = {x: gd._fullLayout.xaxis.range.map(Number), y: r.map(Number)};
                     var cvKey = JSON.stringify(cv);
@@ -2061,7 +2206,7 @@ app.clientside_callback(
         }, 150);
         return window.dash_clientside.no_update;
     }
-    """ % (LABEL_PX, LABEL_PX, LEGEND_SCALE, SUMMARY_GAP, SUMMARY_PAD, ALT_LINE_COLOUR, ALT_LINE_COLOUR, ALT_LINE_COLOUR, ALT_LINE_COLOUR),
+    """ % (LEGEND_SCALE, SUMMARY_GAP, SUMMARY_PAD, ALT_LINE_COLOUR, ALT_LINE_COLOUR, ALT_LINE_COLOUR, ALT_LINE_COLOUR),
     Output("labels-dummy", "children"),
     Input("chart", "figure"),
 )
