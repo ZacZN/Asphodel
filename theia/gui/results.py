@@ -12,13 +12,13 @@ import collections
 import sqlite3
 import threading
 import traceback
-from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pandas as pd
+import plotly
 import plotly.graph_objects as go
 import dash
-from dash import dash_table, dcc, html, Input, Output, State, Patch
+from dash import dash_table, dcc, html, Input, Output, State
 
 from core import physics, segre_ids
 from core.physics import build_ion_database, hl_allowed
@@ -32,7 +32,7 @@ from .common import (ACCENT, ACCENT_PALE, ACCEPT_BTN, CFG, CONFIRM_BAR, CONFIRME
                      TABLE_CELL, TABLE_HEADER, TABLE_ODD, TABLE_PAGE_SIZE, TABLE_ROW_PX,
                      UNSURE_BTN)
 from .app import app
-from .figures import add_sim_lines, empty_fig, spectrum_figure
+from .figures import EXCLUDED_TRACE, add_sim_lines, empty_fig, spectrum_figure
 from .scan_tab import _fmt_records
 from .logbook import logbook_button
 
@@ -200,8 +200,7 @@ results_tab = html.Div([
                 # snippet_step, so the whole table is not sent to Python on every click)
                 dcc.Store(id="snippet-row", data=None),
                 dcc.Store(id="snippet-next-row", data=None),
-                # what the snippet figure on screen was built for (show_snippet: Patch)
-                dcc.Store(id="snippet-base", data=None),
+                html.Div(id="_snippet-draw-hook", style={"display": "none"}),
                 # bumped after accept / reject / unsure is recorded -> next peak
                 dcc.Store(id="confirm-advance", data=0),
                 # Grows downwards to fill the box (the box fills the page height)
@@ -634,17 +633,20 @@ app.clientside_callback(
 )
 
 
-# Snippet figures: built by _build_snippet, kept for a few peaks, and the next
-# peak's prepared in a background thread while you look at the current one, so
-# Next / accept / reject usually find it ready.  When the next peak is in the
-# same spectrum with the same ion highlighted, only the view, title, match
-# window, peak marker and info box change: sent as a Patch, not the whole
-# figure (the spectrum and its simulated lines are several MB).
-_SNIP_CACHE = collections.OrderedDict()      # key -> (fig, meta)
-_SNIP_PENDING = {}                           # key -> Future of a background build
+# Snippet figures (25 Nov, second version).  Going through Dash cost most of
+# the time of a click: Python encoded the ~11 MB figure as JSON on every click
+# and the browser's Dash layer processed it before Plotly drew it.  Now the
+# page draws the snippet itself (the clientside callback below): it asks POST /_snippet
+# for the row shown, gets the figure as ready-made JSON (built once and kept,
+# _snip_json), and draws it with Plotly.react; meanwhile it already asks for the
+# next row, so Python builds it and the browser holds it before Next is
+# clicked.  When the next peak is in the same spectrum with the same ion
+# highlighted, the page keeps the traces it has and swaps only the per-peak
+# parts (title, ranges, match window, marker, info box).
+_SNIP_CACHE = collections.OrderedDict()      # key -> (json text, meta)
+_SNIP_BUSY = {}                              # key -> threading.Event while being built
 _SNIP_LOCK = threading.Lock()
-_SNIP_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="snippet")
-_SNIP_KEEP = 6
+_SNIP_KEEP = 8
 
 
 def _snip_key(row, half_width, show_excluded, path):
@@ -729,99 +731,118 @@ def _build_snippet(row, half_width, show_excluded, path):
 
 
 
-def _snippet(row, half_width, show_excluded, path):
-    """(fig, meta) for a row: from the cache, from a background build already
-    running, or built now."""
+def _snip_json(row, half_width, show_excluded, path):
+    """(JSON text of {fig, meta}) for a hits-table row: kept, being built by
+    another request (wait for it), or built now."""
     key = _snip_key(row, half_width, show_excluded, path)
-    with _SNIP_LOCK:
-        hit = _SNIP_CACHE.get(key)
-        fut = _SNIP_PENDING.get(key)
-    if hit is None and fut is not None:
-        try:
-            fut.result()
-        except Exception:
-            pass
+    while True:
         with _SNIP_LOCK:
             hit = _SNIP_CACHE.get(key)
-    if hit is not None:
-        return hit
-    fig, meta = _build_snippet(row, half_width, show_excluded, path)
-    if meta is not None:
-        _snip_store(key, fig, meta)
-    return fig, meta
-
-
-def _snip_store(key, fig, meta):
-    with _SNIP_LOCK:
-        _SNIP_CACHE[key] = (fig, meta)
-        _SNIP_CACHE.move_to_end(key)
-        while len(_SNIP_CACHE) > _SNIP_KEEP:
-            _SNIP_CACHE.popitem(last=False)
-
-
-def _prefetch_snippet(row, half_width, show_excluded, path):
-    """Build the next peak's figure in the background (once)."""
-    if not row or not path:
-        return
-    key = _snip_key(row, half_width, show_excluded, path)
-    with _SNIP_LOCK:
-        if key in _SNIP_CACHE or key in _SNIP_PENDING:
-            return
-
-    def job():
-        try:
-            fig, meta = _build_snippet(row, half_width, show_excluded, path)
-            if meta is not None:
-                _snip_store(key, fig, meta)
-        finally:
+            if hit is not None:
+                _SNIP_CACHE.move_to_end(key)
+                return hit
+            ev = _SNIP_BUSY.get(key)
+            if ev is None:
+                ev = _SNIP_BUSY[key] = threading.Event()
+                break
+        ev.wait(60)
+    try:
+        fig, meta = _build_snippet(row, half_width, show_excluded, path)
+        text = json.dumps({"fig": fig.to_plotly_json(), "meta": meta},
+                          cls=plotly.utils.PlotlyJSONEncoder)
+        if meta is not None:
             with _SNIP_LOCK:
-                _SNIP_PENDING.pop(key, None)
-
-    with _SNIP_LOCK:
-        _SNIP_PENDING[key] = _SNIP_POOL.submit(job)
-
-
-def _same_layout(a, b):
-    return bool(a and b and a["base"] == b["base"] and a["n_shapes"] == b["n_shapes"]
-                and a["n_ann"] == b["n_ann"] and a["n_data"] == b["n_data"]
-                and a["vrect"] == b["vrect"] and a["marker"] == b["marker"] and a["box"] == b["box"])
+                _SNIP_CACHE[key] = text
+                while len(_SNIP_CACHE) > _SNIP_KEEP:
+                    _SNIP_CACHE.popitem(last=False)
+        return text
+    finally:
+        with _SNIP_LOCK:
+            _SNIP_BUSY.pop(key, None)
+        ev.set()
 
 
-@app.callback(
-    Output("snippet-graph", "figure"),
-    Output("snippet-base", "data"),
+@app.server.route("/_snippet", methods=["POST"])
+def _snippet_route():
+    """The snippet figure for {db, row, width, excl} (drawn by the page, see below)."""
+    from flask import Response, request
+    try:
+        q = request.get_json(force=True) or {}
+        row, path = q.get("row"), q.get("db")
+        if not row or not path:
+            text = json.dumps({"fig": empty_fig("No identifications to show").to_plotly_json(),
+                               "meta": None}, cls=plotly.utils.PlotlyJSONEncoder)
+        else:
+            text = _snip_json(row, q.get("width"), bool(q.get("excl")), path)
+    except Exception as exc:
+        traceback.print_exc()
+        text = json.dumps({"fig": empty_fig(f"Could not load spectrum: {exc}").to_plotly_json(),
+                           "meta": None}, cls=plotly.utils.PlotlyJSONEncoder)
+    return Response(text, mimetype="application/json", headers={"Cache-Control": "no-store"})
+
+
+app.clientside_callback(
+    """
+    function(row, width, excl, db, next) {
+        var S = window._theiaSnip || (window._theiaSnip = {cache: {}, order: [], seq: 0, shown: null});
+        var nu = window.dash_clientside.no_update;
+        var ex = !!(excl && excl.length);
+        var key = function(r) {
+            return JSON.stringify([db, r.spectrum_id, r.peak_id, r.ion, r.harmonic, +width || 1000, ex]);
+        };
+        // ask Python for a row's figure (once; the answer is kept for a few rows)
+        var get = function(r) {
+            var k = key(r);
+            if (!S.cache[k]) {
+                S.cache[k] = fetch('/_snippet', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                                 body: JSON.stringify({db: db, row: r, width: width, excl: ex})})
+                    .then(function(resp) { return resp.json(); });
+                S.cache[k].catch(function() { delete S.cache[k]; });
+                S.order.push(k);
+                while (S.order.length > 8) delete S.cache[S.order.shift()];
+            }
+            return S.cache[k];
+        };
+        var same = function(a, b) {
+            return a && b && ['base', 'n_shapes', 'n_ann', 'n_data', 'vrect', 'marker', 'box']
+                .every(function(k) { return a[k] === b[k]; });
+        };
+        var seq = ++S.seq;
+        var draw = function(res) {
+            if (seq !== S.seq) return;                     // a newer click won
+            var gd = document.querySelector('#snippet-graph .js-plotly-plot');
+            if (!gd) { setTimeout(function() { draw(res); }, 100); return; }
+            var fig = res.fig, meta = res.meta, data = fig.data;
+            if (meta && same(meta, S.shown) && gd.data && gd.data.length === data.length) {
+                // same spectrum and ion: keep the traces on screen, new marker only
+                data = gd.data.map(function(t, i) { return i === meta.marker ? fig.data[i] : t; });
+            } else {
+                // the half-life-excluded lines as the checkbox says
+                data.forEach(function(t) { if (t.name === '%s') t.visible = ex; });
+            }
+            S.shown = meta;
+            Plotly.react(gd, data, fig.layout, {scrollZoom: true, responsive: true});
+        };
+        if (!row || !db) {
+            draw({fig: {data: [], layout: {template: 'plotly_white', title: {text: ''},
+                  annotations: [{text: 'No identifications to show', showarrow: false,
+                                 xref: 'paper', yref: 'paper', x: 0.5, y: 0.5}],
+                  xaxis: {visible: false}, yaxis: {visible: false}}}, meta: null});
+            return nu;
+        }
+        get(row).then(draw, function(e) { console.log('[snippet] ' + e); });
+        // and prepare the next peak meanwhile (Python builds it, the browser keeps it)
+        if (next) setTimeout(function() { get(next); }, 30);
+        return nu;
+    }
+    """ % EXCLUDED_TRACE,
+    Output("_snippet-draw-hook", "children"),
     Input("snippet-row", "data"),
     Input("snippet-width", "value"),
     State("snippet-show-excluded", "value"),
     State("db-select", "value"),
     State("snippet-next-row", "data"),
-    State("snippet-base", "data"),
 )
-def show_snippet(row, half_width, show_excluded, path, next_row, shown):
-    if not row or not path:
-        return empty_fig("No identifications to show"), None
-    fig, meta = _snippet(row, half_width, show_excluded, path)
-    # meanwhile prepare the next peak (after this reply has gone out)
-    threading.Timer(0.3, _prefetch_snippet, args=(next_row, half_width, show_excluded, path)).start()
-    if meta is None:
-        return fig, None
-    if not _same_layout(meta, shown):
-        return fig, meta
-    # same spectrum and highlighted ion as the figure on screen: send only what changes
-    p = Patch()
-    lay = fig.layout
-    p["layout"]["title"]["text"] = lay.title.text
-    p["layout"]["uirevision"] = lay.uirevision
-    p["layout"]["xaxis"]["range"] = list(lay.xaxis.range)
-    p["layout"]["xaxis"]["autorange"] = False
-    if lay.yaxis.range is not None:
-        p["layout"]["yaxis"]["range"] = list(lay.yaxis.range)
-        p["layout"]["yaxis"]["autorange"] = False
-    p["layout"]["shapes"][meta["vrect"]] = lay.shapes[meta["vrect"]].to_plotly_json()
-    p["data"][meta["marker"]] = fig.data[meta["marker"]].to_plotly_json()
-    if meta["box"] is not None:
-        p["layout"]["annotations"][meta["box"]] = lay.annotations[meta["box"]].to_plotly_json()
-    return p, meta
 
 
 @app.callback(
