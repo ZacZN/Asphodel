@@ -565,8 +565,10 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
         # the browser, so the page moves the box ("idsummary") to the legend's bottom edge after
         # each draw / resize; y here is an estimate (legend rows of LEGEND_ROW_PX) so it starts close.
         n_leg = sum(1 for t in fig.data if t.showlegend)
+        items = id_summary_items([e for es in id_cells.values() for e in es])
+        fig.update_layout(meta=dict(fig.layout.meta or {}, summary=items, summary_indent=SUMMARY_INDENT))
         fig.add_annotation(
-            name="idsummary", text=id_summary_text([e for es in id_cells.values() for e in es]),
+            name="idsummary", text=id_summary_text(items),
             xref="paper", yref="paper", x=0, xshift=LEGEND_EDGE - PLOT_MARGIN_L,  # = legend's left edge
             y=0.99, xanchor="left", yanchor="top",
             yshift=-(n_leg * LEGEND_ROW_PX + 2 + SUMMARY_GAP), align="left", showarrow=False,
@@ -909,16 +911,25 @@ def id_coverage(entries):
 SUMMARY_INDENT = "\u00a0" * 8    # value lines indented under their label (no-break spaces)
 
 
-def id_summary_text(entries):
-    """The box's text, label and value on two lines (27 Nov, decided by Zac, keeps the box
-    narrow): 'Ground states:' / '    42 (+7 unsure)', one pair per count, then the
-    percentages 'Simulated region identified:' / '    42.1 % (+9.8 % unsure)'."""
-    lines = []
+def id_summary_items(entries):
+    """The box's counts as [label, bold value, rest]: ['Ground states:', '42', ' (+7 unsure)'],
+    then the percentages ['Simulated region identified:', '42.1 %', ' (+9.8 % unsure)']."""
+    items = []
     for lbl, conf, uns in id_summary(entries):
-        lines += [f"{lbl}:", SUMMARY_INDENT + f"<b>{conf}</b>" + (f" (+{uns} unsure)" if uns else "")]
+        items.append([f"{lbl}:", f"{conf}", f" (+{uns} unsure)" if uns else ""])
     for lbl, conf, uns in id_coverage(entries):
-        lines += [f"{lbl}:",
-                  SUMMARY_INDENT + f"<b>{conf:.1f} %</b>" + (f" (+{uns:.1f} % unsure)" if uns else "")]
+        items.append([f"{lbl}:", f"{conf:.1f} %", f" (+{uns:.1f} % unsure)" if uns else ""])
+    return items
+
+
+def id_summary_text(items):
+    """The box's text as Python draws it: every count with label and value on two lines,
+    value indented ('Ground states:' / '        42 (+7 unsure)').  The page then puts each
+    count on one line where it fits at the font it picks (27 Nov, decided by Zac); the
+    two-line form is what it measures the box from (same items in layout.meta.summary)."""
+    lines = []
+    for lbl, val, rest in items:
+        lines += [lbl, SUMMARY_INDENT + f"<b>{val}</b>" + rest]
     return "<br>".join(lines)
 
 
@@ -2071,25 +2082,65 @@ app.clientside_callback(
                         // counts box stretched down to the bottom of the window, EDGE px above it
                         // (27 Nov, Zac), its font as big as fits: limited by that height and by the
                         // legend's width (the box never gets wider than the legend), at least MINF px.
-                        // Its 'height' is the text height (frame = height + 2 x borderpad + border).
-                        // The text's own size at its Python font is read while height / width are
-                        // unset (kept per figure in gd._segreSum); text size ~ font size.
+                        // Each count (layout.meta.summary: [label, bold value, rest]) goes on one
+                        // line where it fits that width, else label / indented value on two lines;
+                        // the font is chosen first (biggest that fits with the fewest lines), then
+                        // the one-line counts at that size (Zac).  Text widths from a canvas at
+                        // 100 px, scaled, calibrated against Plotly's own drawing of the two-line
+                        // text (read while height / width are unset, kept per figure in
+                        // gd._segreSum).  'height' is the text height (frame = + 2 x pad + border).
                         var bx = gd.querySelector('g.annotation[data-index="' + i + '"] rect.bg');
                         if (a.height == null && bx) {
                             S.boxNatH = parseFloat(bx.getAttribute('height')) - 2 * PAD - 2;
                             S.boxFont = (a.font && a.font.size) || 15;       // the size it was measured at
                         }
                         var L0 = gd._fullLayout, ys = fix['annotations[' + i + '].yshift'], MINF = 9;
-                        var BOT = %d;
+                        var BOT = %d, items = ((gd.layout.meta || {}).summary) || [];
                         if (ys == null) ys = a.yshift || 0;
-                        if (L0 && L0._size && L0.height > 0 && S.boxNatH > 0) {
+                        if (L0 && L0._size && L0.height > 0 && S.boxNatH > 0 && items.length
+                                && S.boxNat > 0 && S.legNat > 0) {
+                            if (!S.unit) {               // widths at 1 px font: [one line, two lines]
+                                var cv = S.cv || (S.cv = document.createElement('canvas')).getContext('2d');
+                                var fam = (L0.font && L0.font.family) || 'sans-serif';
+                                var ind = gd.layout.meta.summary_indent || '';
+                                var mw = function(t, b) { cv.font = (b ? 'bold ' : '') + '100px ' + fam;
+                                                          return cv.measureText(t).width / 100; };
+                                S.unit = items.map(function(it) {
+                                    var v = mw(it[1], true) + mw(it[2]);
+                                    return [mw(it[0] + ' ') + v, Math.max(mw(it[0]), mw(ind) + v)];
+                                });
+                                var two = Math.max.apply(null, S.unit.map(function(u) { return u[1]; }));
+                                S.k = (S.boxNat - 2 * PAD - 2) / (S.boxFont * two);   // canvas -> Plotly
+                                S.lh = S.boxNatH / (2 * items.length * S.boxFont);    // line height / font
+                            }
                             var top = L0._size.t + (1 - a.y) * L0._size.h - ys;
                             var avail = L0.height - BOT - top - 2 * PAD - 2;
-                            var fs = S.boxFont * avail / S.boxNatH;                       // fills the height
-                            var natW = S.boxNat - 2 * PAD - 2, maxW = S.legNat - 2 * PAD - 2;
-                            if (natW > 0 && maxW > 0) fs = Math.min(fs, 0.97 * S.boxFont * maxW / natW);
-                            fs = Math.max(MINF, Math.floor(fs * 10) / 10);
-                            var th = Math.round(Math.max(S.boxNatH * fs / S.boxFont, avail));
+                            var maxW = 0.97 * (S.legNat - 2 * PAD - 2);
+                            var layout = function(f) {          // [one-line flags, lines] or null
+                                var one = [], n = 0;
+                                for (var j = 0; j < S.unit.length; j++) {
+                                    if (S.unit[j][1] * S.k * f > maxW) return null;
+                                    one.push(S.unit[j][0] * S.k * f <= maxW);
+                                    n += one[j] ? 1 : 2;
+                                }
+                                return n * S.lh * f <= avail ? [one, n] : null;
+                            };
+                            var fs = Math.floor(Math.min(avail / (items.length * S.lh),
+                                                         maxW / (S.k * Math.max.apply(null,
+                                                             S.unit.map(function(u) { return u[1]; })))) * 10) / 10;
+                            var lay = null;
+                            for (; fs > MINF; fs = Math.round((fs - 0.1) * 10) / 10)
+                                if ((lay = layout(fs))) break;
+                            if (!lay) { fs = MINF; lay = [S.unit.map(function(u) { return u[0] * S.k * MINF <= maxW; }), 0]; }
+                            var ind2 = gd.layout.meta.summary_indent || '', lines = [], nl = 0;
+                            items.forEach(function(it, j) {
+                                var v = '<b>' + it[1] + '</b>' + it[2];
+                                if (lay[0][j]) { lines.push(it[0] + ' ' + v); nl += 1; }
+                                else { lines.push(it[0], ind2 + v); nl += 2; }
+                            });
+                            var txt = lines.join('<br>');
+                            if (a.text !== txt) fix['annotations[' + i + '].text'] = txt;
+                            var th = Math.round(Math.max(nl * S.lh * fs, avail));
                             if (a.height == null || Math.abs(a.height - th) >= 1) fix['annotations[' + i + '].height'] = th;
                             if (Math.abs(((a.font && a.font.size) || S.boxFont) - fs) >= 0.1)
                                 fix['annotations[' + i + '].font.size'] = fs;
