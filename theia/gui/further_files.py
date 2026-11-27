@@ -18,6 +18,7 @@ import dash
 from dash import ALL, dcc, html, Input, Output, State
 
 from core import corrections, paths, physics, summing
+from core.peakfit import noise_sigma
 from core.physics import build_ion_database, hl_allowed, hl_cut_text, HL_CUT_UNITS, HL_UNITS
 from core.scan import load_config, load_spectrum, natural_key, parse_settings
 
@@ -632,11 +633,9 @@ _SUM_META = {}
 
 def _cache_sum(ff, pp):
     key = f"{time.time():.6f}"
-    d = np.diff(pp[np.isfinite(pp)])
-    # noise sigma per bin from the bin-to-bin differences (robust to peaks)
-    sigma = float(1.4826 * np.median(np.abs(d - np.median(d))) / np.sqrt(2)) if len(d) else 1.0
+    sigma = noise_sigma(pp)          # core/peakfit.py (same estimate as the spectrogram)
     with _SUM_CACHE_LOCK:
-        _SUM_CACHE[key] = (ff, pp, sigma or 1.0)
+        _SUM_CACHE[key] = (ff, pp, sigma)
         for k in list(_SUM_CACHE)[:-4]:          # keep the last few sums only
             _SUM_CACHE.pop(k, None)
             _SUM_META.pop(k, None)

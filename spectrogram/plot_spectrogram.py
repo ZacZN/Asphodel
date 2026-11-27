@@ -1295,6 +1295,7 @@ function _regDrawShape() {
                      line: {color: b.color, width: e[2] ? 2.5 : 2, dash: e[2] ? 'dash' : 'solid'}});
       });
     });
+    if (typeof _energyShapes === 'function') shapes = shapes.concat(_energyShapes());  // energy brackets
     Plotly.relayout('heatPlot', {shapes: shapes});
   }
   _regDraw3d();
@@ -1899,6 +1900,405 @@ async function lbSave() {
 """
 
 
+# ---------------------------------------------------------------------------
+# Energy calculation panel (replaces the 3-D view while it is open; the peaks
+# are clicked on the 1-D overlay of the 2-D plot).  Same steps as Theia's
+# "Energy Calculation" box; the calculation is core/energy.py (energy_request).
+# ---------------------------------------------------------------------------
+ENERGY_CSS = """
+  #energyDiv { flex: 1; min-width: 0; border: 1px solid #374151; border-radius: 8px;
+               padding: 0; background: #1f2937; overflow-y: auto; }
+  #energyDiv .en-title { font-size: 13px; font-weight: 600; text-transform: uppercase;
+                         letter-spacing: .06em; color: #f97316; }
+  #energyDiv .en-body { display: flex; flex-direction: column; gap: 8px; padding: 12px 16px 16px; }
+  #enStatus { font-size: 13px; color: #e5e7eb; }
+  #enStatus.err { color: #f87171; }
+  .en-sub { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+            color: #9ca3af; }
+  table.en-tbl { border-collapse: collapse; font-size: 13px; width: 100%; }
+  table.en-tbl th { background: #f97316; color: #fff; font-weight: 600; font-size: 11px;
+                    text-transform: uppercase; letter-spacing: .04em; padding: 4px 8px;
+                    text-align: left; white-space: nowrap; }
+  table.en-tbl td { padding: 5px 8px; border-bottom: 1px solid #374151; vertical-align: middle; }
+  table.en-tbl td.num { font-family: monospace; white-space: nowrap; }
+  table.en-tbl td.idx { color: #f97316; font-weight: 700; }
+  table.en-tbl td .src { font-size: 11px; color: #9ca3af; font-family: inherit; white-space: normal; }
+  table.en-tbl td.muted, table.en-tbl .muted { color: #9ca3af; }
+  table.en-tbl td.bad { color: #f87171; font-size: 12px; }
+  table.en-pairs tbody tr:nth-child(odd) td { background: rgba(249,115,22,0.07); }
+  table.en-pairs td.srccol { font-size: 12px; color: #9ca3af; }
+  .en-name { display: flex; gap: 6px; align-items: center; }
+  .en-name input { width: 150px; background: #374151; border: 1px solid #4b5563; border-radius: 4px;
+                   color: #e5e7eb; padding: 3px 7px; font-size: 13px; }
+  .en-name input:focus { outline: none; border-color: #f97316; }
+  #energyDiv button { background: #f97316; border: none; border-radius: 4px; color: #111827;
+                      font-size: 12px; font-weight: 700; padding: 4px 12px; cursor: pointer;
+                      white-space: nowrap; }
+  #energyDiv button:hover { background: #fb923c; }
+  #energyDiv button.sec { background: #374151; color: #e5e7eb; border: 1px solid #4b5563; }
+  #energyDiv button.sec:hover { border-color: #f97316; }
+  #energyDiv button.sim-x { background: none; border: none; color: #9ca3af; font-size: 20px;
+                            padding: 0 4px; }
+  #energyDiv button.sim-x:hover { color: #e5e7eb; }
+  #energyDiv button.en-info { background: none; border: 1px solid #4b5563; color: #9ca3af;
+                              border-radius: 50%; width: 20px; height: 20px; padding: 0;
+                              font-size: 12px; line-height: 18px; margin-left: 8px; }
+  #energyDiv button.en-info:hover { color: #e5e7eb; border-color: #f97316; }
+  .en-btns { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .en-btns label { font-size: 12px; color: #9ca3af; margin-left: 8px; }
+  .en-btns select { background: #374151; border: 1px solid #4b5563; border-radius: 4px;
+                    color: #e5e7eb; padding: 3px 4px; font-size: 13px; }
+  #enCalib { font-size: 13px; }
+  #enCalib b { color: #f97316; }
+  .en-sugg { background: #111827; border: 1px solid #374151; border-radius: 6px;
+             max-height: 260px; overflow-y: auto; }
+  .en-sugg .note { font-size: 12px; color: #4ade80; padding: 4px 12px; }
+  .en-sugg .note.muted { color: #9ca3af; }
+  .en-sugg .row { display: grid; grid-template-columns: 1.3fr .8fr 1.4fr 1fr; gap: 10px;
+                  padding: 4px 12px; font-size: 13px; font-variant-numeric: tabular-nums; }
+  .en-sugg .row.hdr { color: #9ca3af; font-size: 11px; text-transform: uppercase;
+                      letter-spacing: .06em; position: sticky; top: 0; background: #1f2937; }
+  .en-sugg .row.item { cursor: pointer; }
+  .en-sugg .row.item:hover { background: #7c2d12; }
+  .en-sugg .row .mono { font-family: monospace; }
+  .en-help { font-size: 12px; color: #d1d5db; background: #111827; border: 1px solid #374151;
+             border-radius: 6px; padding: 8px 12px 8px 26px; margin: 0; }
+  .en-help li { margin-bottom: 4px; }
+  .opt-grp button.on { background: #fef3c7; color: #9a3412; box-shadow: inset 0 0 0 2px #f97316; }
+  #heatDiv.energy .nsewdrag { cursor: crosshair !important; }
+"""
+
+ENERGY_HELP = [
+    "Turn on Energy Calculation: this panel replaces the 3-D view, and the 1-D overlay "
+    "(power summed over the time-slider window) is shown on the 2-D plot.  Click peaks on "
+    "the 2-D plot: the frequency under the mouse is used, whatever the time.",
+    "Each clicked peak is fitted on its own in a small window of the time-window sum "
+    "(the peak shape chosen below + a constant background).  The time window used is "
+    "listed with each peak.",
+    "Step 1 – calibration: click two peaks, give their NUBASE names (or click a suggested "
+    "nearby simulated ion) and press Calibrate.",
+    "Calibration: k = (M₂ − M₁) / (f₂ − f₁).  With charges in both names (207Tl81+) the ion "
+    "masses are used (electron masses and NIST binding energies included); without charges the "
+    "atomic mass excesses.  For two states of the same nuclide the excitation energies are used.",
+    "Step 2: click peaks in pairs A, B:  ΔE = E(B) − E(A) = k·(f_B − f_A).",
+    "A linear keV-per-Hz calibration is only accurate for pairs close in frequency to the "
+    "calibration peaks (ideally the same A/q).",
+    "The calibration and pairs are saved for this file and shown again when it is reopened.",
+]
+
+ENERGY_HTML = """
+  <div id="energyDiv" style="display:none;">
+    <div class="sim-head">
+      <span style="display:flex; align-items:center;"><span class="en-title">Energy Calculation</span>
+        <button class="en-info" onclick="enHelp()" title="How the energy calculation works">i</button></span>
+      <button class="sim-x" onclick="energyToggle(false)" title="Close (back to the 3-D view)">×</button>
+    </div>
+    <div class="en-body">
+      <ul id="enHelp" class="en-help" style="display:none;">__HELP__</ul>
+      <div id="enStatus"></div>
+      <div class="en-sub">Calibrant Ions</div>
+      <table class="en-tbl">
+        <thead><tr><th></th><th>Name</th><th>Mass Excess (keV)</th><th>Frequency (Hz)</th><th>FWHM (Hz)</th></tr></thead>
+        <tbody>
+          __ROWS__
+        </tbody>
+      </table>
+      <div id="enSugg1" class="en-sugg" style="display:none;"></div>
+      <div id="enSugg2" class="en-sugg" style="display:none;"></div>
+      <div id="enCalib"></div>
+      <div class="en-btns">
+        <button onclick="enPost({action: 'calibrate'})">Calibrate</button>
+        <button class="sec" onclick="enPost({action: 'reset'})">Reset Calibration</button>
+        <button class="sec" onclick="enPost({action: 'clear'})">Clear Pairs</button>
+        <label for="enShape">Peak Shape</label>
+        <select id="enShape" onchange="enPost({action: 'shape', shape: this.value})"
+                title="Line shape for the single-peak fits of the clicked peaks">
+          <option value="gauss">Gaussian</option><option value="lorentz">Lorentzian</option>
+          <option value="pvoigt">Pseudo-Voigt</option></select>
+      </div>
+      <table class="en-tbl en-pairs">
+        <thead><tr><th>Pair</th><th>f_A (Hz)</th><th>f_B (Hz)</th><th>f_B − f_A (Hz)</th>
+                   <th>E(B) − E(A) (keV)</th><th>Frequencies From</th></tr></thead>
+        <tbody id="enPairs"></tbody>
+      </table>
+    </div>
+  </div>
+"""
+ENERGY_HTML = ENERGY_HTML.replace("__HELP__", "".join(f"<li>{t}</li>" for t in ENERGY_HELP))
+ENERGY_HTML = ENERGY_HTML.replace("__ROWS__", "".join(f"""
+          <tr><td class="idx">{i}</td>
+            <td><div class="en-name">
+              <input type="text" id="enName{i}" placeholder="e.g. 207Tl81+ or m207Tl" autocomplete="off"
+                     onchange="enNames()" onkeydown="if(event.key==='Enter') this.blur()">
+              <button onclick="enSuggToggle({i})" title="Simulated ions near this peak">Suggest ▾</button>
+            </div></td>
+            <td id="enCheck{i}"></td><td id="enF{i}" class="num"></td><td id="enW{i}" class="num"></td></tr>"""
+    for i in (1, 2)))
+
+ENERGY_JS = r"""
+// ── Energy calculation (server: /energy → energy_request, core/energy.py) ──
+var EN_ON = false;          // panel open (clicks on the 2-D plot pick peaks)
+var ENERGY = null;          // last /energy reply
+var EN_TRACE = 8;           // heatPlot trace: picked-peak markers (C1, A1, B1 ...)
+var _enBusy = false;
+
+function _enEsc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, function(c) {
+    return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]; });
+}
+
+function energyToggle(on) {
+  if (on === undefined) on = !EN_ON;
+  EN_ON = !!on;
+  document.getElementById('energyDiv').style.display = EN_ON ? '' : 'none';
+  document.getElementById('surfDiv').style.display   = EN_ON ? 'none' : '';
+  document.getElementById('enBtn').classList.toggle('on', EN_ON);
+  document.getElementById('heatDiv').classList.toggle('energy', EN_ON);
+  if (EN_ON) {
+    var s1 = document.getElementById('show1d');
+    if (!s1.checked) { s1.checked = true; _renderSpec1d(); saveSession(); }   // peaks are picked on it
+    enPost({action: 'get'});
+  } else {
+    // the 3-D plot was hidden: let it take its size again
+    try { Plotly.Plots.resize('specPlot'); } catch (e) {}
+  }
+  _enRender();
+}
+
+function enHelp() {
+  var h = document.getElementById('enHelp');
+  h.style.display = h.style.display === 'none' ? '' : 'none';
+}
+
+async function enPost(body) {
+  if (body.action === 'calibrate' || body.action === 'names') {
+    body.name1 = document.getElementById('enName1').value.trim();
+    body.name2 = document.getElementById('enName2').value.trim();
+  }
+  try {
+    var r = await fetch('/energy', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                    body: JSON.stringify(body)});
+    var d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'error');
+    ENERGY = d;
+  } catch (e) {
+    ENERGY = ENERGY || null;
+    _enStatus('Energy calculation: ' + e.message, true);
+    return;
+  }
+  _enRender();
+}
+
+function enNames() { enPost({action: 'names'}); }
+
+function _enStatus(msg, err) {
+  var s = document.getElementById('enStatus');
+  s.textContent = msg;
+  s.className = err ? 'err' : '';
+}
+
+function enSuggToggle(i) {
+  var a = document.getElementById('enSugg' + i), b = document.getElementById('enSugg' + (3 - i));
+  var open = a.style.display === 'none';
+  a.style.display = open ? '' : 'none';
+  b.style.display = 'none';
+}
+
+function enSuggPick(i, name) {
+  document.getElementById('enName' + i).value = name;
+  document.getElementById('enSugg1').style.display = 'none';
+  document.getElementById('enSugg2').style.display = 'none';
+  enNames();
+}
+
+function _enRender() {
+  var d = ENERGY;
+  if (!d) { _enDraw(); return; }
+  var est = d.state || {};
+  // names: only overwrite while the box is not being edited
+  [1, 2].forEach(function(i) {
+    var inp = document.getElementById('enName' + i);
+    if (document.activeElement !== inp) inp.value = d.names[i - 1] || '';
+  });
+  document.getElementById('enShape').value = d.shape || 'gauss';
+  [1, 2].forEach(function(i) {
+    var c = d.checks[i - 1], cell = document.getElementById('enCheck' + i);
+    if (!c) cell.innerHTML = '<span class="muted">–</span>';
+    else if (c.error) cell.innerHTML = '<span class="bad">✗ ' + _enEsc(c.error) + '</span>';
+    else {
+      var fmt = function(v, n) { return v == null ? '?' : v.toFixed(n); };
+      cell.innerHTML = '<span class="num" style="font-family:monospace">' + fmt(c.me, 1) + ' ± ' +
+        fmt(c.dme, 1) + (c.sys ? ' #' : '') + '</span>' +
+        (c.iso ? '<div class="src" style="font-family:monospace">E_x = ' + fmt(c.ex, 2) + ' ± ' +
+                 fmt(c.dex, 2) + '</div>' : '');
+    }
+    var p = d.calib[i - 1];
+    document.getElementById('enF' + i).innerHTML = p
+      ? _enEsc(p.f) + '<div class="src">' + _enEsc(p.src) + '</div>'
+      : '<span class="muted" style="font-family:inherit">click the peak on the plot</span>';
+    document.getElementById('enW' + i).innerHTML = p ? _enEsc(p.fwhm) : '<span class="muted">–</span>';
+    // suggestions: nearby simulated ions, nearest first; a click fills the name
+    var box = document.getElementById('enSugg' + i);
+    if (!p) box.innerHTML = '<div class="note muted">Click the peak on the plot first.</div>';
+    else if (!p.suggest.length)
+      box.innerHTML = '<div class="note muted">No simulated ions near this peak (check the PID settings?).</div>';
+    else {
+      var f0 = est.calib[i - 1].f;
+      var html = '<div class="note">' + p.suggest.length + ' nearby, nearest centre first, click one</div>' +
+        '<div class="row hdr"><span>Ion</span><span>Harmonic</span><span>f_sim (Hz)</span><span>From Centre</span></div>';
+      p.suggest.forEach(function(s) {
+        html += '<div class="row item" onclick="enSuggPick(' + i + ', \'' + _enEsc(s[0]) + '\')">' +
+          '<span style="font-weight:600">' + _enEsc(s[0]) + '</span><span>h' + s[1] + '</span>' +
+          '<span class="mono">' + (f0 + s[2]).toLocaleString('en-GB', {minimumFractionDigits: 1, maximumFractionDigits: 1}) +
+          '</span><span class="mono">' + (s[2] >= 0 ? '+' : '') + s[2].toFixed(0) + ' Hz</span></div>';
+      });
+      box.innerHTML = html;
+    }
+  });
+  document.getElementById('enCalib').innerHTML = d.calib_text
+    ? '<b>Calibration: </b>' + _enEsc(d.calib_text) : '';
+  if (est.msg) _enStatus(est.msg, true); else _enStatus(d.status, false);
+  document.getElementById('enPairs').innerHTML = d.pairs.map(function(p) {
+    return '<tr><td>' + p.pair + '</td><td class="num">' + p.f_A.toFixed(1) + '</td><td class="num">' +
+      p.f_B.toFixed(1) + '</td><td class="num">' + _enEsc(p.df) + '</td><td class="num">' + _enEsc(p.de) +
+      '</td><td class="srccol">' + _enEsc(p.src) + '</td></tr>';
+  }).join('') || '<tr><td colspan="6" class="muted">No pairs yet.</td></tr>';
+  if (_spec1dY) _renderSpec1d(); else _enDraw();   // (overlay range leaves room for the brackets)
+}
+
+// value of the 1-D overlay (as drawn: linear or dB) at frequency f
+function _enOverlayAt(f) {
+  if (!_spec1dY || !F_1D.length) return null;
+  var lo = 0, hi = F_1D.length - 1;
+  if (f <= F_1D[lo]) return _enY(_spec1dY[lo]);
+  if (f >= F_1D[hi]) return _enY(_spec1dY[hi]);
+  while (hi - lo > 1) { var m = (lo + hi) >> 1; if (F_1D[m] <= f) lo = m; else hi = m; }
+  var t = (f - F_1D[lo]) / (F_1D[hi] - F_1D[lo]);
+  return _enY(_spec1dY[lo] + t * (_spec1dY[hi] - _spec1dY[lo]));
+}
+function _enY(v) {
+  return document.getElementById('dbCheck').checked ? (v > 0 ? 10 * Math.log10(v) : NaN) : v;
+}
+// highest overlay value between two frequencies
+function _enOverlayMax(f0, f1) {
+  var lo = Math.min(f0, f1), hi = Math.max(f0, f1), top = -Infinity;
+  for (var i = 0; i < F_1D.length; i++) {
+    if (F_1D[i] < lo || F_1D[i] > hi) continue;
+    var v = _enY(_spec1dY[i]);
+    if (isFinite(v) && v > top) top = v;
+  }
+  return top;
+}
+
+function _enHasPairs() { return !!(ENERGY && ENERGY.state && (ENERGY.state.pairs || []).length); }
+
+// brackets beside each pair (from centre A to centre B along the frequency axis)
+// with ΔE ± σ; their horizontal size is in PIXELS to the right of the highest
+// overlay point between the peaks, so they stay put at any zoom (as Theia)
+function _energyShapes() {
+  var out = [];
+  if (!ENERGY || !_spec1dY || !document.getElementById('show1d').checked) return out;
+  var line = {color: '#ffffff', width: 1.5};
+  (ENERGY.state.pairs || []).forEach(function(pr, i) {
+    var fa = pr.a.f, fb = pr.b.f, mid = 0.5 * (fa + fb);
+    var top = Math.max(_enOverlayAt(fa), _enOverlayAt(fb), _enOverlayMax(fa, fb));
+    if (!isFinite(top)) return;
+    var h = 16 + 26 * i;           // later pairs further out
+    var c = {type: 'line', xref: 'x2', yref: 'y', xsizemode: 'pixel', xanchor: top, line: line,
+             layer: 'above'};
+    out.push(Object.assign({}, c, {x0: h, x1: h, y0: fa, y1: fb}),          // along the pair
+             Object.assign({}, c, {x0: h - 7, x1: h, y0: fa, y1: fa}),      // tick at A
+             Object.assign({}, c, {x0: h - 7, x1: h, y0: fb, y1: fb}),      // tick at B
+             Object.assign({}, c, {x0: h, x1: h + 7, y0: mid, y1: mid}));   // tick to the label
+  });
+  return out;
+}
+function _energyAnnotations() {
+  var out = [];
+  if (!ENERGY || !_spec1dY || !document.getElementById('show1d').checked) return out;
+  (ENERGY.state.pairs || []).forEach(function(pr, i) {
+    var fa = pr.a.f, fb = pr.b.f;
+    var top = Math.max(_enOverlayAt(fa), _enOverlayAt(fb), _enOverlayMax(fa, fb));
+    if (!isFinite(top)) return;
+    var h = 16 + 26 * i;
+    out.push({x: top, y: 0.5 * (fa + fb), xref: 'x2', yref: 'y', xshift: h + 9, xanchor: 'left',
+              yanchor: 'middle', text: ENERGY.pairs[i].de_label, showarrow: false,
+              font: {color: 'black', size: 15}, bgcolor: 'white', bordercolor: 'black',
+              borderwidth: 1.5, borderpad: 3, opacity: 1});
+  });
+  return out;
+}
+
+// picked-peak markers (C1, C2, A1/B1 ...) on the overlay, the brackets and labels
+function _enDraw() {
+  if (typeof _heatReady === 'undefined' || !_heatReady) return;
+  var gd = document.getElementById('heatPlot');
+  if (!gd || !gd.data || gd.data.length <= EN_TRACE) return;
+  var xs = [], ys = [], ts = [];
+  var show = document.getElementById('show1d').checked && _spec1dY;
+  if (ENERGY && show) {
+    var est = ENERGY.state, pts = [];
+    (est.calib || []).forEach(function(p, i) { pts.push([p.f, 'C' + (i + 1)]); });
+    (est.pairs || []).forEach(function(p, i) { pts.push([p.a.f, 'A' + (i + 1)], [p.b.f, 'B' + (i + 1)]); });
+    if (est.pending) pts.push([est.pending.f, 'A' + ((est.pairs || []).length + 1)]);
+    var merged = {}, order = [];                   // one label per position ("C1, A1")
+    pts.forEach(function(p) {
+      var k = p[0].toFixed(1);
+      if (!merged[k]) { merged[k] = {f: p[0], labs: []}; order.push(k); }
+      merged[k].labs.push(p[1]);
+    });
+    order.forEach(function(k) {
+      var m = merged[k], v = _enOverlayAt(m.f);
+      if (v == null || !isFinite(v)) return;
+      xs.push(v); ys.push(m.f); ts.push(m.labs.join(', '));
+    });
+  }
+  Plotly.restyle('heatPlot', {x: [xs], y: [ys], text: [ts]}, [EN_TRACE]);
+  _regDrawShape();          // redraws the shapes: decay-fit boxes + the energy brackets
+  Plotly.relayout('heatPlot', {annotations: _energyAnnotations()});
+}
+
+// clicks on the 2-D plot while the panel is open: frequency under the mouse
+// (caught in JS: < 4 px movement, inside the plot area; drags still zoom/pan)
+var _enDown = null;
+function _enHookClicks() {
+  var gd = document.getElementById('heatPlot');
+  if (!gd || gd._enHooked) return;
+  gd._enHooked = true;
+  gd.addEventListener('mousedown', function(e) {
+    _enDown = (EN_ON && e.button === 0) ? [e.clientX, e.clientY] : null;
+  }, true);
+  // mouseup on the window: plotly puts a drag cover over the page after mousedown
+  window.addEventListener('mouseup', function(e) {
+    if (!_enDown || !EN_ON || (typeof _regDrawing !== 'undefined' && _regDrawing)) return;
+    var moved = Math.hypot(e.clientX - _enDown[0], e.clientY - _enDown[1]);
+    _enDown = null;
+    if (moved >= 4 || !gd._fullLayout) return;
+    var xa = gd._fullLayout.xaxis, ya = gd._fullLayout.yaxis;
+    var rect = gd.getBoundingClientRect();
+    var px = e.clientX - rect.left - xa._offset, py = e.clientY - rect.top - ya._offset;
+    if (px < 0 || px > xa._length || py < 0 || py > ya._length) return;
+    var f = ya.p2d(py);
+    if (!isFinite(f)) return;
+    enClick(f);
+  }, true);
+}
+
+async function enClick(f) {
+  if (_enBusy) return;
+  _enBusy = true;
+  _enStatus('Fitting the peak near ' + Math.round(f).toLocaleString('en-GB') + ' Hz…', false);
+  // the same time window as the 1-D overlay (_fetchSpec1d)
+  var n    = Math.max(1, Math.round(+document.getElementById('nAvg').value || 1));
+  var dtDs = T_RAW.length > 1 ? T_RAW[1] - T_RAW[0] : 0;
+  var half = n * dtDs / 2;
+  var tMin = +document.getElementById('tMin').value, tMax = +document.getElementById('tMax').value;
+  try { await enPost({action: 'click', f: f, tmin: tMin - half, tmax: tMax + half}); }
+  finally { _enBusy = false; }
+}
+"""
+
+
 def logbook_settings_rows(state):
     """Settings the server knows for the popout: file, frequency crop, baseline,
     PID settings (all ticked; options not used say "off")."""
@@ -1938,6 +2338,157 @@ def logbook_save(body, npz_path):
                                        plots=plots, context=context)
     print(f"Results log book: saved to {key} ({results_logbook.logbook_path()})")
     return key
+
+
+# ---------------------------------------------------------------------------
+# Energy calculation (same steps and code as Theia's: core/energy.py)
+# ---------------------------------------------------------------------------
+# Peaks are picked on the 1-D overlay of the 2-D plot, i.e. the power summed
+# over the time-slider window; each click is fitted on its own (local fit:
+# the spectrogram has no main peak fit).  The state is kept per file in the
+# prefs ("energy": {file: {state, names, shape, updated}}), so a file shows its
+# calibration and pairs again when it is reopened.
+ENERGY_SHAPES = ("gauss", "lorentz", "pvoigt")
+ENERGY_MAX_FILES = 50          # files whose energy state is kept in the prefs
+
+
+def _energy_load(npz_path):
+    from core import energy
+    rec = (read_prefs().get("energy") or {}).get(npz_path or "") or {}
+    names = list(rec.get("names") or ["", ""]) + ["", ""]
+    shape = rec.get("shape") if rec.get("shape") in ENERGY_SHAPES else "gauss"
+    return dict(energy.empty_state(), **(rec.get("state") or {})), names[:2], shape
+
+
+def _energy_save(npz_path, est, names, shape):
+    import datetime
+    if not npz_path:
+        return
+    with _PREFS_LOCK:
+        prefs = read_prefs()
+        allrec = prefs.get("energy") if isinstance(prefs.get("energy"), dict) else {}
+        st = {k: v for k, v in est.items() if k != "msg"}
+        allrec[npz_path] = {"state": st, "names": list(names), "shape": shape,
+                            "updated": datetime.datetime.now().isoformat(timespec="seconds")}
+        # keep the most recently used files only
+        keep = sorted(allrec, key=lambda k: str(allrec[k].get("updated", "")))[-ENERGY_MAX_FILES:]
+        prefs["energy"] = {k: allrec[k] for k in keep}
+        write_prefs(prefs)
+
+
+def _json_safe(v):
+    """NaN/inf -> None (the browser's JSON.parse rejects NaN)."""
+    if isinstance(v, dict):
+        return {k: _json_safe(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_json_safe(x) for x in v]
+    if isinstance(v, (float, np.floating)):
+        return float(v) if np.isfinite(v) else None
+    if isinstance(v, np.integer):
+        return int(v)
+    return v
+
+
+def _energy_check(name):
+    """NUBASE mass excess for a typed name, or why it is not valid."""
+    from core import energy
+    if not (name or "").strip():
+        return None
+    try:
+        r = energy.lookup_mass_excess(name)
+        return {"me": r["me"], "dme": r["dme"], "sys": r["sys"], "iso": r["iso"],
+                "ex": r["ex"], "dex": r["dex"]}
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+
+def _energy_suggest(state, f, n=6):
+    """Simulated ions nearest to frequency f (current PID settings, whole file),
+    as Theia's 'Suggest' list: [(ion, harmonic, f_sim - f)]."""
+    if state.get("file_sum") is None:
+        return []
+    try:
+        res = compute_sim_lines(state["file_freq"], state["file_sum"], sim_prefs())
+    except Exception as exc:
+        print(f"Energy calculation: no suggestions ({exc})")
+        return []
+    near = sorted(res["lines"], key=lambda l: abs(l["f"] - f))[:n]
+    return [(l["ion"], int(l["h"]), float(l["f"] - f)) for l in near]
+
+
+def energy_request(body, state):
+    """POST /energy.  body: {action, ...}; actions
+         get                                    current state
+         click {f, tmin, tmax}                  pick the peak at f in the time-window sum
+         names {name1, name2}                   names typed (calibration has to be redone)
+         calibrate {name1, name2}               k from the two calibration peaks
+         reset / clear                          Reset Calibration / Clear Pairs
+         shape {shape}                          line shape for the local fits
+    Returns the state for the page (with the name checks, calibration line, status)."""
+    from core import energy
+    from core.peakfit import noise_sigma
+    npz = state.get("npz_path") or ""
+    est, names, shape = _energy_load(npz)
+    est["msg"] = ""
+    act = body.get("action", "get")
+    if "name1" in body or "name2" in body:
+        new = [str(body.get("name1", names[0]) or ""), str(body.get("name2", names[1]) or "")]
+        if act == "names" and new != names:
+            est["k"], est["dk"] = None, None          # names changed: recalibrate (as Theia)
+        names = new
+    if act == "reset":
+        est, names = energy.empty_state(), ["", ""]
+    elif act == "clear":
+        est["pairs"], est["pending"] = [], None
+    elif act == "shape":
+        if body.get("shape") in ENERGY_SHAPES:
+            shape = body["shape"]
+    elif act == "calibrate":
+        est = energy.calibrate(est, names[0], names[1])
+    elif act == "click":
+        if state.get("t_full") is None:
+            est["msg"] = "No file loaded."
+        else:
+            t_full, p_full, ff = state["t_full"], state["p_full"], state["f_full"]
+            tmin, tmax = float(body.get("tmin", -np.inf)), float(body.get("tmax", np.inf))
+            i0 = int(np.searchsorted(t_full, tmin, side="left"))
+            i1 = int(np.searchsorted(t_full, tmax, side="left"))
+            if i1 <= i0:
+                est["msg"] = "No time frames in the time window."
+            else:
+                pp = np.asarray(p_full[i0:i1], dtype=float).sum(axis=0)
+                order = np.argsort(ff)
+                ffs, pps = np.asarray(ff, float)[order], pp[order]
+                try:
+                    pk = energy.pick_peak(ffs, pps, noise_sigma(pps), float(body["f"]), None, shape)
+                except Exception as exc:
+                    est["msg"] = f"Could not fit the peak there: {exc}"
+                    pk = None
+                if pk is not None:
+                    pk["src"] += (f", t = {float(t_full[i0]):.2f}–{float(t_full[i1 - 1]):.2f} s"
+                                  f" ({i1 - i0} frame{'s' if i1 - i0 != 1 else ''})")
+                    pk["t"] = [float(t_full[i0]), float(t_full[i1 - 1])]
+                    sugg = None
+                    if est.get("k") is None and len(est.get("calib") or []) < 2:
+                        sugg = _energy_suggest(state, pk["f"])
+                    est = energy.add_pick(est, pk, sugg)
+    if act != "get":
+        _energy_save(npz, est, names, shape)
+    return _json_safe({
+        "state": est, "names": names, "shape": shape,
+        "checks": [_energy_check(n) for n in names],
+        "calib_text": energy.calibration_text(est),
+        "status": energy.status_text(est, True),
+        "pairs": [{"pair": i, "f_A": p["a"]["f"], "f_B": p["b"]["f"],
+                   "df": energy.fmt_pm(p["dfreq"], p["ddf"]),
+                   "de": energy.fmt_pm(p["de"], p["dde"], ".2f"),
+                   "de_label": f"ΔE = {energy.fmt_pm(p['de'], p['dde'], '.2f')} keV",
+                   "src": f"A: {p['a']['src']};  B: {p['b']['src']}"}
+                  for i, p in enumerate(est.get("pairs") or [], start=1)],
+        "calib": [{"f": energy.fmt_pm(p["f"], p["df"]), "fwhm": energy.fmt_pm(p.get("fwhm"), p.get("dfwhm")),
+                   "src": p.get("src", ""), "suggest": p.get("suggest") or []}
+                  for p in est.get("calib") or []],
+    })
 
 
 def loader_parts(file_path=None, fmin=None, fmax=None):
@@ -2379,6 +2930,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
 {LOADER_CSS}
 {SIM_CSS}
 {LOGBOOK_CSS}
+{ENERGY_CSS}
 </style>
 </head>
 <body>
@@ -2443,6 +2995,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
       <button id="blBtn" onclick="modalOpen('blModal', 'bl_lam')" title="Remove a BrPLS baseline from every time frame">{_bl_btn}</button>
       <button onclick="modalOpen('searchModal', 'srchIon')" title="Find an ion's simulated lines and load a window around one">Search Ions…</button>
       <button onclick="modalOpen('decayModal', DECAY_TAB === 'b' ? 'dtabB' : 'dtabS')" title="Decay-fit settings and Run (Standard and Bateman tabs)">Decay Fit…</button>
+      <button id="enBtn" onclick="energyToggle()" title="Calibrate keV per Hz on two known peaks, then get the energy difference between any two peaks (clicked on the 1-D overlay; the panel replaces the 3-D view)">Energy Calculation</button>
       <button onclick="lbOpen()" title="Send this view (plots, window, ion) to the results log book">Save to Log Book…</button>
       <span id="stepBox" style="display:none;">
       <span id="harmGrp" style="display:none; align-items:center; gap:6px;">
@@ -2555,6 +3108,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
 <div id="plots">
   <div id="heatDiv"><div id="heatPlot"></div></div>
   <div id="surfDiv">{plot_div}</div>
+{ENERGY_HTML}
 </div>
 <div id="fullDiv" style="margin-top:8px;">
   <button id="fullToggle" class="full-toggle" onclick="toggleFull()" aria-expanded="true">
@@ -2566,6 +3120,7 @@ def build_page(freq, time, power, title, log_scale=True, n_avg=1, file_path=None
 {loader_js}
 {SIM_JS}
 {LOGBOOK_JS}
+{ENERGY_JS}
 const Z_RAW = {z_raw_json};
 const SURF_LAYOUT = {surf_layout_json};
 const SURF_STYLE  = {surf_style_json};
@@ -2691,6 +3246,13 @@ function _initHeatmap(h, rebinned, mm) {{
     type: 'scatter', mode: 'lines', x: [], y: [], hovertext: [], hoverinfo: 'text',
     connectgaps: false, showlegend: false, name: 'Reference',
     line: {{ color: 'rgba(255,255,255,1)', width: 1.8 }}
+  }}, {{
+    // Energy calculation: picked peaks (C1, C2, A1/B1 ...) on the 1-D overlay (EN_TRACE)
+    type: 'scatter', mode: 'markers+text', x: [], y: [], text: [], xaxis: 'x2', yaxis: 'y',
+    hoverinfo: 'skip', showlegend: false, name: 'energy picks', cliponaxis: false,
+    textposition: 'middle right', textfont: {{ color: '#4ade80', size: 13 }},
+    marker: {{ symbol: 'triangle-left', size: 11, color: '#4ade80',
+               line: {{ color: '#111827', width: 1 }} }}
   }}], {{
     template: {{}},
     title: {{ text: formatTitleHtml(document.getElementById('plotTitle').value),
@@ -2784,6 +3346,7 @@ function _renderSpec1d() {{
   if (!show) {{
     Plotly.restyle('heatPlot', {{ visible: [false] }}, [1]);
     Plotly.relayout('heatPlot', {{ 'xaxis2.visible': false }});
+    if (typeof _enDraw === 'function') _enDraw();     // hides the energy picks
     return;
   }}
   var useDb = document.getElementById('dbCheck').checked;
@@ -2800,9 +3363,12 @@ function _renderSpec1d() {{
     hovertemplate: ['Freq: %{{y:,.0f}} Hz<br>' + pLabel + ': %{{x:.4g}}<extra></extra>']
   }}, [1]);
   var lay = {{ 'xaxis2.visible': true, 'xaxis2.title.text': pLabel + '  (' + info + ')' }};
+  // room to the right of the peaks for the energy-calculation brackets
+  if (pr && typeof _enHasPairs === 'function' && _enHasPairs()) pr[1] += 0.45 * (pr[1] - pr[0]);
   if (pr) {{ lay['xaxis2.range'] = pr; lay['xaxis2.autorange'] = false; }}
   else    {{ lay['xaxis2.autorange'] = true; }}
   Plotly.relayout('heatPlot', lay);
+  if (typeof _enDraw === 'function') _enDraw();     // energy picks follow the overlay
 }}
 
 // ── Decay-fit controls: enable only what applies to the chosen mode ──────────
@@ -3211,6 +3777,8 @@ var _lastT1d = [null, null];
   _initHeatmap(h, rebinned, mm);
   _initSurface(h, rebinned, mm);
 }})();
+_enHookClicks();
+enPost({{action: 'get'}});    // this file's saved calibration / pairs
 _fetchSpec1d();
 _setFull({_full_open_js});
 // the page is built once per load; re-read the saved state so a browser refresh keeps it
@@ -3741,6 +4309,15 @@ def serve(html, state):
                                               f"core/nubase_4.mas20)"})
                 except Exception as exc:
                     self._send(400, {"error": str(exc)})
+
+            elif self.path == "/energy":
+                # Energy calculation panel (energy_request; core/energy.py)
+                try:
+                    self._send(200, energy_request(self._body(), STATE))
+                except Exception as exc:
+                    import traceback
+                    traceback.print_exc()
+                    self._send(500, {"error": str(exc)})
 
             elif self.path == "/quit":
                 # Quit button: reply first, then let the main loop shut down

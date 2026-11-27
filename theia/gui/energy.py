@@ -7,14 +7,15 @@ Part of Theia (theia/theia.py); split out of theia.py in Nov 2026.
 import json
 import re
 import traceback
-from functools import lru_cache
 
 import numpy as np
-import pandas as pd
 import dash
 from dash import ALL, html, Input, Output, State
 
-from core.nubase_reader import get_base_dataframe, ion_electron_energy_kev
+# the calculation itself is shared with the spectrogram (core/energy.py)
+from core.energy import (add_pick, calibrate, calibration_text, empty_state, fmt_pm,  # noqa: F401
+                         local_peak_fit, lookup_mass_excess, mass_excess_difference, pick_peak,
+                         status_text)
 from core.physics import build_ion_database
 
 from .common import ACCENT, ACCENT_PALE
@@ -24,7 +25,7 @@ from .further_files import (_fit_into_patch, FIT_TRACE_STYLES, pid_base, _pid_di
                             pid_overrides, pid_settings, _RESTORE_ENERGY, _SUM_ANNOTATIONS,
                             _SUM_CACHE, _SUM_CACHE_LOCK, _SUM_META, _SUM_SHAPES, sum_sim_traces,
                             _SUM_SIMS)
-from .further_fit import fit_overlay, _region_mask, run_fit, _snap_peak, SUGG_BOX_STYLE
+from .further_fit import fit_overlay, SUGG_BOX_STYLE
 
 
 # ===========================================================================
@@ -48,128 +49,7 @@ ENERGY_PAIR_TRACE = "energy pairs"
 SIM_TRACE_INDEX = 1 + len(FIT_TRACE_STYLES) + 2
 
 
-@lru_cache(maxsize=1)
-def _nubase_table():
-    d = get_base_dataframe()
-    d = d.copy()
-    for c in ("E_x", "E_x_unc"):
-        d[c] = pd.to_numeric(d[c].astype(str).str.replace("#", "", regex=False), errors="coerce")
-    return d
-
-
-def lookup_mass_excess(name):
-    """NUBASE entry for an ion/nuclide name ('207Tl81+', 'm207Tl', '208Pb').
-    Returns dict(name, A, Z, iso, me, dme, ex, dex, sys) or raises ValueError."""
-    m = re.fullmatch(r"\s*([a-z]?)(\d+)([A-Z][a-z]?)(\d+\+)?\s*", name or "")
-    if not m:
-        raise ValueError(f"'{name}' is not a name like 207Tl81+, m207Tl or 208Pb")
-    iso, A, sym = m.group(1), m.group(2), m.group(3)
-    d = _nubase_table()
-    rows = d[d["Element"].astype(str).str.strip() == f"{A}{sym}"]
-    rows = rows[rows["Isomer_Flag"] == iso] if iso else rows[rows["Isomer_Flag"].isna()]
-    if not len(rows):
-        raise ValueError(f"'{iso}{A}{sym}' is not in NUBASE")
-    r = rows.iloc[0]
-    if pd.isna(r["m.e."]):
-        raise ValueError(f"no mass excess for '{iso}{A}{sym}' in NUBASE")
-    ex = 0.0 if not iso else (float(r["E_x"]) if pd.notna(r["E_x"]) else np.nan)
-    dex = 0.0 if not iso else (float(r["E_x_unc"]) if pd.notna(r["E_x_unc"]) else np.nan)
-    return dict(name=f"{iso}{A}{sym}", A=int(A), Z=int(r["ZZZi"]), iso=iso,
-                me=float(r["m.e."]), dme=float(r["m.e._unc"]) if pd.notna(r["m.e._unc"]) else np.nan,
-                ex=ex, dex=dex, sys=bool(r["m.e. sys?"]))
-
-
-def _name_charge(name):
-    """Charge from an ion name ('207Tl81+' -> 81), None if no charge is given."""
-    m = re.fullmatch(r"\s*[a-z]?\d+[A-Z][a-z]?(\d+)\+\s*", name or "")
-    return int(m.group(1)) if m else None
-
-
-def mass_excess_difference(n1, n2):
-    """Mass difference E(n2) - E(n1) in keV with its uncertainty.
-
-    Nuclear part: NUBASE mass excesses, or for two states of the same nuclide
-    the excitation energies (correlated ME errors).  If both names carry a
-    charge (207Tl81+), the ion masses are used: each side adds
-    -q m_e c^2 + S(Z, q), S = binding energy of the q removed electrons (NIST
-    ionization energies).  Without charges the atomic difference is returned."""
-    a, b = lookup_mass_excess(n1), lookup_mass_excess(n2)
-    same = (a["A"], a["Z"]) == (b["A"], b["Z"]) and np.isfinite(a["ex"]) and np.isfinite(b["ex"])
-    if same:
-        de, dde, how = b["ex"] - a["ex"], float(np.hypot(a["dex"], b["dex"])), "excitation energies"
-    else:
-        de, dde, how = b["me"] - a["me"], float(np.hypot(a["dme"], b["dme"])), "mass excesses"
-    qa, qb = _name_charge(n1), _name_charge(n2)
-    if qa is None or qb is None:
-        return de, dde, a, b, how + " (atomic: give both charges to include the electrons)"
-    for r, q in ((a, qa), (b, qb)):
-        if not 1 <= q <= r["Z"]:
-            raise ValueError(f"charge {q}+ is not possible for {r['name']} (Z = {r['Z']})")
-    ea, dea = ion_electron_energy_kev(a["Z"], qa)
-    eb, deb = ion_electron_energy_kev(b["Z"], qb)
-    if not (np.isfinite(ea) and np.isfinite(eb)):
-        raise ValueError("no NIST ionization energies for one of the ions")
-    a = dict(a, name=f"{a['name']}{qa}+")
-    b = dict(b, name=f"{b['name']}{qb}+")
-    return (de + float(eb - ea), float(np.sqrt(dde ** 2 + dea ** 2 + deb ** 2)), a, b,
-            "ion masses (" + how + ", electron masses, NIST electron binding)")
-
-
-def local_peak_fit(ff, pp, sigma, x, shape):
-    """Fit one peak (with a constant background) in a small window around x,
-    independently of the main fit.  Returns (centre, uncertainty, fwhm)."""
-    pk = _snap_peak(ff, pp, x, [0.0, 0.0], "none")
-    bin_hz = float(np.median(np.diff(ff)))
-    # window of +-1 FWHM around the maximum: wide enough for the peak, narrow
-    # enough to keep neighbouring peaks out
-    half = max(1.0 * pk["fwhm"], 6 * bin_hz)
-    region = [pk["centre"] - half, pk["centre"] + half]
-    m = _region_mask(ff, region)
-    base = float(np.nanmin(pp[m])) if m.any() else 0.0
-    pk = _snap_peak(ff, pp, x, [base, 0.0], "const")
-    pk["shape"] = shape
-    # the centre may only move within half a FWHM of the clicked maximum, so
-    # the fit cannot slide onto a bigger neighbouring peak
-    w = max(0.5 * pk["fwhm"], 2 * bin_hz)
-    st = {"peaks": [pk], "bg": "const", "bgp": [base, 0.0], "region": region,
-          "xref": pk["centre"], "shape": shape,
-          "centre_bounds": [[pk["centre"] - w, pk["centre"] + w]],
-          "fwhm_bounds": [[0.3 * pk["fwhm"], 3.0 * pk["fwhm"]]]}
-    res = run_fit(ff, pp, sigma, st)
-    c = res["peaks"][0]["centre"]
-    dc = res["unc"]["peaks"][0].get("centre", np.nan)
-    dw = res["unc"]["peaks"][0].get("fwhm", np.nan)
-    return float(c), float(dc), float(res["peaks"][0]["fwhm"]), float(dw)
-
-
-def pick_peak(ff, pp, sigma, x, fit_state, shape):
-    """Frequency for a click at x: the centre of a peak in the main fit if the
-    click is on it (within half its FWHM), otherwise a local single-peak fit."""
-    bin_hz = float(np.median(np.diff(ff)))
-    if fit_state and fit_state.get("peaks"):
-        unc = (fit_state.get("unc") or {}).get("peaks") or [{} for _ in fit_state["peaks"]]
-        best = None
-        for i, pk in enumerate(fit_state["peaks"]):
-            d = abs(pk["centre"] - x)
-            if d <= max(0.5 * pk["fwhm"], 2 * bin_hz) and (best is None or d < best[0]):
-                best = (d, i)
-        if best is not None:
-            i = best[1]
-            pk = fit_state["peaks"][i]
-            du = unc[i].get("centre") if i < len(unc) else None
-            src = f"main fit, peak {i + 1}" + ("" if fit_state.get("fitted") else " (not fitted)")
-            dw = unc[i].get("fwhm") if i < len(unc) else None
-            return {"f": float(pk["centre"]), "df": float(du) if du is not None else np.nan,
-                    "fwhm": float(pk["fwhm"]), "dfwhm": float(dw) if dw is not None else np.nan,
-                    "src": src}
-    c, dc, w, dw = local_peak_fit(ff, pp, sigma, x, shape)
-    return {"f": c, "df": dc, "fwhm": w, "dfwhm": dw, "src": "local fit"}
-
-
-def _fmt_pm(v, dv, fmt=".1f"):
-    if v is None or not np.isfinite(v):
-        return "–"
-    return format(v, fmt) + ("" if dv is None or not np.isfinite(dv) else " ± " + format(dv, fmt))
+_fmt_pm = fmt_pm
 
 
 def suggest_ions(key, f, n=6):
@@ -182,8 +62,7 @@ def suggest_ions(key, f, n=6):
     return [(r.ion, int(r.harmonic), float(r.f_sim - f)) for r in near.itertuples()]
 
 
-def _empty_energy():
-    return {"calib": [], "k": None, "dk": None, "pending": None, "pairs": [], "msg": ""}
+_empty_energy = empty_state
 
 
 @app.callback(
@@ -247,50 +126,11 @@ def update_energy(click, name1, name2, _sugg, _cal, _reset, _clear, key, est, fi
             traceback.print_exc()
             est["msg"] = f"Could not fit the peak there: {exc}"
             return est, nu, nu
-        if est.get("k") is None:                      # calibration step
-            if len(est["calib"]) >= 2:
-                est["msg"] = ("Two calibration peaks are already picked: name them and press "
-                              "Calibrate, or Reset to pick again.")
-                return est, nu, nu
-            pk["suggest"] = suggest_ions(key, pk["f"])
-            est["calib"] = est["calib"] + [pk]
-            return est, nu, nu
-        if est.get("pending") is None:                # first peak (A) of a pair
-            est["pending"] = pk
-            return est, nu, nu
-        a, b = est["pending"], pk
-        dfreq = b["f"] - a["f"]
-        ddf = float(np.hypot(np.nan_to_num(a["df"]), np.nan_to_num(b["df"])))
-        de = est["k"] * dfreq
-        dde = float(np.hypot(est["k"] * ddf, dfreq * est["dk"]))
-        est["pairs"] = est["pairs"] + [{"a": a, "b": b, "dfreq": dfreq, "ddf": ddf,
-                                        "de": de, "dde": dde}]
-        est["pending"] = None
-        return est, nu, nu
+        sugg = suggest_ions(key, pk["f"]) if est.get("k") is None else None
+        return add_pick(est, pk, sugg), nu, nu
 
     if pid.startswith("btn-energy-calibrate"):
-        if len(est["calib"]) < 2:
-            est["msg"] = "Pick two calibration peaks first."
-            return est, nu, nu
-        try:
-            dme, ddme, a, b, how = mass_excess_difference(name1, name2)
-            if a["name"] == b["name"]:
-                raise ValueError("the two peaks have the same name (no energy difference)")
-        except Exception as exc:
-            est["msg"] = f"Calibration: {exc}"
-            return est, nu, nu
-        p1, p2 = est["calib"]
-        dfreq = p2["f"] - p1["f"]
-        if abs(dfreq) < 1e-9:
-            est["msg"] = "The two calibration peaks have the same frequency."
-            return est, nu, nu
-        s1, s2 = np.nan_to_num(p1["df"]), np.nan_to_num(p2["df"])
-        k = dme / dfreq
-        dk = float(np.sqrt((ddme / dfreq) ** 2 + (dme * np.hypot(s1, s2) / dfreq ** 2) ** 2))
-        est.update(k=float(k), dk=dk, names=[a["name"], b["name"]], dme=float(dme),
-                   ddme=float(ddme), how=how, sys=bool(a["sys"] or b["sys"]))
-        est["pairs"], est["pending"] = [], None
-        return est, nu, nu
+        return calibrate(est, name1, name2), nu, nu
     return nu, nu, nu
 
 
@@ -413,26 +253,13 @@ def render_energy(est, name1, name2, on):
 
     info = []
     if est.get("k") is not None:
-        info.append(html.Div([
-            html.B("Calibration: "),
-            f"k = {est['k']:.6g} ± {est['dk']:.2g} keV/Hz   "
-            f"(ΔE = {est['dme']:.2f} ± {est['ddme']:.2f} keV from {est['how']} of "
-            f"{est['names'][1]} − {est['names'][0]})"
-            + ("  · includes estimated (#) NUBASE values" if est.get("sys") else "")],
-            style={"marginTop": "4px"}))
+        info.append(html.Div([html.B("Calibration: "), calibration_text(est)],
+                             style={"marginTop": "4px"}))
 
     if est.get("msg"):
         status = html.Span(est["msg"], style={"color": "#c0392b"})
-    elif not on:
-        status = "Turn on Energy calculation to pick peaks on the plot."
-    elif est.get("k") is None:
-        status = ("Step 1 – calibration: click two peaks, enter their names (or click a "
-                  "suggestion), then press Calibrate." if len(calib) < 2 else
-                  "Step 1 – enter the names of the two peaks and press Calibrate.")
-    elif est.get("pending") is None:
-        status = "Step 2 – click peak A of a pair (the energy difference is E(B) − E(A))."
     else:
-        status = f"Step 2 – peak A at {est['pending']['f']:.1f} Hz picked; now click peak B."
+        status = status_text(est, on)
 
     rows = [{"pair": i, "f_A": round(p["a"]["f"], 1), "f_B": round(p["b"]["f"], 1),
              "df": _fmt_pm(p["dfreq"], p["ddf"]), "de": _fmt_pm(p["de"], p["dde"], ".2f"),
