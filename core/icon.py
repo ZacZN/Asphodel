@@ -6,7 +6,8 @@ an image of its own, so adding e.g. core/icons/theia.png is all it takes
 to give Theia a different icon.
 
 Every tool serves its icon at ICON_URL:
-  * Dash apps:   icon.use_in_dash(app, "theia")
+  * Dash apps:   icon.use_in_dash(app, "theia")   (also sets up the tab
+                 title spinner, core/tabtitle.py)
   * other pages: put icon.LINK_TAG in <head> and answer ICON_URL with
                  icon.png_bytes("spectrogram")
 """
@@ -33,8 +34,11 @@ def png_bytes(name=DEFAULT):
 
 
 def use_in_dash(app, name=DEFAULT):
-    """Serve the icon from the Dash app and point the page's tab icon at it."""
+    """Serve the icon from the Dash app and point the page's tab icon at it.
+    Also keeps the tool's name in the tab title while busy (core/tabtitle.py)."""
     import flask
+    from core import tabtitle
+    tabtitle.install_dash(app)
 
     @app.server.route(ICON_URL)
     def _asphodel_icon():
