@@ -585,11 +585,14 @@ def sum_sim_traces(ff, pp, files, include_unsure, overrides, key=None, source="s
         t = t[t["decision"] != "unsure"]
     listed = t[["ion", "harmonic"]].drop_duplicates() if len(t) else \
         pd.DataFrame(columns=["ion", "harmonic"])
-    finite = pp[np.isfinite(pp)]
-    ylo, yhi = float(finite.min()), float(finite.max())
-    pad = 0.05 * (yhi - ylo or 1)
+    # the lines are drawn on their own y axis (yaxis2, fixed 0 to 1 = bottom to
+    # top of the plot), so they always span the plot height whatever the zoom.
+    # In data units their points (every ~5 % of the height, for the tooltip)
+    # spread over the whole spectrum's range, so after zooming in on small
+    # peaks none was inside the view; with > 1e5 points Plotly's WebGL hover
+    # only searches points inside the visible y range, so no labels appeared.
     tmp = go.Figure()
-    add_sim_lines(tmp, sims, ion_db, listed, ylo - pad, yhi + pad,
+    add_sim_lines(tmp, sims, ion_db, listed, 0.0, 1.0,
                   excluded=~hl_allowed(ion_db, s))
     by_name = {tr.name: tr for tr in tmp.data}
     out = []
@@ -799,6 +802,7 @@ def show_sum(_, _load, _req, restore, files, align, ion_key, unsure, show_sims, 
         sim_traces, sim_text = [([], [], [])] * 3, f"simulated lines not drawn: {exc}"
     for name, style, (x, y, h) in zip(SIM_TRACE_NAMES, SIM_TRACE_STYLES, sim_traces):
         fig.add_trace(go.Scattergl(x=x, y=y, mode="lines", name=name, line=style, meta="sim",
+                                   yaxis="y2",
                                    hoverinfo="text", hovertext=h, connectgaps=False,
                                    visible=bool(show_sims)))
     if info["target"] is not None:
@@ -823,6 +827,11 @@ def show_sum(_, _load, _req, restore, files, align, ion_key, unsure, show_sims, 
                       # hover only reaches the simulated lines (the spectrum
                       # and fit traces skip hover), as in the other plots
                       hovermode="x",
+                      # axis of the simulated lines: 0 = bottom, 1 = top of the plot,
+                      # not zoomable, hidden (set after update_yaxes above, which
+                      # also touches this axis)
+                      yaxis2=dict(overlaying="y", range=[0, 1], autorange=False,
+                                  fixedrange=True, visible=False),
                       dragmode="pan", template="plotly_white", font=dict(size=14),
                       margin=dict(l=60, r=20, t=50, b=40), showlegend=False,
                       # keeps the user's zoom while the fit traces are patched
