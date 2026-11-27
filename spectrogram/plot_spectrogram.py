@@ -1846,7 +1846,7 @@ async function lbOpen() {
   lbAddRow({label: 'Decay-Fit Title', value: dval('decayTitleBox') || 'automatic'});
   lbAddRow({label: 'Log Panel (data − C)', value: bat ? 'off' : chk('logPlotChk')});
   lbAddRow({label: 'Residual Panels', value: bat ? 'off' : chk('residChk')});
-  lbAddRow({label: 'Fit Parameters Box', value: chk(_did('paramsChk'))});
+  lbAddRow({label: 'Equation + Coefficients', value: chk(_did('paramsChk'))});
   lbAddRow({label: 'Power Scale', value: chk('dbCheck') === 'on' ? 'dB' : 'linear'});
   lbAddRow({label: 'Colour Scheme', value: (typeof CUR_CS === 'string') ? CUR_CS : val('colorscaleSel')});
   lbAddRow({label: '3-D Style', value: chk('surface3d') === 'on' ? 'surface' : 'bars'});
@@ -2074,12 +2074,12 @@ def decay_pane_html(tab, prefs, reg_box_mode):
              onchange="savePref('residuals', this.checked ? '1' : '')">
       <label for="residChk" title="Residual panel under each plot: (data − fit)/σ">residuals</label>
     </div>"""
-    # fit-parameter box (equation, coefficients, half-lives, χ²/ndf): both tabs
+    # equation + coefficients in the fit box (half-lives and χ²/ndf always shown): both tabs
     params_chk = "" if pref("hideParams") == "1" else "checked"
     params = f"""
       <input type="checkbox" id="paramsChk{S}" {params_chk}
              onchange="savePref('{pk('hideParams')}', this.checked ? '0' : '1')">
-      <label for="paramsChk{S}" title="Show the box with the fit equation, coefficients, half-lives and χ²/ndf on the fit plot">fit parameters</label>"""
+      <label for="paramsChk{S}" title="Show the fit equation and coefficients in the fit box (unticked: half-lives and χ²/ndf only)">equation + coefficients</label>"""
     if plots:
         plots = plots.replace("""
     </div>""", params + """

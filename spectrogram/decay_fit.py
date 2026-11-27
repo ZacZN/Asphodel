@@ -15,7 +15,7 @@ Arguments
 
 Decay options (default mode)
   --no-offset       Fit A·exp(-t/τ) with no constant background floor
-  --no-params       Leave the fit-parameter box off the plot
+  --no-params       Fit box without the equation and coefficients (half-lives + chi^2/ndf only)
 
 Bateman options (--bateman mode)
   --bateman         Fit Bateman two-member chain A→B→C.
@@ -241,8 +241,8 @@ def parse_args():
                         help="Add residual panels under the plot(s): (data − fit)/σ, or "
                              "data − fit for an unweighted fit. Single-window fits only.")
     parser.add_argument("--no-params", action="store_true",
-                        help="Leave the fit-parameter box (equation, coefficients, half-lives, "
-                             "chi^2/ndf) off the plot; the values are still printed and recorded.")
+                        help="Fit box shows only the half-lives (lab, c.o.m.) and chi^2/ndf: "
+                             "no equation or coefficients. All values are still printed and recorded.")
     parser.add_argument("--time-avg", type=int, metavar="N", default=None,
                         help="Average every N consecutive time frames before fitting")
     parser.add_argument("--baseline", type=str, default=None, metavar="JSON",
@@ -563,7 +563,9 @@ def _label_suffix(label):
 # Annotation text
 # ---------------------------------------------------------------------------
 
-def make_equation_text_decay(popt, perr, with_offset, half_life, half_life_err, gamma=None):
+def make_equation_text_decay(popt, perr, with_offset, half_life, half_life_err, gamma=None,
+                             coeffs=True):
+    """Text of the fit box. coeffs=False: half-lives only (no equation, A, τ, C)."""
     A, tau   = popt[0], popt[1]
     dA, dtau = perr[0], perr[1]
     lines = [
@@ -575,13 +577,17 @@ def make_equation_text_decay(popt, perr, with_offset, half_life, half_life_err, 
         C, dC = popt[2], perr[2]
         lines.append(f"$C$   = {format_value(C, dC)}")
     lines.append("")
+    if not coeffs:
+        lines = []
     lines.append(f"$t_{{1/2}}$ (lab)   = {format_time(half_life, half_life_err)}")
     if gamma is not None:
         lines.append(f"$t_{{1/2}}$ (c.o.m.) = {format_time(half_life / gamma, half_life_err / gamma)}")
     return "\n".join(lines)
 
 
-def make_equation_text_bateman(resolved, gamma=None):
+def make_equation_text_bateman(resolved, gamma=None, coeffs=True):
+    """Text of the fit box. coeffs=False: half-lives only (no equation or
+    coefficients); a fixed half-life keeps its [fixed] tag."""
     P,  dP,  lP  = resolved['P']
     tA, dtA, ltA = resolved['tau_A']
     tB, dtB, ltB = resolved['tau_B']
@@ -599,11 +605,15 @@ def make_equation_text_bateman(resolved, gamma=None):
         f"$B$      = {format_value(B)}{_label_suffix(lB)}",
         f"$C$      = {format_value(C, dC)}",
         "",
-        f"$t_{{1/2,A}}$ (lab)   = {format_time(hl_A, dhl_A if ltA == 'fitted' else None)}",
     ]
+    if not coeffs:
+        lines = []
+    tagA = "" if coeffs else _label_suffix(ltA)
+    tagB = "" if coeffs else _label_suffix(ltB)
+    lines.append(f"$t_{{1/2,A}}$ (lab)   = {format_time(hl_A, dhl_A if ltA == 'fitted' else None)}{tagA}")
     if gamma is not None:
         lines.append(f"$t_{{1/2,A}}$ (c.o.m.) = {format_time(hl_A / gamma, (dhl_A / gamma) if ltA == 'fitted' else None)}")
-    lines.append(f"$t_{{1/2,B}}$ (lab)   = {format_time(hl_B, dhl_B if ltB == 'fitted' else None)}")
+    lines.append(f"$t_{{1/2,B}}$ (lab)   = {format_time(hl_B, dhl_B if ltB == 'fitted' else None)}{tagB}")
     if gamma is not None:
         lines.append(f"$t_{{1/2,B}}$ (c.o.m.) = {format_time(hl_B / gamma, (dhl_B / gamma) if ltB == 'fitted' else None)}")
     return "\n".join(lines)
@@ -1100,7 +1110,7 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
                with_offset, bateman, freq_min, freq_max, filename,
                gamma=None, title_suffix=None, sigma_fit=None, err_note=None,
                title_full=None, log_plot=False, show_residuals=False, record=None,
-               warning=None, show_params=True):
+               warning=None, show_coeffs=True):
 
     plt.rcParams.update({"font.size": 20})
 
@@ -1155,12 +1165,13 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
 
     # Annotation box
     if bateman:
-        eq_text = make_equation_text_bateman(resolved, gamma)
+        eq_text = make_equation_text_bateman(resolved, gamma, coeffs=show_coeffs)
     else:
         tau          = popt[1];  dtau         = perr[1]
         half_life    = tau * np.log(2);  half_life_err = dtau * np.log(2)
         eq_text = make_equation_text_decay(popt, perr, with_offset,
-                                           half_life, half_life_err, gamma)
+                                           half_life, half_life_err, gamma,
+                                           coeffs=show_coeffs)
 
     # (⟨I⟩ and the σ error-model note are printed to the terminal, not shown in the box)
     if chi2 is not None:
@@ -1169,10 +1180,7 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
     if warning:
         eq_text += f"\n\n{warning}"
 
-    if not show_params:
-        # parameter box hidden: keep only a fit warning, if there is one
-        eq_text = warning or None
-    par_box = None if eq_text is None else ax.text(
+    par_box = ax.text(
         0.97, 0.97, eq_text,
         transform=ax.transAxes,
         va="top", ha="right",
@@ -1302,9 +1310,8 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
     lin_pts = [(time_fit, intensity_fit), (t_dense, I_fit)]
     if sigma_fit is not None:
         lin_pts += [(time_fit, intensity_fit + sigma_fit), (time_fit, intensity_fit - sigma_fit)]
-    jobs = [dict(ax=ax, xy_sets=lin_pts, fixed=[par_box] if par_box is not None else [],
-                 legend_kw=dict(fontsize=18),
-                 prefer="below_fixed_right" if par_box is not None else "top_right",
+    jobs = [dict(ax=ax, xy_sets=lin_pts, fixed=[par_box], legend_kw=dict(fontsize=18),
+                 prefer="below_fixed_right",
                  locs=("upper center", "upper left", "center right", "lower left",
                        "lower center", "center"))]
     if ax_log is not None:
@@ -1596,16 +1603,21 @@ def plot_joint(args, tP, IP, tD, ID, sigmaP, sigmaD, vals, errs,
     fix = lambda f: "  [fixed]" if f else ""
     com = lambda k, hl, dhl: (f"\n$t_{{1/2,{k}}}$ (c.o.m.) = {format_time(hl / gamma, dhl / gamma if dhl else None)}"
                               if gamma is not None else "")
-    txtP = (r"$I_P(t) = A \cdot e^{-t/\tau_A} + C_A$" +
-            f"\n$A$     = {format_value(vals['A'], errs['A'])}"
-            f"\n$\\tau_A$ = {format_time(vals['tau_A'], None if fixA else errs['tau_A'])}{fix(fixA)}"
-            f"\n$C_A$   = {format_value(vals['C_A'], errs['C_A'])}"
-            f"\n\n$t_{{1/2,A}}$ (lab)   = {format_time(hlA, dhlA)}" + com("A", hlA, dhlA))
-    txtD = (r"$I_D(t) = P \cdot (e^{-t/\tau_A} - e^{-t/\tau_B}) + B \cdot e^{-t/\tau_B}$" +
-            f"\n$P$     = {format_value(vals['P'], errs['P'])}"
-            f"\n$\\tau_B$ = {format_time(vals['tau_B'], None if fixB else errs['tau_B'])}{fix(fixB)}"
-            f"\n$B$     = {format_value(vals['B'], errs['B'])}"
-            f"\n\n$t_{{1/2,B}}$ (lab)   = {format_time(hlB, dhlB)}" + com("B", hlB, dhlB))
+    # --no-params: half-lives (+ χ²/ndf etc.) only; fixed ones keep their tag
+    if args.no_params:
+        txtP = f"$t_{{1/2,A}}$ (lab)   = {format_time(hlA, dhlA)}{fix(fixA)}" + com("A", hlA, dhlA)
+        txtD = f"$t_{{1/2,B}}$ (lab)   = {format_time(hlB, dhlB)}{fix(fixB)}" + com("B", hlB, dhlB)
+    else:
+        txtP = (r"$I_P(t) = A \cdot e^{-t/\tau_A} + C_A$" +
+              f"\n$A$     = {format_value(vals['A'], errs['A'])}"
+              f"\n$\\tau_A$ = {format_time(vals['tau_A'], None if fixA else errs['tau_A'])}{fix(fixA)}"
+              f"\n$C_A$   = {format_value(vals['C_A'], errs['C_A'])}"
+              f"\n\n$t_{{1/2,A}}$ (lab)   = {format_time(hlA, dhlA)}" + com("A", hlA, dhlA))
+        txtD = (r"$I_D(t) = P \cdot (e^{-t/\tau_A} - e^{-t/\tau_B}) + B \cdot e^{-t/\tau_B}$" +
+              f"\n$P$     = {format_value(vals['P'], errs['P'])}"
+              f"\n$\\tau_B$ = {format_time(vals['tau_B'], None if fixB else errs['tau_B'])}{fix(fixB)}"
+              f"\n$B$     = {format_value(vals['B'], errs['B'])}"
+              f"\n\n$t_{{1/2,B}}$ (lab)   = {format_time(hlB, dhlB)}" + com("B", hlB, dhlB))
     if chi2 is not None:
         txtD += f"\n\n$\\chi^2/ndf$ = {chi2:.4g}/{ndf} = {chi2 / ndf if ndf > 0 else float('nan'):.3g}"
     if corr is not None:
@@ -1613,11 +1625,10 @@ def plot_joint(args, tP, IP, tD, ID, sigmaP, sigmaD, vals, errs,
     if err_note:
         txtD += f"\n{err_note}"
     box = dict(boxstyle="round,pad=0.5", facecolor="white", edgecolor="0.7", alpha=0.9)
-    if not args.no_params:
-        axP.text(0.97, 0.95, txtP, transform=axP.transAxes, va="top", ha="right",
-                 fontsize=14, family="monospace", bbox=box)
-        axD.text(0.60, 0.05, txtD, transform=axD.transAxes, va="bottom", ha="right",
-                 fontsize=14, family="monospace", bbox=box)
+    axP.text(0.97, 0.95, txtP, transform=axP.transAxes, va="top", ha="right",
+             fontsize=14, family="monospace", bbox=box)
+    axD.text(0.60, 0.05, txtD, transform=axD.transAxes, va="bottom", ha="right",
+             fontsize=14, family="monospace", bbox=box)
 
     title = (f"{os.path.basename(args.file)}   joint Bateman   "
              f"parent [{pwin[0]:,.0f} – {pwin[1]:,.0f} Hz]   "
@@ -1859,7 +1870,7 @@ def main():
         err_note=err_note,
         record=record,
         warning=fit_warning,
-        show_params=not args.no_params,
+        show_coeffs=not args.no_params,
     )
 
 
