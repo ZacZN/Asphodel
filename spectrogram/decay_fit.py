@@ -15,6 +15,7 @@ Arguments
 
 Decay options (default mode)
   --no-offset       Fit A·exp(-t/τ) with no constant background floor
+  --no-params       Leave the fit-parameter box off the plot
 
 Bateman options (--bateman mode)
   --bateman         Fit Bateman two-member chain A→B→C.
@@ -239,6 +240,9 @@ def parse_args():
     parser.add_argument("--residuals", action="store_true",
                         help="Add residual panels under the plot(s): (data − fit)/σ, or "
                              "data − fit for an unweighted fit. Single-window fits only.")
+    parser.add_argument("--no-params", action="store_true",
+                        help="Leave the fit-parameter box (equation, coefficients, half-lives, "
+                             "chi^2/ndf) off the plot; the values are still printed and recorded.")
     parser.add_argument("--time-avg", type=int, metavar="N", default=None,
                         help="Average every N consecutive time frames before fitting")
     parser.add_argument("--baseline", type=str, default=None, metavar="JSON",
@@ -1096,7 +1100,7 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
                with_offset, bateman, freq_min, freq_max, filename,
                gamma=None, title_suffix=None, sigma_fit=None, err_note=None,
                title_full=None, log_plot=False, show_residuals=False, record=None,
-               warning=None):
+               warning=None, show_params=True):
 
     plt.rcParams.update({"font.size": 20})
 
@@ -1165,7 +1169,10 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
     if warning:
         eq_text += f"\n\n{warning}"
 
-    par_box = ax.text(
+    if not show_params:
+        # parameter box hidden: keep only a fit warning, if there is one
+        eq_text = warning or None
+    par_box = None if eq_text is None else ax.text(
         0.97, 0.97, eq_text,
         transform=ax.transAxes,
         va="top", ha="right",
@@ -1295,8 +1302,9 @@ def plot_decay(time, intensity, time_fit, intensity_fit, popt, perr, model, reso
     lin_pts = [(time_fit, intensity_fit), (t_dense, I_fit)]
     if sigma_fit is not None:
         lin_pts += [(time_fit, intensity_fit + sigma_fit), (time_fit, intensity_fit - sigma_fit)]
-    jobs = [dict(ax=ax, xy_sets=lin_pts, fixed=[par_box], legend_kw=dict(fontsize=18),
-                 prefer="below_fixed_right",
+    jobs = [dict(ax=ax, xy_sets=lin_pts, fixed=[par_box] if par_box is not None else [],
+                 legend_kw=dict(fontsize=18),
+                 prefer="below_fixed_right" if par_box is not None else "top_right",
                  locs=("upper center", "upper left", "center right", "lower left",
                        "lower center", "center"))]
     if ax_log is not None:
@@ -1605,10 +1613,11 @@ def plot_joint(args, tP, IP, tD, ID, sigmaP, sigmaD, vals, errs,
     if err_note:
         txtD += f"\n{err_note}"
     box = dict(boxstyle="round,pad=0.5", facecolor="white", edgecolor="0.7", alpha=0.9)
-    axP.text(0.97, 0.95, txtP, transform=axP.transAxes, va="top", ha="right",
-             fontsize=14, family="monospace", bbox=box)
-    axD.text(0.60, 0.05, txtD, transform=axD.transAxes, va="bottom", ha="right",
-             fontsize=14, family="monospace", bbox=box)
+    if not args.no_params:
+        axP.text(0.97, 0.95, txtP, transform=axP.transAxes, va="top", ha="right",
+                 fontsize=14, family="monospace", bbox=box)
+        axD.text(0.60, 0.05, txtD, transform=axD.transAxes, va="bottom", ha="right",
+                 fontsize=14, family="monospace", bbox=box)
 
     title = (f"{os.path.basename(args.file)}   joint Bateman   "
              f"parent [{pwin[0]:,.0f} – {pwin[1]:,.0f} Hz]   "
@@ -1850,6 +1859,7 @@ def main():
         err_note=err_note,
         record=record,
         warning=fit_warning,
+        show_params=not args.no_params,
     )
 
 

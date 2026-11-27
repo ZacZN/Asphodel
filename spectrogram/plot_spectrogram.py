@@ -1846,6 +1846,7 @@ async function lbOpen() {
   lbAddRow({label: 'Decay-Fit Title', value: dval('decayTitleBox') || 'automatic'});
   lbAddRow({label: 'Log Panel (data − C)', value: bat ? 'off' : chk('logPlotChk')});
   lbAddRow({label: 'Residual Panels', value: bat ? 'off' : chk('residChk')});
+  lbAddRow({label: 'Fit Parameters Box', value: chk(_did('paramsChk'))});
   lbAddRow({label: 'Power Scale', value: chk('dbCheck') === 'on' ? 'dB' : 'linear'});
   lbAddRow({label: 'Colour Scheme', value: (typeof CUR_CS === 'string') ? CUR_CS : val('colorscaleSel')});
   lbAddRow({label: '3-D Style', value: chk('surface3d') === 'on' ? 'surface' : 'bars'});
@@ -2044,7 +2045,7 @@ def decay_pane_html(tab, prefs, reg_box_mode):
       <input type="number" id="hlGs" min="0" step="any" placeholder="g.s."
              style="width:72px;" value="{hg}" oninput="savePref('hlGs', this.value)">
     </div>""".format(hi=prefs.get("hlIso", ""), hg=prefs.get("hlGs", ""))
-        plots = ""          # log / residual panels: single-window fits only
+        plots = ""          # log / residual panels: single-window fits only (see below)
     else:
         box, sl = ("checked", "") if reg_box_mode else ("", "checked")
         region = f"""    <div class="opt-grp" title="Which time/frequency window the fit uses">
@@ -2072,6 +2073,21 @@ def decay_pane_html(tab, prefs, reg_box_mode):
       <input type="checkbox" id="residChk" {chk('residuals')}
              onchange="savePref('residuals', this.checked ? '1' : '')">
       <label for="residChk" title="Residual panel under each plot: (data − fit)/σ">residuals</label>
+    </div>"""
+    # fit-parameter box (equation, coefficients, half-lives, χ²/ndf): both tabs
+    params_chk = "" if pref("hideParams") == "1" else "checked"
+    params = f"""
+      <input type="checkbox" id="paramsChk{S}" {params_chk}
+             onchange="savePref('{pk('hideParams')}', this.checked ? '0' : '1')">
+      <label for="paramsChk{S}" title="Show the box with the fit equation, coefficients, half-lives and χ²/ndf on the fit plot">fit parameters</label>"""
+    if plots:
+        plots = plots.replace("""
+    </div>""", params + """
+    </div>""")
+    else:
+        plots = f"""
+    <div class="opt-grp" title="What the fit plot shows">
+      <span>Plots</span>{params}
     </div>"""
     return f"""    <div class="sim-body dpane" id="dpane{tab.upper()}" role="tabpanel" aria-labelledby="dtab{tab.upper()}"{hide}>
 {region}
@@ -2889,6 +2905,7 @@ async function runDecayFit() {{
       noOffset: !bateman && document.getElementById('noOffset').checked,
       logPlot:   !bateman && document.getElementById('logPlotChk').checked,
       residuals: !bateman && document.getElementById('residChk').checked,
+      noParams:  !_d('paramsChk').checked,
       bateman:  bateman,
       hlIso:    (bateman && hlIsoRaw !== '') ? +hlIsoRaw : null,
       hlGs:     (bateman && hlGsRaw  !== '') ? +hlGsRaw  : null,
@@ -3625,6 +3642,8 @@ def serve(html, state):
                         cmd += ["--residuals"]
                     if body.get("unweighted"):
                         cmd += ["--unweighted"]
+                    if body.get("noParams"):
+                        cmd += ["--no-params"]
                     if body.get("bateman"):
                         cmd += ["--bateman"]
                         if body.get("hlIso") is not None:
@@ -3761,7 +3780,7 @@ def serve(html, state):
                     if pref_key not in ("gamma", "hlIso", "hlGs", "bateman", "decayTab",
                                         "parentMin", "parentMax", "bars3d", "fullOpen", "colorscale", "decayRegion",
                                         "logPlot", "residuals", "srchWidth",
-                                        "gammaB"):
+                                        "gammaB", "hideParams", "hideParamsB"):
                         raise ValueError(f"unknown pref key: {pref_key!r}")
                     with _PREFS_LOCK:
                         prefs = read_prefs()
