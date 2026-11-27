@@ -343,6 +343,10 @@ LEGEND_ROW_GAP = 8                 # extra px between legend rows (each row is i
 LEGEND_ROW_PX = 31                 # approximate legend row pitch (first guess for the counts box)
 SUMMARY_GAP = 6                    # px between the legend and the counts box under it
 SUMMARY_PAD = 6                    # counts box: padding inside its frame (borderpad, px)
+PLOT_MARGIN_L = 55                 # left margin: room for the y tick labels and "Z (protons)"
+LEGEND_EDGE = 8                    # legend / counts box: px from the figure's left edge
+LEGEND_AXIS_GAP = 10               # px between the legend's right edge and the y-axis title room
+LEGEND_MAX_DOMAIN = 0.6            # the plot keeps at least 40 % of the width for the legend room
 STAR_R = 0.15                      # outer radius of that star, in squares
 ALT_COLOUR = "#1f4e9e"             # "Alternatives:" text in the entry cards
 ALT_LINE_COLOUR = "#000000"        # curved double arrow (and its label) between an identification and an alternative
@@ -531,9 +535,14 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
     xr, yr = (view or {}).get("x"), (view or {}).get("y")
     fig.update_layout(
         # see-through: the squares are on the page's canvas behind the plot (white page behind it)
-        margin=dict(l=55, r=10, t=10, b=45), plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=PLOT_MARGIN_L, r=10, t=10, b=45), plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
         hovermode="closest", hoverdistance=1,
-        legend=dict(x=0.01, y=0.99, xanchor="left", yanchor="top", bgcolor="#ffffff",
+        # legend in the blank space left of the plot: the plot is pushed right (constraintoward)
+        # and the page sets xaxis.domain so the legend fits left of the y-axis title, and
+        # legend.x = LEGEND_EDGE px from the figure's edge (a negative paper fraction, known only
+        # in the browser; x here is a first guess).  Not xref="container": that makes Plotly
+        # widen the left margin for the legend.
+        legend=dict(x=-0.034, y=0.99, xanchor="left", yanchor="top", bgcolor="#ffffff",
                     bordercolor="#999999", borderwidth=1, font=dict(size=LEGEND_FONT),
                     itemwidth=LEGEND_ITEMWIDTH, tracegroupgap=LEGEND_ROW_GAP),
         shapes=shapes, dragmode="pan", uirevision=uirev,
@@ -541,7 +550,7 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
         # cells: the squares, marks and labels, drawn by the page on its canvas
         meta={"altlinks": links if by == "identified" else {}, "cells": canvas},
         xaxis=dict(title="N (neutrons)", range=xr or [-1, N_MAX + 1], showgrid=False,
-                   zeroline=False, constrain="domain", ticks="outside"),
+                   zeroline=False, constrain="domain", constraintoward="right", ticks="outside"),
         yaxis=dict(title="Z (protons)", range=yr or [-1, Z_MAX + 1], showgrid=False,
                    zeroline=False, scaleanchor="x", scaleratio=1, ticks="outside"),
         font=dict(family='-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif', size=12),
@@ -553,7 +562,8 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
         n_leg = sum(1 for t in fig.data if t.showlegend)
         fig.add_annotation(
             name="idsummary", text=id_summary_text([e for es in id_cells.values() for e in es]),
-            xref="paper", yref="paper", x=0.01, y=0.99, xanchor="left", yanchor="top",
+            xref="paper", yref="paper", x=0, xshift=LEGEND_EDGE - PLOT_MARGIN_L,  # = legend's left edge
+            y=0.99, xanchor="left", yanchor="top",
             yshift=-(n_leg * LEGEND_ROW_PX + 2 + SUMMARY_GAP), align="left", showarrow=False,
             bgcolor="#ffffff", bordercolor="#999999", borderwidth=1, borderpad=SUMMARY_PAD,
             font=dict(size=LEGEND_FONT))          # text colour as the legend's
@@ -1997,21 +2007,44 @@ app.clientside_callback(
                     if (s && parseFloat(s.leg.getAttribute('width')) !== s.W) s.leg.setAttribute('width', s.W);
                 };
                 var summaryShift = function() {
-                    var i = sumIndex();
-                    if (i < 0) return null;
-                    var a = gd.layout.annotations[i], fix = {};
-                    var bg = gd.querySelector('g.legend rect.bg'), h = bg ? parseFloat(bg.getAttribute('height')) : NaN;
-                    if (!isFinite(h) || h <= 0) h = ((gd._fullLayout.legend || {})._height) || 0;
-                    if (h) {
-                        var want = -Math.round(h + %d);
-                        if (Math.abs((a.yshift || 0) - want) >= 1) fix['annotations[' + i + '].yshift'] = want;
-                    }
-                    var s = sumWidths();
-                    if (s && s.boxNat < s.W) {
-                        var tw = s.W - 2 * %d - 1;
-                        if (a.width == null || Math.abs(a.width - tw) >= 1) fix['annotations[' + i + '].width'] = tw;
+                    var i = sumIndex(), fix = {};
+                    var bg = gd.querySelector('g.legend rect.bg');
+                    if (i >= 0) {
+                        var a = gd.layout.annotations[i];
+                        var h = bg ? parseFloat(bg.getAttribute('height')) : NaN;
+                        if (!isFinite(h) || h <= 0) h = ((gd._fullLayout.legend || {})._height) || 0;
+                        if (h) {
+                            var want = -Math.round(h + %d);
+                            if (Math.abs((a.yshift || 0) - want) >= 1) fix['annotations[' + i + '].yshift'] = want;
+                        }
+                        var s = sumWidths();
+                        if (s && s.boxNat < s.W) {
+                            var tw = s.W - 2 * %d - 1;
+                            if (a.width == null || Math.abs(a.width - tw) >= 1) fix['annotations[' + i + '].width'] = tw;
+                        }
                     }
                     fixLegend();
+                    // legend (and the counts box under it) in the blank space left of the plot:
+                    // legend at EDGE px from the figure's left edge; the x axis starts far enough
+                    // right that the y-axis title (in the left margin) clears the legend by GAP.
+                    // The plot is pushed right (constraintoward 'right'), so the blank is on the left.
+                    var EDGE = %d, GAP = %d, MAXD = %s;
+                    var L = gd._fullLayout;
+                    if (L && L.width > 0 && L._size && L._size.w > 0 && gd.layout.legend) {
+                        var lx = (EDGE - L._size.l) / L._size.w;
+                        if (Math.abs((gd.layout.legend.x || 0) - lx) > 1e-4) fix['legend.x'] = lx;
+                        var lw = bg ? parseFloat(bg.getAttribute('width')) : 0;
+                        var bb = i >= 0 ? gd.querySelector('g.annotation[data-index="' + i + '"] rect.bg') : null;
+                        if (bb) lw = Math.max(lw || 0, parseFloat(bb.getAttribute('width')) || 0);
+                        var d = lw > 0 ? Math.min(MAXD, (EDGE + lw + GAP) / L._size.w) : 0;
+                        d = Math.round(d * 1e4) / 1e4;
+                        var cur = ((gd.layout.xaxis || {}).domain || [0, 1])[0];
+                        if (Math.abs(cur - d) > 0.002) fix['xaxis.domain'] = [d, 1];
+                        if (i >= 0) {                   // counts box: same left edge as the legend
+                            var xs = Math.round(EDGE - L._size.l);
+                            if (gd.layout.annotations[i].xshift !== xs) fix['annotations[' + i + '].xshift'] = xs;
+                        }
+                    }
                     return Object.keys(fix).length ? fix : null;
                 };
                 // Plotly redraws the legend (back to its own width / symbol size) on some updates:
@@ -2315,7 +2348,8 @@ app.clientside_callback(
         }, 150);
         return window.dash_clientside.no_update;
     }
-    """ % (LEGEND_SCALE, SUMMARY_GAP, SUMMARY_PAD, ALT_LINE_COLOUR, ALT_LINE_COLOUR, ALT_LINE_COLOUR, ALT_LINE_COLOUR),
+    """ % (LEGEND_SCALE, SUMMARY_GAP, SUMMARY_PAD, LEGEND_EDGE, LEGEND_AXIS_GAP, LEGEND_MAX_DOMAIN,
+           ALT_LINE_COLOUR, ALT_LINE_COLOUR, ALT_LINE_COLOUR, ALT_LINE_COLOUR),
     Output("labels-dummy", "children"),
     Input("chart", "figure"),
 )
