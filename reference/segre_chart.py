@@ -543,8 +543,7 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
         margin=dict(l=PLOT_MARGIN_L, r=PLOT_MARGIN_R if by == "identified" else PLOT_MARGIN_R_CBAR,
                     t=10, b=45, autoexpand=False), plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
         hovermode="closest", hoverdistance=1,
-        # legend in the blank space left of the plot: the plot is pushed right (constraintoward)
-        # and the page sets xaxis.domain so the legend fits left of the y-axis title, and
+        # legend in the space left of the plot: the page sets xaxis.domain so the legend fits left of the y-axis title, and
         # legend.x = LEGEND_EDGE px from the figure's edge (a negative paper fraction, known only
         # in the browser; x here is a first guess).  Not xref="container": that makes Plotly
         # widen the left margin for the legend.
@@ -556,7 +555,7 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
         # cells: the squares, marks and labels, drawn by the page on its canvas
         meta={"altlinks": links if by == "identified" else {}, "cells": canvas},
         xaxis=dict(title="N (neutrons)", range=xr or [-1, N_MAX + 1], showgrid=False,
-                   zeroline=False, constrain="domain", constraintoward="right", ticks="outside"),
+                   zeroline=False, constrain="range", ticks="outside"),
         yaxis=dict(title="Z (protons)", range=yr or [-1, Z_MAX + 1], showgrid=False,
                    zeroline=False, scaleanchor="x", scaleratio=1, ticks="outside"),
         font=dict(family='-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif', size=12),
@@ -907,7 +906,7 @@ def id_coverage(entries):
     return out
 
 
-SUMMARY_INDENT = "\u00a0" * 4    # value lines indented under their label (no-break spaces)
+SUMMARY_INDENT = "\u00a0" * 8    # value lines indented under their label (no-break spaces)
 
 
 def id_summary_text(entries):
@@ -1197,8 +1196,8 @@ window.segreCanvas = (function() {
     if (!fl || !fl.xaxis || !fl.yaxis || !(fl.xaxis._length > 0)) return;
     var cv = layer(gd);
     if (!cv) return;
-    // the axes' own extent: with constrain='domain' (square cells) it is
-    // narrower than the plot area fl._size
+    // the axes' own extent: narrower than the plot area fl._size (xaxis.domain leaves
+    // room for the legend on the left)
     var s = area(fl), dpr = window.devicePixelRatio || 1;
     var W = Math.max(1, Math.round(s.w * dpr)), Hh = Math.max(1, Math.round(s.h * dpr));
     if (cv.width !== W || cv.height !== Hh) { cv.width = W; cv.height = Hh; }
@@ -2072,21 +2071,35 @@ app.clientside_callback(
                         // counts box stretched down to the bottom of the plot area (27 Nov, Zac):
                         // its 'height' (text height; frame = height + 2 x borderpad + border),
                         // never below the text's own height (kept per figure in gd._segreSum)
+                        // If the text is taller than that space (small window), its font is made
+                        // smaller (down to MINF px) until it fits (27 Nov, decided by Zac).
                         var bx = gd.querySelector('g.annotation[data-index="' + i + '"] rect.bg');
-                        if (a.height == null && bx) S.boxNatH = parseFloat(bx.getAttribute('height')) - 2 * PAD - 2;
-                        var L0 = gd._fullLayout, ys = fix['annotations[' + i + '].yshift'];
+                        if (a.height == null && bx) {
+                            S.boxNatH = parseFloat(bx.getAttribute('height')) - 2 * PAD - 2;
+                            S.boxFont = (a.font && a.font.size) || 15;       // the size it was measured at
+                        }
+                        var L0 = gd._fullLayout, ys = fix['annotations[' + i + '].yshift'], MINF = 9;
                         if (ys == null) ys = a.yshift || 0;
                         if (L0 && L0._size && S.boxNatH > 0) {
                             var top = L0._size.t + (1 - a.y) * L0._size.h - ys;
-                            var th = Math.round(Math.max(S.boxNatH, L0._size.t + L0._size.h - top - 2 * PAD - 2));
+                            var avail = L0._size.t + L0._size.h - top - 2 * PAD - 2;
+                            var fs = S.boxFont, need = S.boxNatH;
+                            if (need > avail) {                 // text height ~ font size
+                                fs = Math.max(MINF, Math.floor(S.boxFont * avail / S.boxNatH * 10) / 10);
+                                need = S.boxNatH * fs / S.boxFont;
+                            }
+                            var th = Math.round(Math.max(need, avail));
                             if (a.height == null || Math.abs(a.height - th) >= 1) fix['annotations[' + i + '].height'] = th;
+                            if (Math.abs(((a.font && a.font.size) || S.boxFont) - fs) >= 0.1)
+                                fix['annotations[' + i + '].font.size'] = fs;
                         }
                     }
                     fixLegend();
                     // legend (and the counts box under it) in the blank space left of the plot:
                     // legend at EDGE px from the figure's left edge; the x axis starts far enough
                     // right that the y-axis title (in the left margin) clears the legend by GAP.
-                    // The plot is pushed right (constraintoward 'right'), so the blank is on the left.
+                    // The plot fills the rest (xaxis constrain 'range': square cells are kept by
+                    // showing more N / Z, not by shrinking the plot).
                     var EDGE = %d, GAP = %d, MAXD = %s;
                     var L = gd._fullLayout;
                     if (L && L.width > 0 && L._size && L._size.w > 0 && gd.layout.legend) {
