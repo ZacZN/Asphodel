@@ -875,11 +875,45 @@ def id_summary(entries):
     return [(lbl, rows[k][0], rows[k][1]) for k, lbl in labels]
 
 
+# every nuclide on the chart: NUBASE ground states, the free neutron left out
+ALL_NUCLIDES = {(int(z), int(n)) for z, n in
+                zip(TABLE.loc[TABLE["state"] == "g", "Z"], TABLE.loc[TABLE["state"] == "g", "N"]) if z > 0}
+
+
+def id_coverage(entries):
+    """Percentage lines for the counts box (decided by Zac, 27 Nov): nuclides whose ground state
+    is identified (as the square colours: confident if any g.s. entry is, else unsure), as a
+    percentage of the nuclides inside the experiment (simulated) region and of every NUBASE
+    nuclide.  Returns [(label, confident %, unsure %)]; the region line is left out when
+    there is no experiment region (no experiment / unreadable physics.json)."""
+    status = {}
+    for e in entries:
+        if (e.get("isomer", "g") or "g") != "g":
+            continue
+        zn = (int(e["Z"]), int(e["N"]))
+        status[zn] = status.get(zn) or e.get("status") == "confident"
+    try:
+        region = region_info()[2]
+    except Exception:
+        region = None
+    out = []
+    for lbl, cells in (("Simulated region identified", region), ("Nuclear chart identified", ALL_NUCLIDES)):
+        if not cells:
+            continue
+        conf = sum(1 for zn, c in status.items() if c and zn in cells)
+        uns = sum(1 for zn, c in status.items() if not c and zn in cells)
+        out.append((lbl, 100 * conf / len(cells), 100 * uns / len(cells)))
+    return out
+
+
 def id_summary_text(entries):
-    """The box's text: 'Ground states: 42 (+7 unsure)', one line per count."""
+    """The box's text: 'Ground states: 42 (+7 unsure)', one line per count, then the
+    percentages 'Simulated region identified: 42.1 % (+9.8 % unsure)'."""
     lines = []
     for lbl, conf, uns in id_summary(entries):
         lines.append(f"{lbl}: <b>{conf}</b>" + (f" (+{uns} unsure)" if uns else ""))
+    for lbl, conf, uns in id_coverage(entries):
+        lines.append(f"{lbl}: <b>{conf:.1f} %</b>" + (f" (+{uns:.1f} % unsure)" if uns else ""))
     return "<br>".join(lines)
 
 
