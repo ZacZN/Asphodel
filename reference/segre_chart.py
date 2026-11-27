@@ -347,6 +347,8 @@ PLOT_MARGIN_L = 55                 # left margin: room for the y tick labels and
 LEGEND_EDGE = 8                    # legend / counts box: px from the figure's left edge
 LEGEND_AXIS_GAP = 10               # px between the legend's right edge and the y-axis title room
 LEGEND_MAX_DOMAIN = 0.6            # the plot keeps at least 40 % of the width for the legend room
+PLOT_MARGIN_R = 10                 # right margin (px) without a colour bar ...
+PLOT_MARGIN_R_CBAR = 120           # ... and with one (half-life / main-decay colourings)
 STAR_R = 0.15                      # outer radius of that star, in squares
 ALT_COLOUR = "#1f4e9e"             # "Alternatives:" text in the entry cards
 ALT_LINE_COLOUR = "#000000"        # curved double arrow (and its label) between an identification and an alternative
@@ -489,7 +491,7 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
         fig.add_trace(go.Scatter(
             x=[None], y=[None], mode="markers", name="colourbar", hoverinfo="skip", showlegend=False,
             marker=dict(color=[zmin], colorscale=scale, cmin=zmin, cmax=zmax, showscale=True,
-                        colorbar=dict(thickness=14, len=0.9, **cbar))))
+                        colorbar=dict(thickness=14, len=0.9, x=1, xanchor="left", xpad=8, **cbar))))
 
     shapes = []
     region_text = ""
@@ -535,7 +537,11 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
     xr, yr = (view or {}).get("x"), (view or {}).get("y")
     fig.update_layout(
         # see-through: the squares are on the page's canvas behind the plot (white page behind it)
-        margin=dict(l=PLOT_MARGIN_L, r=10, t=10, b=45), plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        # fixed margins (autoexpand off): the legend sits outside the plot area, and Plotly's
+        # auto-expanding margin then grew a little on every relayout (the plot shrank / drifted
+        # while zooming); the colour bar gets its own right margin instead
+        margin=dict(l=PLOT_MARGIN_L, r=PLOT_MARGIN_R if by == "identified" else PLOT_MARGIN_R_CBAR,
+                    t=10, b=45, autoexpand=False), plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
         hovermode="closest", hoverdistance=1,
         # legend in the blank space left of the plot: the plot is pushed right (constraintoward)
         # and the page sets xaxis.domain so the legend fits left of the y-axis title, and
@@ -2038,8 +2044,14 @@ app.clientside_callback(
                         if (bb) lw = Math.max(lw || 0, parseFloat(bb.getAttribute('width')) || 0);
                         var d = lw > 0 ? Math.min(MAXD, (EDGE + lw + GAP) / L._size.w) : 0;
                         d = Math.round(d * 1e4) / 1e4;
-                        var cur = ((gd.layout.xaxis || {}).domain || [0, 1])[0];
-                        if (Math.abs(cur - d) > 0.002) fix['xaxis.domain'] = [d, 1];
+                        // compared with the domain last asked for, not gd.layout.xaxis.domain:
+                        // Plotly writes the constrained (square-cell) domain back into the layout,
+                        // which changes with every zoom; re-setting it each time made the plot
+                        // stutter and shrink/drift while zooming
+                        if (gd._segreDomain == null || Math.abs(gd._segreDomain - d) > 0.002) {
+                            fix['xaxis.domain'] = [d, 1];
+                            gd._segreDomain = d;
+                        }
                         if (i >= 0) {                   // counts box: same left edge as the legend
                             var xs = Math.round(EDGE - L._size.l);
                             if (gd.layout.annotations[i].xshift !== xs) fix['annotations[' + i + '].xshift'] = xs;
@@ -2343,6 +2355,7 @@ app.clientside_callback(
             }
             gd._segreCover = null;           // a new figure has no labels yet
             gd._segreSum = {};               // ... and its own legend / counts-box widths
+            gd._segreDomain = null;          // ... and no x domain for the legend room yet
             gd._segrePlaceSummary();         // counts box under the legend straight away
             gd._segreSoon();
         }, 150);
