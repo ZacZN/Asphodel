@@ -3,8 +3,8 @@ Browser-tab title while a Dash page is busy.
 
 Dash's default swaps the tab title for "Updating..." while a callback runs,
 so the tool's name disappears.  install_dash(app) turns that off and instead
-keeps the name with a spinning braille character in front of it
-("⠋ Theia", "⠙ Theia", ...) while callbacks are running.
+keeps the name with a spinning braille character after it
+("Theia ⠋", "Theia ⠙", ...), so the name itself never moves, while callbacks are running.
 
     from core import tabtitle
     tabtitle.install_dash(app)
@@ -30,7 +30,7 @@ _JS = r"""
   if (window.__asphTabTitle) return;
   window.__asphTabTitle = true;
   var FRAMES = "__FRAMES__", DELAY = __DELAY__, STEP = __STEP__;
-  var PREFIX = new RegExp('^[' + FRAMES + '] ');
+  var SUFFIX = new RegExp(' [' + FRAMES + ']$');
   var busy = 0, timer = null, spin = null, i = 0, base = null;
 
   function periodic(init) {
@@ -43,12 +43,12 @@ _JS = r"""
   function start() {
     timer = null;
     if (busy <= 0 || spin) return;
-    base = document.title.replace(PREFIX, '');
+    base = document.title.replace(SUFFIX, '');
     spin = setInterval(function() {
       i = (i + 1) % FRAMES.length;
-      document.title = FRAMES[i] + ' ' + base;
+      document.title = base + ' ' + FRAMES[i];
     }, STEP);
-    document.title = FRAMES[i] + ' ' + base;
+    document.title = base + ' ' + FRAMES[i];
   }
   function stop() {
     if (timer) { clearTimeout(timer); timer = null; }
