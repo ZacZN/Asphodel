@@ -571,6 +571,7 @@ def build_figure(by, state, overlays, mark=None, view=None, uirev="0", sel=None)
             xref="paper", yref="paper", x=0, xshift=LEGEND_EDGE - PLOT_MARGIN_L,  # = legend's left edge
             y=0.99, xanchor="left", yanchor="top",
             yshift=-(n_leg * LEGEND_ROW_PX + 2 + SUMMARY_GAP), align="left", showarrow=False,
+            valign="top",                         # the page stretches it to the plot's bottom
             bgcolor="#ffffff", bordercolor="#999999", borderwidth=1, borderpad=SUMMARY_PAD,
             font=dict(size=LEGEND_FONT))          # text colour as the legend's
     return fig, region_text
@@ -906,14 +907,19 @@ def id_coverage(entries):
     return out
 
 
+SUMMARY_INDENT = "\u00a0" * 4    # value lines indented under their label (no-break spaces)
+
+
 def id_summary_text(entries):
-    """The box's text: 'Ground states: 42 (+7 unsure)', one line per count, then the
-    percentages 'Simulated region identified: 42.1 % (+9.8 % unsure)'."""
+    """The box's text, label and value on two lines (27 Nov, decided by Zac, keeps the box
+    narrow): 'Ground states:' / '    42 (+7 unsure)', one pair per count, then the
+    percentages 'Simulated region identified:' / '    42.1 % (+9.8 % unsure)'."""
     lines = []
     for lbl, conf, uns in id_summary(entries):
-        lines.append(f"{lbl}: <b>{conf}</b>" + (f" (+{uns} unsure)" if uns else ""))
+        lines += [f"{lbl}:", SUMMARY_INDENT + f"<b>{conf}</b>" + (f" (+{uns} unsure)" if uns else "")]
     for lbl, conf, uns in id_coverage(entries):
-        lines.append(f"{lbl}: <b>{conf:.1f} %</b>" + (f" (+{uns:.1f} % unsure)" if uns else ""))
+        lines += [f"{lbl}:",
+                  SUMMARY_INDENT + f"<b>{conf:.1f} %</b>" + (f" (+{uns:.1f} % unsure)" if uns else "")]
     return "<br>".join(lines)
 
 
@@ -2057,10 +2063,23 @@ app.clientside_callback(
                             var want = -Math.round(h + %d);
                             if (Math.abs((a.yshift || 0) - want) >= 1) fix['annotations[' + i + '].yshift'] = want;
                         }
+                        var PAD = %d, S = gd._segreSum || (gd._segreSum = {});
                         var s = sumWidths();
                         if (s && s.boxNat < s.W) {
-                            var tw = s.W - 2 * %d - 1;
+                            var tw = s.W - 2 * PAD - 1;
                             if (a.width == null || Math.abs(a.width - tw) >= 1) fix['annotations[' + i + '].width'] = tw;
+                        }
+                        // counts box stretched down to the bottom of the plot area (27 Nov, Zac):
+                        // its 'height' (text height; frame = height + 2 x borderpad + border),
+                        // never below the text's own height (kept per figure in gd._segreSum)
+                        var bx = gd.querySelector('g.annotation[data-index="' + i + '"] rect.bg');
+                        if (a.height == null && bx) S.boxNatH = parseFloat(bx.getAttribute('height')) - 2 * PAD - 2;
+                        var L0 = gd._fullLayout, ys = fix['annotations[' + i + '].yshift'];
+                        if (ys == null) ys = a.yshift || 0;
+                        if (L0 && L0._size && S.boxNatH > 0) {
+                            var top = L0._size.t + (1 - a.y) * L0._size.h - ys;
+                            var th = Math.round(Math.max(S.boxNatH, L0._size.t + L0._size.h - top - 2 * PAD - 2));
+                            if (a.height == null || Math.abs(a.height - th) >= 1) fix['annotations[' + i + '].height'] = th;
                         }
                     }
                     fixLegend();
