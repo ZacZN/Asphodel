@@ -2068,27 +2068,28 @@ app.clientside_callback(
                             var tw = s.W - 2 * PAD - 1;
                             if (a.width == null || Math.abs(a.width - tw) >= 1) fix['annotations[' + i + '].width'] = tw;
                         }
-                        // counts box stretched down to the bottom of the plot area (27 Nov, Zac):
-                        // its 'height' (text height; frame = height + 2 x borderpad + border),
-                        // never below the text's own height (kept per figure in gd._segreSum)
-                        // If the text is taller than that space (small window), its font is made
-                        // smaller (down to MINF px) until it fits (27 Nov, decided by Zac).
+                        // counts box stretched down to the bottom of the window, EDGE px above it
+                        // (27 Nov, Zac), its font as big as fits: limited by that height and by the
+                        // legend's width (the box never gets wider than the legend), at least MINF px.
+                        // Its 'height' is the text height (frame = height + 2 x borderpad + border).
+                        // The text's own size at its Python font is read while height / width are
+                        // unset (kept per figure in gd._segreSum); text size ~ font size.
                         var bx = gd.querySelector('g.annotation[data-index="' + i + '"] rect.bg');
                         if (a.height == null && bx) {
                             S.boxNatH = parseFloat(bx.getAttribute('height')) - 2 * PAD - 2;
                             S.boxFont = (a.font && a.font.size) || 15;       // the size it was measured at
                         }
                         var L0 = gd._fullLayout, ys = fix['annotations[' + i + '].yshift'], MINF = 9;
+                        var BOT = %d;
                         if (ys == null) ys = a.yshift || 0;
-                        if (L0 && L0._size && S.boxNatH > 0) {
+                        if (L0 && L0._size && L0.height > 0 && S.boxNatH > 0) {
                             var top = L0._size.t + (1 - a.y) * L0._size.h - ys;
-                            var avail = L0._size.t + L0._size.h - top - 2 * PAD - 2;
-                            var fs = S.boxFont, need = S.boxNatH;
-                            if (need > avail) {                 // text height ~ font size
-                                fs = Math.max(MINF, Math.floor(S.boxFont * avail / S.boxNatH * 10) / 10);
-                                need = S.boxNatH * fs / S.boxFont;
-                            }
-                            var th = Math.round(Math.max(need, avail));
+                            var avail = L0.height - BOT - top - 2 * PAD - 2;
+                            var fs = S.boxFont * avail / S.boxNatH;                       // fills the height
+                            var natW = S.boxNat - 2 * PAD - 2, maxW = S.legNat - 2 * PAD - 2;
+                            if (natW > 0 && maxW > 0) fs = Math.min(fs, 0.97 * S.boxFont * maxW / natW);
+                            fs = Math.max(MINF, Math.floor(fs * 10) / 10);
+                            var th = Math.round(Math.max(S.boxNatH * fs / S.boxFont, avail));
                             if (a.height == null || Math.abs(a.height - th) >= 1) fix['annotations[' + i + '].height'] = th;
                             if (Math.abs(((a.font && a.font.size) || S.boxFont) - fs) >= 0.1)
                                 fix['annotations[' + i + '].font.size'] = fs;
@@ -2427,7 +2428,7 @@ app.clientside_callback(
         }, 150);
         return window.dash_clientside.no_update;
     }
-    """ % (LEGEND_SCALE, SUMMARY_GAP, SUMMARY_PAD, LEGEND_EDGE, LEGEND_AXIS_GAP, LEGEND_MAX_DOMAIN,
+    """ % (LEGEND_SCALE, SUMMARY_GAP, SUMMARY_PAD, LEGEND_EDGE, LEGEND_EDGE, LEGEND_AXIS_GAP, LEGEND_MAX_DOMAIN,
            ALT_LINE_COLOUR, ALT_LINE_COLOUR, ALT_LINE_COLOUR, ALT_LINE_COLOUR),
     Output("labels-dummy", "children"),
     Input("chart", "figure"),
